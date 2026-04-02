@@ -1814,6 +1814,11 @@ class QueryEngine:
             "too many tokens",
             "maximum context length",
             "input is too long",
+            "context window exceeds",
+            "exceed context limit",
+            "exceeds limit",
+            "max_tokens",
+            "context_length_exceeded",
         ]
         return any(marker in rendered for marker in markers)
 
@@ -3426,6 +3431,21 @@ class QueryEngine:
                     )
                     continue
                 if self._is_context_overflow_error(e):
+                    current_max = loop_state["max_tokens"]
+                    if current_max > 4096:
+                        new_max = max(4096, current_max // 2)
+                        loop_state["max_tokens"] = new_max
+                        await self._record_loop_transition(
+                            "max_tokens_auto_reduce",
+                            turn=turn_count,
+                            event_callback=event_callback,
+                            old_max=current_max,
+                            new_max=new_max,
+                        )
+                        sys_print_callback(
+                            f"[dim yellow]↳ Context window overflow. Reducing max_tokens {current_max} → {new_max} and retrying.[/dim yellow]"
+                        )
+                        continue
                     compacted = await self._apply_layered_compaction_if_needed(
                         sys_print_callback,
                         force=True,
