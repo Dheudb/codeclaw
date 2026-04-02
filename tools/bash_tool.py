@@ -1,0 +1,492 @@
+import os
+import asyncio
+import re
+from pydantic import BaseModel, Field
+from codeclaw.tools.base import BaseAgenticTool
+from codeclaw.core.tool_results import build_tool_result
+
+class BashToolInput(BaseModel):
+    action: str = Field(
+        "run",
+        description="One of: run, status, read, kill, list.",
+    )
+    command: str = Field(None, description="The shell command to execute.")
+    cwd: str = Field(None, description="Optional working directory to run the command in.")
+    run_in_background: bool = Field(
+        False,
+        description="If true, start the command in the background and return a task id immediately.",
+    )
+    task_id: str = Field(None, description="Task identifier for status, read, or kill.")
+    tail_chars: int = Field(4000, description="How many trailing characters to return for read.")
+
+class BashTool(BaseAgenticTool):
+    name = "bash_tool"
+    description = "Executes a given bash command and returns its output. The working directory persists between commands, but shell state does not."
+    input_schema = BashToolInput
+    risk_level = "high"
+
+    def _artifact_tracker(self):
+        return self.context.get("artifact_tracker")
+
+    def _looks_like_git_commit(self, command: str) -> bool:
+        return "git commit" in str(command or "").lower()
+
+    def _extract_commit_message_preview(self, command: str) -> str:
+        rendered = str(command or "")
+        patterns = [
+            r"-m\s+\"([^\"]+)\"",
+            r"-m\s+'([^']+)'",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, rendered)
+            if match:
+                return match.group(1)
+        return rendered[:240]
+
+    async def _run_git_capture(self, git_command: str, cwd: str = None, timeout: float = 10.0) -> str:
+        try:
+            process = await asyncio.create_subprocess_shell(
+                git_command,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            if process.returncode == 0 and stdout_bytes:
+                return stdout_bytes.decode("utf-8", errors="replace").strip()
+        except Exception:
+            return ""
+        return ""
+
+    async def _resolve_head_commit(self, cwd: str = None) -> str:
+        return await self._run_git_capture("git rev-parse HEAD", cwd=cwd)
+
+    async def _resolve_repo_root(self, cwd: str = None) -> str:
+        return await self._run_git_capture("git rev-parse --show-toplevel", cwd=cwd)
+
+    async def _resolve_branch_name(self, cwd: str = None) -> str:
+        return await self._run_git_capture("git branch --show-current", cwd=cwd)
+
+    async def _resolve_commit_details(self, commit_hash: str, cwd: str = None) -> dict:
+        if not commit_hash:
+            return {}
+        raw = await self._run_git_capture(
+            f'git log -1 --format="%s%n%an%n%ae" {commit_hash}',
+            cwd=cwd,
+        )
+        if not raw:
+            return {}
+        lines = raw.splitlines()
+        return {
+            "message_preview": (lines[0] if len(lines) > 0 else "")[:240],
+            "author_name": lines[1] if len(lines) > 1 else "",
+            "author_email": lines[2] if len(lines) > 2 else "",
+        }
+
+    async def _build_commit_attribution(self, command: str, cwd: str = None) -> dict:
+        repo_root = await self._resolve_repo_root(cwd=cwd)
+        branch = await self._resolve_branch_name(cwd=cwd)
+        head_before = await self._resolve_head_commit(cwd=cwd)
+        return {
+            "repo_root": repo_root,
+            "branch": branch,
+            "head_before": head_before,
+            "message_preview": self._extract_commit_message_preview(command),
+        }
+
+    def prompt(self) -> str:
+        return """IMPORTANT: Avoid using bash_tool to run cat, head, tail, sed, awk, find, grep, or echo commands unless explicitly instructed. Instead use the appropriate dedicated tool:
+ - File search: Use glob_tool (NOT find or ls)
+ - Content search: Use grep_tool (NOT grep or rg)
+ - Read files: Use file_read_tool (NOT cat/head/tail)
+ - Edit files: Use file_edit_tool (NOT sed/awk)
+ - Write files: Use file_write_tool (NOT echo >/cat <<EOF)
+ - Communication: Output text directly (NOT echo/printf)
+Reserve bash_tool exclusively for system commands and terminal operations that require shell execution. While bash_tool can do similar things, it's better to use the built-in tools as they provide a better user experience and make it easier to review tool calls.
+
+# Instructions
+ - If your command will create new directories or files, first run `ls` to verify the parent directory exists.
+ - Always quote file paths that contain spaces with double quotes.
+ - Try to maintain your current working directory by using absolute paths and avoiding `cd`.
+ - You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). By default, commands timeout after 120000ms (2 minutes).
+ - You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately. You will be notified when it finishes. You do not need to use '&' at the end of the command when using this parameter.
+ - When issuing multiple commands:
+   - If independent, make multiple bash_tool calls in parallel.
+   - If dependent, chain with '&&' in a single call.
+   - Use ';' only when you need sequential execution but don't care if earlier commands fail.
+   - DO NOT use newlines to separate commands.
+ - Avoid unnecessary `sleep` commands:
+   - Do not sleep between commands that can run immediately — just run them.
+   - If your command is long running, use `run_in_background`. No sleep needed.
+   - Do not retry failing commands in a sleep loop — diagnose the root cause.
+   - If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.
+
+# Git operations
+ - NEVER update the git config.
+ - NEVER run destructive git commands (push --force, reset --hard, checkout ., clean -f, branch -D) unless the user explicitly requests them. Taking unauthorized destructive actions can result in lost work.
+ - NEVER skip hooks (--no-verify, --no-gpg-sign) unless the user explicitly requests it.
+ - NEVER force push to main/master. Warn the user if they request it.
+ - CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests amend. When a pre-commit hook fails, the commit did NOT happen — so --amend would modify the PREVIOUS commit, destroying work. Fix the issue, re-stage, and create a NEW commit.
+ - When staging files, prefer adding specific files by name rather than 'git add -A' or 'git add .' which can accidentally include sensitive files (.env, credentials).
+ - NEVER commit changes unless the user explicitly asks. Only commit when explicitly asked.
+ - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the user if they specifically request to commit those files.
+ - When creating commits, pass the message via HEREDOC for formatting.
+ - NEVER use git commands with -i flag (interactive mode not supported).
+ - NEVER use --no-edit with git rebase commands.
+ - If there are no changes to commit, do not create an empty commit.
+ - Use gh command for GitHub tasks (issues, PRs, checks, releases). If given a Github URL, use gh to get info.
+
+# Committing changes with git
+When the user asks you to create a new git commit:
+1. Run in parallel: git status (never -uall flag), git diff, git log --oneline -n 5
+2. Analyze changes, draft a concise commit message focusing on "why" not "what"
+3. Add specific files, commit with HEREDOC message, run git status after
+4. If pre-commit hook fails: fix issue, create NEW commit (never amend)
+
+# Creating pull requests
+1. Run in parallel: git status, git diff, check remote tracking, git log + git diff [base]...HEAD
+2. Analyze ALL commits (not just latest), draft title (<70 chars) + summary
+3. Push with -u flag, create PR with gh pr create using HEREDOC body
+4. Return the PR URL when done"""
+
+    def validate_input(
+        self,
+        action: str = "run",
+        command: str = None,
+        cwd: str = None,
+        run_in_background: bool = False,
+        task_id: str = None,
+        tail_chars: int = 4000,
+    ):
+        valid_actions = {"run", "status", "read", "kill", "list"}
+        if action not in valid_actions:
+            return f"Unsupported bash_tool action '{action}'."
+        if action == "run" and not command:
+            return "command is required when action='run'."
+        if action in {"status", "read", "kill"} and not task_id:
+            return f"task_id is required when action='{action}'."
+        return None
+
+    def is_read_only_call(
+        self,
+        action: str = "run",
+        command: str = None,
+        cwd: str = None,
+        run_in_background: bool = False,
+        task_id: str = None,
+        tail_chars: int = 4000,
+    ) -> bool:
+        return action in {"status", "read", "list"}
+
+    def build_permission_summary(
+        self,
+        action: str = "run",
+        command: str = None,
+        cwd: str = None,
+        run_in_background: bool = False,
+        task_id: str = None,
+        tail_chars: int = 4000,
+    ) -> str:
+        location = cwd or os.getcwd()
+        return (
+            "Shell command execution requested.\n"
+            f"action: {action}\n"
+            f"cwd: {location}\n"
+            f"command: {command or '<none>'}\n"
+            f"run_in_background: {run_in_background}\n"
+            f"task_id: {task_id or '<none>'}"
+        )
+    
+    async def execute(
+        self,
+        action: str = "run",
+        command: str = None,
+        cwd: str = None,
+        run_in_background: bool = False,
+        task_id: str = None,
+        tail_chars: int = 4000,
+    ) -> dict:
+        task_manager = self.context.get("shell_task_manager")
+
+        if action == "list":
+            tasks = task_manager.list_tasks() if task_manager else []
+            return build_tool_result(
+                ok=True,
+                content="Background task list retrieved.",
+                metadata={"action": action, "tasks": tasks, "task_count": len(tasks)},
+            )
+
+        if action == "status":
+            if not task_id:
+                return build_tool_result(
+                    ok=False,
+                    content="task_id is required for status.",
+                    metadata={"action": action},
+                    is_error=True,
+                )
+            record = task_manager.get_task(task_id) if task_manager else None
+            if not record:
+                return build_tool_result(
+                    ok=False,
+                    content=f"Unknown task '{task_id}'.",
+                    metadata={"action": action, "task_id": task_id},
+                    is_error=True,
+                )
+            return build_tool_result(
+                ok=True,
+                content=f"Task '{task_id}' status is {record['status']}.",
+                metadata={"action": action, **record},
+            )
+
+        if action == "read":
+            if not task_id:
+                return build_tool_result(
+                    ok=False,
+                    content="task_id is required for read.",
+                    metadata={"action": action},
+                    is_error=True,
+                )
+            record = task_manager.read_output(task_id, tail_chars=tail_chars) if task_manager else None
+            if not record:
+                return build_tool_result(
+                    ok=False,
+                    content=f"Unknown task '{task_id}'.",
+                    metadata={"action": action, "task_id": task_id},
+                    is_error=True,
+                )
+            output = record.pop("output", "")
+            output_chars = record.pop("output_chars", 0)
+            return build_tool_result(
+                ok=True,
+                content=output or "Task log is currently empty.",
+                metadata={"action": action, "tail_chars": tail_chars, "output_chars": output_chars, **record},
+            )
+
+        if action == "kill":
+            if not task_id:
+                return build_tool_result(
+                    ok=False,
+                    content="task_id is required for kill.",
+                    metadata={"action": action},
+                    is_error=True,
+                )
+            record = await task_manager.terminate_task(task_id) if task_manager else None
+            if not record:
+                return build_tool_result(
+                    ok=False,
+                    content=f"Unknown task '{task_id}'.",
+                    metadata={"action": action, "task_id": task_id},
+                    is_error=True,
+                )
+            return build_tool_result(
+                ok=True,
+                content=f"Task '{task_id}' terminated.",
+                metadata={"action": action, **record},
+            )
+
+        if action != "run":
+            return build_tool_result(
+                ok=False,
+                content=f"Unsupported bash action '{action}'.",
+                metadata={"action": action},
+                is_error=True,
+            )
+
+        if not command:
+            return build_tool_result(
+                ok=False,
+                content="command is required for run.",
+                metadata={"action": action},
+                is_error=True,
+            )
+
+        if run_in_background:
+            if not task_manager:
+                return build_tool_result(
+                    ok=False,
+                    content="Shell task manager is unavailable.",
+                    metadata={"action": action, "command": command},
+                    is_error=True,
+                )
+            record = await task_manager.start_task(command, cwd=cwd)
+            return build_tool_result(
+                ok=True,
+                content=f"Background task started: {record['task_id']}",
+                metadata={"action": action, "run_in_background": True, **record},
+            )
+
+        try:
+            commit_context = {}
+            if self._looks_like_git_commit(command):
+                commit_context = await self._build_commit_attribution(command, cwd=cwd)
+
+            # Setting shell=True to allow powershell/cmd/bash commands organically
+            process = await asyncio.create_subprocess_shell(
+                command,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            # Enforce 60 second timeout for commands to prevent infinite blocking loops (e.g. frozen builds or tail -f)
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=80.0)
+            
+            output = ""
+            if stdout_bytes:
+                output += stdout_bytes.decode('utf-8', errors='replace')
+            if stderr_bytes:
+                error_str = stderr_bytes.decode('utf-8', errors='replace')
+                if error_str.strip():
+                    output += f"\n--- STDERR ---\n{error_str}"
+
+            commit_metadata = {}
+            if self._looks_like_git_commit(command):
+                head_commit = await self._resolve_head_commit(cwd=cwd)
+                commit_details = await self._resolve_commit_details(head_commit, cwd=cwd)
+                head_before = commit_context.get("head_before", "")
+                message_preview = (
+                    commit_details.get("message_preview")
+                    or commit_context.get("message_preview")
+                    or self._extract_commit_message_preview(command)
+                )
+                commit_created = bool(process.returncode == 0 and head_commit and head_commit != head_before)
+                commit_status = "created" if commit_created else ("no_commit_created" if process.returncode == 0 else "failed")
+                tracker = self._artifact_tracker()
+                commit_metadata = {
+                    "agent_created_commit": commit_created,
+                    "commit_hash": head_commit,
+                    "commit_message_preview": message_preview,
+                    "commit_head_before": head_before,
+                    "commit_head_after": head_commit,
+                    "commit_branch": commit_context.get("branch", ""),
+                    "commit_repo_root": commit_context.get("repo_root", ""),
+                    "commit_status": commit_status,
+                    "commit_author_name": commit_details.get("author_name", ""),
+                    "commit_author_email": commit_details.get("author_email", ""),
+                }
+                if tracker is not None:
+                    tracker.record_commit(
+                        cwd=cwd or os.getcwd(),
+                        command=command,
+                        success=process.returncode == 0,
+                        status=commit_status,
+                        commit_hash=head_commit,
+                        message_preview=message_preview,
+                        head_before=head_before,
+                        head_after=head_commit,
+                        branch=commit_context.get("branch", ""),
+                        repo_root=commit_context.get("repo_root", ""),
+                        author_name=commit_details.get("author_name", ""),
+                        author_email=commit_details.get("author_email", ""),
+                        tool_name=self.name,
+                        agent_role=self.context.get("agent_role"),
+                        parent_agent_id=self.context.get("parent_agent_id"),
+                        agent_depth=self.context.get("agent_depth"),
+                        exit_code=process.returncode,
+                        agent_id=self.context.get("agent_id"),
+                        session_id=self.context.get("session_id"),
+                    )
+
+            if not output.strip():
+                return build_tool_result(
+                    ok=process.returncode == 0,
+                    content="Command execution completed but produced no output.",
+                    metadata={
+                        "exit_code": process.returncode,
+                        "cwd": cwd or os.getcwd(),
+                        "command": command,
+                        **commit_metadata,
+                    },
+                    is_error=process.returncode != 0,
+                )
+                
+            # Safeguard Truncation logic (keep first 2000 and last 2000 chars)
+            max_length = 6000
+            truncated = False
+            if len(output) > max_length:
+                prefix = output[:2500]
+                suffix = output[-2500:]
+                output = f"{prefix}\n\n... [TRUNCATED {len(output) - 5000} chars] ...\n\n{suffix}"
+                truncated = True
+                
+            return build_tool_result(
+                ok=process.returncode == 0,
+                content=output,
+                metadata={
+                    "exit_code": process.returncode,
+                    "cwd": cwd or os.getcwd(),
+                    "command": command,
+                    "truncated": truncated,
+                    **commit_metadata,
+                },
+                is_error=process.returncode != 0,
+            )
+            
+        except asyncio.TimeoutError:
+            process.kill()
+            if self._looks_like_git_commit(command):
+                commit_context = await self._build_commit_attribution(command, cwd=cwd)
+                tracker = self._artifact_tracker()
+                if tracker is not None:
+                    tracker.record_commit(
+                        cwd=cwd or os.getcwd(),
+                        command=command,
+                        success=False,
+                        status="timeout",
+                        commit_hash="",
+                        message_preview=commit_context.get("message_preview", self._extract_commit_message_preview(command)),
+                        head_before=commit_context.get("head_before", ""),
+                        head_after="",
+                        branch=commit_context.get("branch", ""),
+                        repo_root=commit_context.get("repo_root", ""),
+                        tool_name=self.name,
+                        agent_role=self.context.get("agent_role"),
+                        parent_agent_id=self.context.get("parent_agent_id"),
+                        agent_depth=self.context.get("agent_depth"),
+                        exit_code=None,
+                        agent_id=self.context.get("agent_id"),
+                        session_id=self.context.get("session_id"),
+                    )
+            return build_tool_result(
+                ok=False,
+                content=f"Command '{command}' timed out after 80 seconds and was forcefully killed.",
+                metadata={
+                    "command": command,
+                    "cwd": cwd or os.getcwd(),
+                    "timeout_seconds": 80,
+                },
+                is_error=True,
+            )
+        except Exception as e:
+            if self._looks_like_git_commit(command):
+                commit_context = await self._build_commit_attribution(command, cwd=cwd)
+                tracker = self._artifact_tracker()
+                if tracker is not None:
+                    tracker.record_commit(
+                        cwd=cwd or os.getcwd(),
+                        command=command,
+                        success=False,
+                        status="error",
+                        commit_hash="",
+                        message_preview=commit_context.get("message_preview", self._extract_commit_message_preview(command)),
+                        head_before=commit_context.get("head_before", ""),
+                        head_after="",
+                        branch=commit_context.get("branch", ""),
+                        repo_root=commit_context.get("repo_root", ""),
+                        tool_name=self.name,
+                        agent_role=self.context.get("agent_role"),
+                        parent_agent_id=self.context.get("parent_agent_id"),
+                        agent_depth=self.context.get("agent_depth"),
+                        exit_code=None,
+                        agent_id=self.context.get("agent_id"),
+                        session_id=self.context.get("session_id"),
+                    )
+            return build_tool_result(
+                ok=False,
+                content=f"Error executing command: {str(e)}",
+                metadata={
+                    "command": command,
+                    "cwd": cwd or os.getcwd(),
+                },
+                is_error=True,
+            )
