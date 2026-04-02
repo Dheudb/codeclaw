@@ -418,7 +418,7 @@ async def _interactive_model_switch(engine, tui):
     console.print("[dim]Configuration saved to ~/.codeclaw/config.json[/dim]")
 
 
-async def interactive_loop(resume_session_id: str = None):
+async def interactive_loop(resume_session_id: str = None, initial_prompt: str = None, auto_approve: bool = False):
     load_config_into_env()
     print_welcome_screen()
 
@@ -426,6 +426,9 @@ async def interactive_loop(resume_session_id: str = None):
     tui = InteractiveTerminalTUI(console, lambda: engine)
 
     def permission_prompt(request):
+        if auto_approve:
+            tui.log(f"[dim]Auto-approved: {request.tool_name}[/dim]")
+            return "y"
         decision = tui.choose_menu(
             title="Permission Required",
             body_lines=[
@@ -536,9 +539,15 @@ async def interactive_loop(resume_session_id: str = None):
                 console.print(f"[red]Failed to resume session '{resume_session_id}'. Starting fresh.[/red]")
 
     last_interrupt_time = 0
+    _pending_initial_prompt = initial_prompt
     while True:
         try:
-            user_input = console.input("\n[bold green]❯[/bold green] ")
+            if _pending_initial_prompt:
+                user_input = _pending_initial_prompt
+                _pending_initial_prompt = None
+                console.print(f"\n[bold green]❯[/bold green] [dim]{user_input[:120]}{'...' if len(user_input) > 120 else ''}[/dim]")
+            else:
+                user_input = console.input("\n[bold green]❯[/bold green] ")
             last_interrupt_time = 0
             if not user_input.strip():
                 continue
@@ -814,7 +823,12 @@ def main():
                         help="Resume the most recent session")
     parser.add_argument("-r", "--resume", dest="resume_id", type=str, default=None,
                         help="Resume a specific session by ID")
-    parser.add_argument("prompt", nargs="*", help="Optional initial prompt")
+    parser.add_argument("-p", "--prompt", dest="prompt_text", type=str, default=None,
+                        help="Send an initial prompt directly (non-interactive start)")
+    parser.add_argument("-y", "--dangerously-skip-permissions", dest="auto_approve",
+                        action="store_true",
+                        help="Auto-approve all tool calls (use for unattended/overnight runs)")
+    parser.add_argument("prompt", nargs="*", help="Optional initial prompt (positional)")
     args = parser.parse_args()
 
     resume_id = None
@@ -823,10 +837,16 @@ def main():
     elif args.resume_id:
         resume_id = args.resume_id
 
+    initial_prompt = args.prompt_text or (" ".join(args.prompt) if args.prompt else None)
+
     try:
         if os.name == 'nt':
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        asyncio.run(interactive_loop(resume_session_id=resume_id))
+        asyncio.run(interactive_loop(
+            resume_session_id=resume_id,
+            initial_prompt=initial_prompt,
+            auto_approve=args.auto_approve,
+        ))
     except KeyboardInterrupt:
         pass
 
