@@ -1,29 +1,25 @@
-<p align="center">
-  <pre align="center">
-     ▄██▄              ▄██▄
-     ████  ▄████████▄  ████
-     ████ █  ██  ██  █ ████
-      ▀██ █ ▒▒ vv ▒▒ █ ██▀
-          ▀██████████▀
-           CodeClaw
-  </pre>
-</p>
+<div align="center">
 
-<h1 align="center">CodeClaw</h1>
+```
+    ▄██▄              ▄██▄
+    ████  ▄████████▄  ████
+    ████ █  ██  ██  █ ████
+     ▀██ █ ▒▒ vv ▒▒ █ ██▀
+         ▀██████████▀
+          CodeClaw
+```
 
-<p align="center">
-  <b>Open-source agentic coding engine for the terminal.</b>
-</p>
+**Open-source agentic coding engine for the terminal.**
 
-<p align="center">
-  <a href="#english">English</a> | <a href="#中文">中文</a>
-</p>
+*AI writes code. You stay in control.*
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-≥3.9-blue?logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/license-MIT-green" />
-  <img src="https://img.shields.io/badge/platform-Windows%20|%20macOS%20|%20Linux-lightgrey" />
-</p>
+<a href="#english">English</a> | <a href="#中文">中文</a>
+
+<img src="https://img.shields.io/badge/python-≥3.9-blue?logo=python&logoColor=white" />
+<img src="https://img.shields.io/badge/license-MIT-green" />
+<img src="https://img.shields.io/badge/platform-Windows%20|%20macOS%20|%20Linux-lightgrey" />
+
+</div>
 
 ---
 
