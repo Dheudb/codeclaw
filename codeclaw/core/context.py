@@ -424,7 +424,6 @@ class ContextBuilder:
             _section_using_tools(),
             _section_tone_style(),
             _section_output_efficiency(),
-            "Length limits: keep text between tool calls to \u226425 words. Keep final responses to \u2264100 words unless the task requires more detail.",
         ]
         static_prefix = "\n\n".join(static_sections)
 

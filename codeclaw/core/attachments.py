@@ -226,15 +226,17 @@ class AttachmentCollector:
             "",
             "## Plan Workflow",
             "",
-            "### Phase 1: Initial Understanding",
-            "Goal: Gain a comprehensive understanding of the user's request by reading through "
-            "code and asking them questions. Critical: In this phase you should only use the "
-            "Explore subagent type.",
-            "1. Focus on understanding the user's request and the code associated with their request. "
-            "Actively search for existing functions, utilities, and patterns that can be reused — "
-            "avoid proposing new code when suitable implementations already exist.",
-            "2. **Launch up to 3 Explore agents IN PARALLEL** (single message, multiple tool calls) "
-            "to efficiently explore the codebase.",
+            "### Phase 1: Initial Understanding & Research",
+            "Goal: Gain a comprehensive understanding of the user's request through exploration, "
+            "research, and clarification questions. This phase is MANDATORY — never skip it.",
+            "1. For coding tasks: actively search for existing functions, utilities, and patterns "
+            "that can be reused. Launch up to 3 Explore agents IN PARALLEL to explore the codebase.",
+            "2. For research/theory tasks: use available tools (file_read_tool, grep_tool, "
+            "bash_tool, glob_tool) to survey the workspace for any existing relevant materials, "
+            "references, or prior work. Investigate the topic thoroughly before designing a plan.",
+            "3. Use ask_user_question_tool to clarify requirements, preferences, and scope.",
+            "4. Do NOT skip this phase. Even if the workspace is empty, research the problem "
+            "space and confirm your understanding with the user before proceeding to design.",
             "",
             "### Phase 2: Design",
             "Goal: Design an implementation approach.",
