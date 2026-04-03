@@ -150,4 +150,14 @@ async def run_verification_agent(
         return str(result) if result else None
 
     except Exception as e:
+        err_str = str(e)
+        if any(k in err_str.lower() for k in (
+            "context window", "context length", "too many tokens",
+            "maximum context", "token limit", "context_length",
+        )):
+            return (
+                f"[Verification skipped: context window too small for "
+                f"{len(files_to_verify)} files. Consider using a model "
+                f"with a larger context window for verification.]"
+            )
         return f"[Verification agent error: {e}]"
