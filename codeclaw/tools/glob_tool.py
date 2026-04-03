@@ -13,7 +13,17 @@ class GlobTool(BaseAgenticTool):
     input_schema = GlobToolInput
     is_read_only = True
     risk_level = "low"
-    
+
+    def prompt(self) -> str:
+        return (
+            "Fast file pattern matching tool that works with any codebase size. "
+            "Supports glob patterns like '**/*.js' or 'src/**/*.ts'. "
+            "Returns matching file paths sorted by modification time. "
+            "Use this tool when you need to find files by name patterns. "
+            "When you are doing an open-ended search that may require multiple "
+            "rounds of globbing and grepping, use agent_tool instead."
+        )
+
     async def execute(self, path: str = None, pattern: str = None) -> str:
         base_path = Path(path or os.getcwd())
         

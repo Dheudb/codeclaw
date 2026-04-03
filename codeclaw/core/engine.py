@@ -3,9 +3,12 @@ import asyncio
 import copy
 import inspect
 import json
+import logging
 import time
 from types import SimpleNamespace
 from typing import Optional
+
+_logger = logging.getLogger(__name__)
 from anthropic import (
     AsyncAnthropic,
     APIConnectionError,
@@ -31,9 +34,11 @@ from codeclaw.core.file_state_cache import FileStateCache
 from codeclaw.core.hooks import HookManager
 from codeclaw.core.memory import MemoryCompactor
 from codeclaw.core.memory_files import MemoryFileManager
+from codeclaw.core.session_memory import SessionMemoryManager
+from codeclaw.core.extract_memories import MemoryExtractor
 from codeclaw.core.security_classifier import AutoSecurityClassifier
 from codeclaw.core.structured_output import StructuredOutputManager
-from codeclaw.core.plans import PlanManager
+from codeclaw.core.plans import PlanManager, is_session_plan_file
 from codeclaw.core.permissions import PermissionManager
 from codeclaw.core.shell_tasks import ShellTaskManager
 from codeclaw.core.tool_results import build_tool_result, serialize_tool_result
@@ -90,6 +95,9 @@ from codeclaw.core.verification import VerificationManager, run_verification_age
 import uuid
 
 
+MAX_SESSION_MEMORY_IN_COMPACT = 32000
+
+
 class AbortRequestedError(Exception):
     pass
 
@@ -142,13 +150,14 @@ class QueryEngine:
         self.agent_role = agent_role
         self.context_builder = ContextBuilder()
         self.hook_manager = HookManager()
+        self.session_id = str(uuid.uuid4())
         self.compactor = MemoryCompactor(
             model=self.fallback_model or self.primary_model,
             provider=self.model_provider,
             api_base_url=self.api_base_url,
             local_tokenizer_path=self.local_tokenizer_path,
         )
-        self.plan_manager = PlanManager()
+        self.plan_manager = PlanManager(session_id=self.session_id)
         self.structured_output_manager = StructuredOutputManager()
         self.security_classifier = AutoSecurityClassifier()
         self.permission_manager = PermissionManager(
@@ -156,6 +165,7 @@ class QueryEngine:
             mode_getter=self.plan_manager.get_mode,
             state_change_callback=self.persist_session_state,
             classifier_manager=self.security_classifier,
+            session_id_getter=lambda: self.session_id,
         )
         self.todo_manager = TodoManager()
         self.subagent_registry = []
@@ -175,7 +185,6 @@ class QueryEngine:
         self._compact_boundary_index = 0
         self._tool_result_budget_chars = int(os.environ.get("CODECLAW_TOOL_RESULT_BUDGET_CHARS", "0")) or 400000
         self.session_manager = SessionManager()
-        self.session_id = str(uuid.uuid4())
         self.last_persist_ok = True
         self.last_persist_error = ""
         self._last_reported_persist_error = ""
@@ -188,6 +197,14 @@ class QueryEngine:
         self.browser_manager = BrowserSessionManager()
         self.shell_task_manager = ShellTaskManager()
         self.memory_file_manager = MemoryFileManager()
+        self.session_memory_manager = SessionMemoryManager(
+            session_id=self.session_id,
+            compactor=self.compactor,
+        )
+        self.memory_extractor = MemoryExtractor(
+            compactor=self.compactor,
+            project_dir=os.getcwd(),
+        )
         self.file_state_cache = FileStateCache()
         self.artifact_tracker = ArtifactTracker()
         self.incremental_write_queue = IncrementalWriteQueue()
@@ -1125,16 +1142,25 @@ class QueryEngine:
             changed_files = self.attachment_collector.get_changed_files_from_git(
                 os.getcwd()
             )
+        except Exception:
+            changed_files = []
+
+        try:
             lsp_diags = ""
             if hasattr(self, "lsp_manager"):
                 lsp_diags = self.lsp_manager.consume_diagnostics() or ""
+        except Exception:
+            lsp_diags = ""
 
+        try:
             attachment_messages = self.attachment_collector.collect_attachments(
                 cwd=os.getcwd(),
                 plan_mode=self.plan_manager.get_mode(),
                 plan_content=self.plan_manager.get_plan(),
+                plan_file_path=self.plan_manager.plan_file_path,
+                plan_exists=self.plan_manager.plan_exists,
                 todo_summary=self.todo_manager.render_prompt_summary(),
-                todo_count=len(self.todo_manager.get_items()),
+                todo_count=len(self.todo_manager.list_items()),
                 active_tools=list(self.available_tools.keys()),
                 changed_files=changed_files,
                 lsp_diagnostics=lsp_diags,
@@ -1145,8 +1171,8 @@ class QueryEngine:
                 self.messages.append(att_msg)
             if attachment_messages:
                 self._sync_message_context()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.warning("Failed to inject turn attachments (turn=%d): %s", turn_count, exc, exc_info=True)
 
     def _build_tool_prompt_summary(self) -> str:
         sections = []
@@ -1182,7 +1208,7 @@ class QueryEngine:
     }
 
     PLAN_MODE_BLOCKED_TOOLS = {
-        "bash_tool", "file_edit_tool", "file_write_tool",
+        "bash_tool",
         "notebook_tool", "notebook_edit_tool", "sandbox_tool",
         "task_create_tool", "task_kill_tool",
     }
@@ -1712,6 +1738,7 @@ class QueryEngine:
             "result_preview": str(result_preview)[:280],
         })
         self.recent_tool_activity = self.recent_tool_activity[:12]
+        self.session_memory_manager.record_tool_call()
         self._sync_message_context()
 
     def inherit_state_from_parent(
@@ -1884,21 +1911,33 @@ class QueryEngine:
             return False
 
         summary = await self.compactor.compact_history(middle)
+
+        session_memory_content = self.session_memory_manager.get_memory_content()
+        session_memory_block = ""
+        if session_memory_content:
+            truncated = session_memory_content
+            if len(truncated) > MAX_SESSION_MEMORY_IN_COMPACT:
+                truncated = truncated[:MAX_SESSION_MEMORY_IN_COMPACT] + "\n[... truncated ...]"
+            session_memory_block = f"\nSession memory notes:\n{truncated}\n"
+
         stage_label = "aggressive_layered_summary" if aggressive else "layered_summary"
         reminder = {
             "role": "user",
             "content": (
-                "<system-reminder>\n"
+                "This session is being continued from a previous conversation that ran out of context. "
+                "The summary below covers the earlier portion of the conversation.\n\n"
                 f"[CompactionBoundary:{stage_label}]\n"
                 f"estimated_tokens_before: {estimated_tokens}\n"
                 f"cache_pressure_tokens: {cache_signal.get('cache_pressure_tokens', 0)}\n"
                 f"cache_creation_input_tokens: {cache_signal.get('recent_cache_creation_input_tokens', 0)}\n"
                 f"cache_read_input_tokens: {cache_signal.get('recent_cache_read_input_tokens', 0)}\n"
                 f"preserved_first_messages: 1\n"
-                f"preserved_last_messages: {preserve_last_messages}\n"
-                "Compaction summary:\n"
+                f"preserved_last_messages: {preserve_last_messages}\n\n"
                 f"{summary}\n"
-                "</system-reminder>"
+                f"{session_memory_block}\n"
+                "Continue the conversation from where it left off without asking the user any further questions. "
+                "Resume directly — do not acknowledge the summary, do not recap what was happening, "
+                "do not preface with 'I'll continue' or similar. Pick up the last task as if the break never happened."
             ),
         }
         self.messages = head + [reminder] + tail
@@ -2787,6 +2826,12 @@ class QueryEngine:
             })
             self.tool_context["token_usage_history"] = self.token_usage_history
             self.tool_context["session_token_usage"] = self.session_token_usage
+            self.session_memory_manager = SessionMemoryManager(
+                session_id=self.session_id,
+                compactor=self.compactor,
+            )
+            self.session_memory_manager.load_state(metadata.get("session_memory", {}))
+            self.memory_extractor.load_state(metadata.get("memory_extractor", {}))
             self._update_compact_boundary()
             self._sync_message_context()
             self.session_started = metadata.get("hooks", {}).get("session_started", False)
@@ -2823,6 +2868,8 @@ class QueryEngine:
             "post_sampling_history": self.post_sampling_history,
             "session_token_usage": self.session_token_usage,
             "message_statistics": self._build_message_statistics(),
+            "session_memory": self.session_memory_manager.export_state(),
+            "memory_extractor": self.memory_extractor.export_state(),
             "hooks": {
                 "session_started": getattr(self, "session_started", False),
             },
@@ -3111,11 +3158,17 @@ class QueryEngine:
             "replayed": True,
         })
 
+    def _get_model_max_output_tokens(self, model: str = "") -> tuple:
+        from codeclaw.core.config import get_model_max_output_tokens
+        return get_model_max_output_tokens(model or self.primary_model)
+
     def _get_max_output_tokens(self) -> int:
         """
-        Resolve max output tokens: env override > 32000 default.
-        Escalate to 64k on overflow (see max_tokens recovery in _run_loop).
+        Resolve max output tokens: env override > model default (with slot cap).
+        Slot-reservation cap: default capped to 8k to avoid over-reserving slot
+        capacity. Requests hitting the cap get one escalation to 64k.
         """
+        from codeclaw.core.config import DEFAULT_CAPPED_MAX_TOKENS
         env_val = os.environ.get("CODECLAW_MAX_OUTPUT_TOKENS", "")
         if env_val:
             try:
@@ -3124,7 +3177,8 @@ class QueryEngine:
                     return parsed
             except ValueError:
                 pass
-        return 32000
+        default_tokens, _ = self._get_model_max_output_tokens()
+        return min(default_tokens, DEFAULT_CAPPED_MAX_TOKENS)
 
     def _build_loop_state(self) -> dict:
         env_max = os.environ.get("CODECLAW_MAX_TURNS", "")
@@ -3726,8 +3780,6 @@ class QueryEngine:
             self.session_started = True
             self.persist_session_state()
         
-        tools_schema = self._get_anthropic_tools_schema()
-        
         loop_state = self._build_loop_state()
 
         while loop_state["turn_count"] < loop_state["max_turns"]:
@@ -3737,7 +3789,11 @@ class QueryEngine:
             streaming_tool_entries = []
             loop_state["turn_input_tokens"] = 0
             loop_state["turn_output_tokens"] = 0
-            
+
+            # Recompute tools schema every turn so mode changes
+            # (enter_plan_mode / exit_plan_mode) take effect immediately.
+            tools_schema = self._get_anthropic_tools_schema()
+
             try:
                 if self.abort_event.is_set():
                     raise AbortRequestedError("Abort requested before turn start.")
@@ -3958,6 +4014,43 @@ class QueryEngine:
                     # Normal completion without Tool calls => Return final answer
                     texts = [b.get("text", "") for b in content_as_dicts if isinstance(b, dict) and b.get("type") == "text"]
                     final_answer = "\n".join(texts)
+
+                    # Plan mode guard: model ended with text-only output while plan mode
+                    # is active. It should have called exit_plan_mode or ask_user_question_tool.
+                    if (
+                        self.get_mode() == "plan"
+                        and loop_state.get("plan_mode_guard_retries", 0) < 2
+                    ):
+                        loop_state["plan_mode_guard_retries"] = loop_state.get("plan_mode_guard_retries", 0) + 1
+                        pfp = self.plan_manager.plan_file_path
+                        guard_msg = (
+                            "<system-reminder>\n"
+                            "You are in PLAN MODE. You must NOT answer the user's question directly.\n\n"
+                            "Your turn MUST end with one of these tool calls:\n"
+                            "  1. exit_plan_mode — when your plan is ready for approval\n"
+                            "  2. ask_user_question_tool — to clarify requirements\n\n"
+                            "Do NOT output a plain-text answer. Instead:\n"
+                            f"  - Explore the codebase with read-only tools\n"
+                            f"  - Write your plan to the plan file at {pfp}\n"
+                            "  - Then call exit_plan_mode\n"
+                            "</system-reminder>"
+                        )
+                        self.messages.append(create_user_message(
+                            guard_msg, is_meta=True, origin="plan_mode_guard",
+                        ))
+                        self._sync_message_context()
+                        self.persist_session_state()
+                        await self._record_loop_transition(
+                            "plan_mode_guard",
+                            turn=turn_count,
+                            event_callback=event_callback,
+                            retries=loop_state["plan_mode_guard_retries"],
+                        )
+                        sys_print_callback(
+                            "[dim yellow]↳ Plan mode guard: model ended without calling exit_plan_mode; injecting reminder.[/dim yellow]"
+                        )
+                        continue
+
                     structured_ok, structured_reason = self.structured_output_manager.validate(final_answer)
                     if not structured_ok:
                         loop_state["structured_output_retries"] += 1
@@ -3979,7 +4072,7 @@ class QueryEngine:
                             "[dim yellow]↳ Structured output validation failed; retrying with feedback.[/dim yellow]"
                         )
                         continue
-                    stop_hook_decision = self.hook_manager.evaluate_stop_hooks({
+                    stop_hook_decision = await self.hook_manager.evaluate_stop_hooks_async({
                         "cwd": os.getcwd(),
                         "mode": self.get_mode(),
                         "agent_id": self.agent_id,
@@ -4027,6 +4120,12 @@ class QueryEngine:
                         turn=turn_count,
                         event_callback=event_callback,
                     )
+                    estimated_tokens = self.compactor.estimate_tokens(self.messages)
+                    await self.session_memory_manager.maybe_extract(
+                        self.messages, estimated_tokens,
+                    )
+                    self.memory_extractor.record_turn()
+                    await self.memory_extractor.maybe_extract(self.messages)
                     await self._maybe_prepare_auto_commit_proposal(
                         final_answer=final_answer,
                         started_at=run_started_at,

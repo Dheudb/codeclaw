@@ -9,7 +9,11 @@ class PlanToolInput(BaseModel):
 
 class PlanTool(BaseAgenticTool):
     name = "plan_tool"
-    description = "Reads or updates the session-scoped implementation plan. Use plan_tool with action='write' to persist your plan."
+    description = (
+        "Reads or updates the session plan file on disk. "
+        "The plan file is a .md file that persists across turns. "
+        "You can also use file_write_tool / file_edit_tool to edit the plan file directly."
+    )
     input_schema = PlanToolInput
     risk_level = "medium"
 
@@ -32,16 +36,19 @@ class PlanTool(BaseAgenticTool):
         if action == "read":
             current = plan_manager.get_plan()
             if not current:
-                return "Current plan is empty."
-            return current
+                return f"Plan file is empty. Plan file path: {plan_manager.plan_file_path}"
+            return f"Plan file path: {plan_manager.plan_file_path}\n\n{current}"
         if action == "write":
             if content is None:
                 return "Error: content is required for write."
-            return plan_manager.write_plan(content)
+            plan_manager.write_plan(content)
+            return f"Plan written to {plan_manager.plan_file_path}"
         if action == "append":
             if content is None:
                 return "Error: content is required for append."
-            return plan_manager.append_plan(content)
+            plan_manager.append_plan(content)
+            return f"Plan appended to {plan_manager.plan_file_path}"
         if action == "clear":
-            return plan_manager.clear_plan()
+            plan_manager.clear_plan()
+            return "Plan file cleared."
         return f"Error: Unsupported plan action '{action}'."

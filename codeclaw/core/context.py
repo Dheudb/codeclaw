@@ -363,6 +363,7 @@ class ContextBuilder:
         tool_prompt_summary: str = "",
         model_name: str = "",
         mcp_instructions: str = "",
+        language_preference: str = "",
     ) -> str:
         """Generate the full system prompt as a single string."""
         static, dynamic = self.generate_system_prompt_split(
@@ -374,6 +375,7 @@ class ContextBuilder:
             tool_prompt_summary=tool_prompt_summary,
             model_name=model_name,
             mcp_instructions=mcp_instructions,
+            language_preference=language_preference,
         )
         return static + "\n\n" + dynamic
 
@@ -387,6 +389,7 @@ class ContextBuilder:
         tool_prompt_summary: str = "",
         model_name: str = "",
         mcp_instructions: str = "",
+        language_preference: str = "",
     ) -> tuple:
         """
         Split system prompt into (static_prefix, dynamic_suffix) for prompt caching.
@@ -409,6 +412,19 @@ class ContextBuilder:
             self._build_environment_section(model_name),
             self._build_session_guidance_section(),
         ]
+
+        if language_preference:
+            dynamic_sections.append(
+                f"# Language\nAlways respond in {language_preference}. Use {language_preference} "
+                f"for all explanations, comments, and communications with the user. "
+                f"Technical terms and code identifiers should remain in their original form."
+            )
+
+        dynamic_sections.append(
+            "# Function Result Clearing\n"
+            "Old tool results will be automatically cleared from context to free up space. "
+            "The 3 most recent results are always kept."
+        )
 
         git_context = self._build_git_context()
         if git_context:

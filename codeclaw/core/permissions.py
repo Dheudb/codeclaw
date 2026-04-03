@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from codeclaw.core.plans import is_session_plan_file
+
 
 @dataclass
 class PermissionRequest:
@@ -44,12 +46,14 @@ class PermissionManager:
         state_change_callback: Optional[Callable[[], Any]] = None,
         classifier_manager=None,
         config_path: str = ".codeclaw/permissions.json",
+        session_id_getter: Optional[Callable[[], str]] = None,
     ):
         self.prompt_handler = prompt_handler
         self.mode_getter = mode_getter
         self.state_change_callback = state_change_callback
         self.classifier_manager = classifier_manager
         self.config_path = config_path
+        self.session_id_getter = session_id_getter
         self.always_allow_tools = set()
         self.always_deny_tools = set()
         self.always_ask_tools = set()
@@ -57,6 +61,9 @@ class PermissionManager:
             "todo_write_tool", "plan_tool", "exit_plan_mode",
             "file_read_tool", "grep_tool", "glob_tool",
             "tool_search_tool", "web_search_tool", "web_fetch_tool",
+            "agent_tool", "ask_user_question_tool", "lsp_tool",
+            "skill_tool", "repl_tool",
+            "file_write_tool", "file_edit_tool",
         }
         self.denial_history = []
         self.consecutive_denials = {}
@@ -160,6 +167,24 @@ class PermissionManager:
                 "deny",
                 "Plan mode is active. Use exit_plan_mode to return to normal mode before making changes.",
                 source="plan_mode",
+            ), request)
+
+        if current_mode == "plan" and tool_name in {"file_write_tool", "file_edit_tool"}:
+            file_path = input_payload.get("file_path", "")
+            if file_path:
+                abs_path = os.path.abspath(file_path)
+                session_id = self.session_id_getter() if callable(self.session_id_getter) else ""
+                if session_id and is_session_plan_file(abs_path, session_id):
+                    return self._finalize_permission_decision(tool_name, PermissionDecision(
+                        "allow",
+                        "Plan file write auto-approved in plan mode.",
+                        source="plan_file_auto_allow",
+                    ), request)
+            return self._finalize_permission_decision(tool_name, PermissionDecision(
+                "deny",
+                f"Plan mode is active. You can only edit the plan file. "
+                f"Use exit_plan_mode to return to normal mode before editing other files.",
+                source="plan_mode_non_plan_file",
             ), request)
 
         if self._should_escalate_denial(tool_name):

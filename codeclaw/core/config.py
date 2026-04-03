@@ -72,3 +72,73 @@ def save_current_env_to_config():
         else:
             cfg.pop(cfg_key, None)
     save_config(cfg)
+
+
+# ── Model Output Token Limits ──────────────────────────────────────
+
+# Slot-reservation cap: most requests use < 5k output tokens, so the
+# main loop caps to DEFAULT_CAPPED to avoid wasting slot capacity.
+# On overflow the loop escalates to ESCALATED.
+DEFAULT_CAPPED_MAX_TOKENS = 8_000
+ESCALATED_MAX_TOKENS = 64_000
+COMPACT_MAX_OUTPUT_TOKENS = 20_000
+
+
+def get_model_max_output_tokens(model: str) -> tuple:
+    """Return (default, upper_limit) for the given model.
+
+    Env override: set CODECLAW_MODEL_MAX_OUTPUT_TOKENS=<number> to force
+    a specific limit (useful for local models with small output windows).
+
+    Only genuinely old models with hard low limits need special-casing.
+    Everything else gets a generous 64k default; most APIs silently cap
+    if the model can't actually produce that many tokens.
+    """
+    env_val = os.environ.get("CODECLAW_MODEL_MAX_OUTPUT_TOKENS", "")
+    if env_val:
+        try:
+            v = int(env_val)
+            if v > 0:
+                return v, v
+        except ValueError:
+            pass
+    m = model.lower()
+    if any(k in m for k in ("claude-3-opus", "claude-3-haiku", "gpt-3.5")):
+        return 4_096, 4_096
+    if any(k in m for k in ("claude-3-sonnet", "3-5-sonnet", "3-5-haiku")):
+        return 8_192, 8_192
+    return 64_000, 128_000
+
+
+async def safe_llm_call(client, model: str, provider: str, messages: list,
+                        max_tokens: int, _retried: bool = False):
+    """LLM call with automatic max_tokens fallback.
+
+    If the API rejects the request because max_tokens is too large
+    (common with local models), retries once at half the value.
+    """
+    try:
+        if provider == "openai":
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens,
+            )
+            return str(
+                getattr(getattr(resp.choices[0], "message", None), "content", "") or ""
+            )
+        else:
+            resp = await client.messages.create(
+                model=model, messages=messages, max_tokens=max_tokens,
+            )
+            for block in resp.content:
+                if getattr(block, "type", "") == "text":
+                    return getattr(block, "text", "")
+            return ""
+    except Exception as e:
+        err = str(e).lower()
+        if not _retried and ("max_tokens" in err or "max_output" in err
+                             or "maximum" in err or "too large" in err):
+            fallback = max(1024, max_tokens // 2)
+            return await safe_llm_call(
+                client, model, provider, messages, fallback, _retried=True
+            )
+        raise

@@ -25,6 +25,7 @@ class MemoryFileManager:
         global_candidates = [
             ("global", Path(self.home) / ".claude" / "CLAUDE.md"),
             ("global", Path(self.home) / "CLAUDE.md"),
+            ("global", Path(self.home) / ".codeclaw" / "CLAUDE.md"),
         ]
         for scope, path in global_candidates:
             normalized = str(path.resolve()) if path.exists() else str(path)
@@ -37,6 +38,7 @@ class MemoryFileManager:
         for directory in reversed(self._iter_parent_directories()):
             project_candidates.append(("project", directory / ".claude" / "CLAUDE.md"))
             project_candidates.append(("project", directory / "CLAUDE.md"))
+            project_candidates.append(("project", directory / ".codeclaw" / "CLAUDE.md"))
 
         for scope, path in project_candidates:
             normalized = str(path.resolve()) if path.exists() else str(path)
@@ -45,6 +47,34 @@ class MemoryFileManager:
             seen.add(normalized)
             candidates.append((scope, path))
 
+        auto_memory_paths = self._get_auto_memory_paths()
+        for scope, path in auto_memory_paths:
+            normalized = str(path.resolve()) if path.exists() else str(path)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            candidates.append((scope, path))
+
+        return candidates
+
+    def _get_auto_memory_paths(self):
+        """Discover persistent memory files from the memory extractor directory."""
+        import hashlib
+        project_hash = hashlib.sha256(
+            os.path.abspath(self.cwd).encode("utf-8")
+        ).hexdigest()[:16]
+        memory_dir = Path(self.home) / ".codeclaw" / "projects" / project_hash / "memory"
+        if not memory_dir.is_dir():
+            return []
+
+        candidates = []
+        index_path = memory_dir / "MEMORY.md"
+        if index_path.exists():
+            candidates.append(("auto_memory", index_path))
+
+        for fname in sorted(memory_dir.iterdir()):
+            if fname.suffix == ".md" and fname.name != "MEMORY.md":
+                candidates.append(("auto_memory", fname))
         return candidates
 
     def refresh(self, *, max_chars_per_file: int = 6000, max_total_chars: int = 12000):

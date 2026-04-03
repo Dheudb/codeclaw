@@ -51,6 +51,8 @@ class AttachmentCollector:
         cwd: str,
         plan_mode: str = "normal",
         plan_content: str = "",
+        plan_file_path: str = "",
+        plan_exists: bool = False,
         todo_summary: str = "",
         todo_count: int = 0,
         active_tools: List[str] = None,
@@ -71,7 +73,11 @@ class AttachmentCollector:
         if diff_att:
             attachments.append(diff_att)
 
-        plan_att = self._build_plan_mode_reminder(plan_mode, plan_content, turn_count)
+        plan_att = self._build_plan_mode_reminder(
+            plan_mode, plan_content, turn_count,
+            plan_file_path=plan_file_path,
+            plan_exists=plan_exists,
+        )
         if plan_att:
             attachments.append(plan_att)
 
@@ -163,23 +169,113 @@ class AttachmentCollector:
         return diff_text
 
     def _build_plan_mode_reminder(
-        self, plan_mode: str, plan_content: str, turn_count: int
+        self,
+        plan_mode: str,
+        plan_content: str,
+        turn_count: int,
+        plan_file_path: str = "",
+        plan_exists: bool = False,
     ) -> Optional[dict]:
-        """Inject plan mode instructions when entering plan mode."""
+        """Inject plan mode instructions — full on first injection, sparse after."""
         if plan_mode != "plan":
-            self._plan_mode_injected = False
+            if self._plan_mode_injected:
+                plan_ref = ""
+                if plan_file_path and plan_exists:
+                    plan_ref = f" The plan file is located at {plan_file_path} if you need to reference it."
+                content = _wrap_reminder(
+                    "## Exited Plan Mode\n\n"
+                    f"You have exited plan mode. You can now make edits, run tools, and take actions.{plan_ref}"
+                )
+                self._plan_mode_injected = False
+                return {"role": "user", "content": content, "_is_meta": True, "_attachment_type": "plan_mode_exit"}
             return None
 
+        if self._plan_mode_injected and (turn_count % 5 != 0):
+            content = _wrap_reminder(
+                f"Plan mode still active (see full instructions earlier in conversation). "
+                f"Read-only except plan file at {plan_file_path}. "
+                f"End turns with ask_user_question_tool (for clarifications) or exit_plan_mode (for plan approval). "
+                f"Never ask about plan approval via text or ask_user_question_tool."
+            )
+            return {"role": "user", "content": content, "_is_meta": True, "_attachment_type": "plan_mode_sparse"}
+
+        self._plan_mode_injected = True
+
+        if plan_exists:
+            plan_file_info = (
+                f"A plan file already exists at {plan_file_path}. "
+                f"You can read it and make incremental edits using the file_edit_tool."
+            )
+        else:
+            plan_file_info = (
+                f"No plan file exists yet. You should create your plan at {plan_file_path} "
+                f"using the file_write_tool."
+            )
+
         lines = [
-            "You are currently in PLAN MODE. In this mode:",
-            "1. You can ONLY use read-only tools (file_read_tool, grep_tool, glob_tool) to explore the codebase.",
-            "2. You CANNOT modify files (file_edit_tool, file_write_tool, bash_tool are blocked).",
-            "3. Use plan_tool with action='write' to create your implementation plan.",
-            "4. Use ask_user_question_tool to clarify requirements.",
-            "5. When your plan is ready, the user will approve it and you'll exit plan mode to implement.",
+            "Plan mode is active. The user indicated that they do not want you to execute yet "
+            "-- you MUST NOT make any edits (with the exception of the plan file mentioned below), "
+            "run any non-readonly tools (including changing configs or making commits), or otherwise "
+            "make any changes to the system. This supercedes any other instructions you have received.",
+            "",
+            "## Plan File Info:",
+            plan_file_info,
+            "You should build your plan incrementally by writing to or editing this file. "
+            "NOTE that this is the only file you are allowed to edit — other than this you are "
+            "only allowed to take READ-ONLY actions.",
+            "",
+            "## Plan Workflow",
+            "",
+            "### Phase 1: Initial Understanding",
+            "Goal: Gain a comprehensive understanding of the user's request by reading through "
+            "code and asking them questions. Critical: In this phase you should only use the "
+            "Explore subagent type.",
+            "1. Focus on understanding the user's request and the code associated with their request. "
+            "Actively search for existing functions, utilities, and patterns that can be reused — "
+            "avoid proposing new code when suitable implementations already exist.",
+            "2. **Launch up to 3 Explore agents IN PARALLEL** (single message, multiple tool calls) "
+            "to efficiently explore the codebase.",
+            "",
+            "### Phase 2: Design",
+            "Goal: Design an implementation approach.",
+            "Launch Plan agent(s) to design the implementation based on the user's intent and your "
+            "exploration results from Phase 1.",
+            "",
+            "**Guidelines:**",
+            "- **Default**: Launch at least 1 Plan agent for most tasks",
+            "- **Skip agents**: Only for truly trivial tasks (typo fixes, single-line changes)",
+            "",
+            "### Phase 3: Review",
+            "Goal: Review the plan(s) from Phase 2 and ensure alignment with the user's intentions.",
+            "1. Read the critical files identified by agents to deepen your understanding",
+            "2. Ensure that the plans align with the user's original request",
+            "3. Use ask_user_question_tool to clarify any remaining questions with the user",
+            "",
+            "### Phase 4: Final Plan",
+            f"Goal: Write your final plan to the plan file (the only file you can edit: {plan_file_path}).",
+            "- Begin with a **Context** section: explain why this change is being made",
+            "- Include only your recommended approach, not all alternatives",
+            "- Ensure that the plan file is concise enough to scan quickly, but detailed enough to execute effectively",
+            "- Include the paths of critical files to be modified",
+            "- Reference existing functions and utilities you found that should be reused, with their file paths",
+            "- Include a verification section describing how to test the changes end-to-end",
+            "",
+            "### Phase 5: Call exit_plan_mode",
+            "At the very end of your turn, once you have asked the user questions and are happy "
+            "with your final plan file — you should always call exit_plan_mode to indicate to the "
+            "user that you are done planning.",
+            "This is critical — your turn should only end with either using ask_user_question_tool "
+            "OR calling exit_plan_mode. Do not stop unless it's for these 2 reasons.",
+            "",
+            "**Important:** Use ask_user_question_tool ONLY to clarify requirements or choose between "
+            "approaches. Use exit_plan_mode to request plan approval. Do NOT ask about plan approval "
+            "in any other way — no text questions, no ask_user_question_tool. Phrases like "
+            "\"Is this plan okay?\", \"Should I proceed?\" MUST use exit_plan_mode.",
+            "",
+            "NOTE: At any point in time through this workflow you should feel free to ask the user "
+            "questions or clarifications using ask_user_question_tool. Don't make large assumptions "
+            "about user intent.",
         ]
-        if plan_content:
-            lines.append(f"\nCurrent plan draft ({len(plan_content)} chars):\n{plan_content[:500]}")
 
         content = _wrap_reminder("\n".join(lines))
         return {"role": "user", "content": content, "_is_meta": True, "_attachment_type": "plan_mode_reminder"}

@@ -15,7 +15,22 @@ class LspTool(BaseAgenticTool):
     input_schema = LspToolInput
     is_read_only = True
     risk_level = "low"
-    
+
+    def prompt(self) -> str:
+        return """Interact with Language Server Protocol (LSP) servers to get code intelligence features.
+
+Supported operations:
+- definition: Find where a symbol is defined
+- references: Find all references to a symbol
+- hover: Get hover information (documentation, type info) for a symbol
+
+All operations require:
+- absolute_path: The file to operate on
+- line: The line number (0-indexed)
+- character: The character offset (0-indexed)
+
+Note: LSP servers must be configured for the file type. If no server is available, an error will be returned."""
+
     async def execute(self, action: str, absolute_path: str, line: int, character: int) -> str:
         lsp_manager = self.context.get("lsp_manager")
         if not lsp_manager:

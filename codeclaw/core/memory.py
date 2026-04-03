@@ -606,7 +606,28 @@ class MemoryCompactor:
         """
         Takes an array of old Anthropic-formatted messages and returns a dense summary.
         """
-        prompt = "You are an internal system agent. Please read the following old conversation and tool usage logs. Summarize the core findings, established facts, and current state. Keep it intensely dense, factual, and strictly focused on what actions were taken. Do not output any conversational filler.\n\n"
+        prompt = """CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+
+Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
+This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
+
+First, in an <analysis> tag, analyze the conversation and identify the key information needed for each section. Then write the summary.
+
+Your summary should include the following sections:
+
+1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail.
+2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed.
+3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. Pay special attention to the most recent messages and include full code snippets where applicable.
+4. Errors and Fixes: List all errors that were encountered, and how they were fixed.
+5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
+6. All User Messages: List ALL user messages that are not tool results.
+7. Pending Tasks: Outline any pending tasks that have explicitly been asked to work on.
+8. Current Work: Describe in detail precisely what was being worked on immediately before this summary request.
+9. Optional Next Step: List the next step that will be taken related to the most recent work. IMPORTANT: ensure that this step is DIRECTLY in line with the user's most recent explicit requests. If the most recent request has been completed, do NOT include a next step. If there is a next step, include direct quotes from the most recent conversation showing exactly what task was being worked on.
+
+Conversation to summarize:
+
+"""
         
         # Stringify the old messages safely without destroying token limits with raw image B64
         for idx, m in enumerate(old_messages):
@@ -632,26 +653,12 @@ class MemoryCompactor:
                 prompt += f"[{role}]: {content}\n"
                 
         try:
-            if self.provider == "openai":
-                if self.client is None:
-                    raise RuntimeError("OpenAI SDK not installed.")
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=1024,
-                )
-                return str(
-                    getattr(getattr(response.choices[0], "message", None), "content", "") or ""
-                )
-
-            response = await self.client.messages.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1024
+            from codeclaw.core.config import COMPACT_MAX_OUTPUT_TOKENS, safe_llm_call
+            result = await safe_llm_call(
+                self.client, self.model, self.provider,
+                [{"role": "user", "content": prompt}],
+                COMPACT_MAX_OUTPUT_TOKENS,
             )
-            for block in response.content:
-                if getattr(block, "type", "") == "text":
-                    return getattr(block, "text", "")
-            return "[System: Compaction response contained no text blocks]"
+            return result or "[System: Compaction response contained no text blocks]"
         except Exception as e:
             return f"[System: Context summarization bypass failed due to API Error - {str(e)}]"
