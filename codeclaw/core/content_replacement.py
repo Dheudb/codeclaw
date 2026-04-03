@@ -1,6 +1,13 @@
 import copy
 import os
 import time
+import uuid as _uuid
+from typing import Optional
+
+
+TOOL_RESULT_BUDGET_CHARS = 200_000
+PREVIEW_CHARS = 300
+MIN_REPLACE_CHARS = 500
 
 
 class ContentReplacementManager:
@@ -9,6 +16,8 @@ class ContentReplacementManager:
         self.session_id = session_id
         self.registry = {}
         self.cleanup_history = []
+        self.seen_ids: set[str] = set()
+        self.replacements: dict[str, str] = {}
 
     def set_session(self, session_id: str):
         self.session_id = session_id
@@ -81,6 +90,8 @@ class ContentReplacementManager:
             "session_id": self.session_id,
             "registry": copy.deepcopy(self.registry),
             "cleanup_history": copy.deepcopy(self.cleanup_history),
+            "seen_ids": list(self.seen_ids),
+            "replacements": copy.deepcopy(self.replacements),
         }
 
     def load_state(self, payload):
@@ -88,7 +99,119 @@ class ContentReplacementManager:
         self.session_id = payload.get("session_id", self.session_id)
         self.registry = dict(payload.get("registry", {}) or {})
         self.cleanup_history = list(payload.get("cleanup_history", []) or [])[:20]
+        self.seen_ids = set(payload.get("seen_ids", []) or [])
+        self.replacements = dict(payload.get("replacements", {}) or {})
         self.mark_existing_entries()
+
+    def enforce_budget(self, messages: list, budget: int = 0) -> int:
+        """Walk *messages* in-place and replace oversized tool_result blocks.
+
+        Per-message semantics (matches Claude Code): each ``role: user``
+        message is evaluated independently.  If the aggregate char size of
+        its tool_result blocks exceeds *budget*, the largest **fresh**
+        (never-before-seen) results are spilled to disk and replaced with
+        a short preview.  Already-seen results keep their prior decision
+        (frozen or already-replaced) so the wire payload is stable across
+        turns.
+
+        Returns the number of blocks newly replaced this call.
+        """
+        budget = budget or TOOL_RESULT_BUDGET_CHARS
+        newly_replaced = 0
+
+        for msg in messages:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+
+            candidates: list[dict] = []
+            for block in content:
+                if not (isinstance(block, dict) and block.get("type") == "tool_result"):
+                    continue
+                tid = block.get("tool_use_id", "")
+                text = block.get("content", "")
+                if not isinstance(text, str):
+                    continue
+                candidates.append({"block": block, "tid": tid, "size": len(text)})
+
+            if not candidates:
+                continue
+
+            reapply: list[dict] = []
+            frozen: list[dict] = []
+            fresh: list[dict] = []
+            for c in candidates:
+                tid = c["tid"]
+                if tid in self.replacements:
+                    reapply.append(c)
+                elif tid in self.seen_ids:
+                    frozen.append(c)
+                else:
+                    fresh.append(c)
+
+            for c in reapply:
+                c["block"]["content"] = self.replacements[c["tid"]]
+
+            if not fresh:
+                for c in candidates:
+                    self.seen_ids.add(c["tid"])
+                continue
+
+            frozen_size = sum(c["size"] for c in frozen)
+            fresh_size = sum(c["size"] for c in fresh)
+
+            if frozen_size + fresh_size <= budget:
+                for c in candidates:
+                    self.seen_ids.add(c["tid"])
+                continue
+
+            eligible = [c for c in fresh if c["size"] >= MIN_REPLACE_CHARS]
+            eligible.sort(key=lambda c: c["size"], reverse=True)
+            remaining = frozen_size + fresh_size
+            for c in eligible:
+                if remaining <= budget:
+                    break
+                replacement = self._spill_and_preview(c["block"], c["tid"], c["size"])
+                if replacement is not None and len(replacement) < c["size"]:
+                    saved = c["size"] - len(replacement)
+                    c["block"]["content"] = replacement
+                    self.replacements[c["tid"]] = replacement
+                    remaining -= saved
+                    newly_replaced += 1
+
+            for c in candidates:
+                self.seen_ids.add(c["tid"])
+
+        return newly_replaced
+
+    def _spill_and_preview(self, block: dict, tool_use_id: str, size: int) -> Optional[str]:
+        """Write original content to disk and return a preview string."""
+        original = block.get("content", "")
+        if not isinstance(original, str) or not original:
+            return None
+        session_dir = self.get_session_dir()
+        try:
+            os.makedirs(session_dir, exist_ok=True)
+            file_name = f"tool-result-{int(time.time())}-{_uuid.uuid4().hex[:8]}.txt"
+            file_path = os.path.join(session_dir, file_name)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(original)
+            self.register_spill(
+                file_path=file_path,
+                tool_use_id=tool_use_id,
+                original_content_chars=size,
+            )
+        except Exception:
+            pass
+
+        preview = original[:PREVIEW_CHARS]
+        return (
+            f"[Tool result replaced by budget — original {size:,} chars. "
+            f"Saved to disk. Re-run the tool if you need the full output.]\n"
+            f"Preview:\n{preview}"
+        )
 
     def render_summary(self) -> str:
         self.mark_existing_entries()
@@ -97,5 +220,6 @@ class ContentReplacementManager:
         return (
             f"Content replacements: active={len(active_entries)}, "
             f"missing={len(missing_entries)}, "
+            f"budget_replaced={len(self.replacements)}, "
             f"cleanup_events={len(self.cleanup_history)}"
         )

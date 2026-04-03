@@ -184,7 +184,7 @@ class QueryEngine:
         
         self.messages = []
         self._compact_boundary_index = 0
-        self._tool_result_budget_chars = int(os.environ.get("CODECLAW_TOOL_RESULT_BUDGET_CHARS", "0")) or 400000
+        self._tool_result_budget_chars = int(os.environ.get("CODECLAW_TOOL_RESULT_BUDGET_CHARS", "0")) or 200000
         self.session_manager = SessionManager()
         self.last_persist_ok = True
         self.last_persist_error = ""
@@ -982,47 +982,16 @@ class QueryEngine:
 
     # ── Tool Result Budget Pool ───────────────────────────────────────
     def _apply_tool_result_budget(self, messages: list) -> list:
-        """Enforce a total character budget across all tool_result content blocks.
+        """Delegate to ContentReplacementManager for per-message budget enforcement.
 
-        Scans messages from newest to oldest.  Newest results are kept intact;
-        once the cumulative size exceeds the budget, older results are replaced
-        with a short placeholder.
+        Each user message's tool_result blocks are evaluated independently.
+        When the aggregate size exceeds the budget, the largest fresh results
+        are spilled to disk and replaced with a preview.  Already-seen results
+        keep their prior decision for wire-payload stability.
         """
-        budget = self._tool_result_budget_chars
-        if budget <= 0:
-            return messages
-
-        indexed = []
-        for idx, msg in enumerate(messages):
-            if msg.get("role") != "user":
-                continue
-            content = msg.get("content")
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_result":
-                    text = block.get("content", "")
-                    if isinstance(text, str):
-                        indexed.append((idx, block, len(text)))
-
-        total = 0
-        over_budget_blocks = []
-        for idx, block, size in reversed(indexed):
-            total += size
-            if total > budget:
-                over_budget_blocks.append((idx, block))
-
-        if not over_budget_blocks:
-            return messages
-
-        for idx, block in over_budget_blocks:
-            original_len = len(block.get("content", ""))
-            tool_id = block.get("tool_use_id", "unknown")
-            block["content"] = (
-                f"[Tool result truncated by budget — original {original_len} chars, "
-                f"tool_use_id={tool_id}. Re-run the tool if you need the full output.]"
-            )
-
+        self.content_replacement_manager.enforce_budget(
+            messages, budget=self._tool_result_budget_chars,
+        )
         return messages
 
     def _is_native_anthropic(self) -> bool:
@@ -3184,14 +3153,19 @@ class QueryEngine:
     def _build_loop_state(self) -> dict:
         env_max = os.environ.get("CODECLAW_MAX_TURNS", "")
         max_turns = int(env_max) if env_max.isdigit() else 1000
+        if hasattr(self, "_max_turns_override") and self._max_turns_override:
+            max_turns = self._max_turns_override
+        output_budget = 200000
+        if hasattr(self, "_output_budget_override") and self._output_budget_override:
+            output_budget = self._output_budget_override
         return {
             "max_turns": max_turns,
             "turn_count": 0,
             "max_tokens": self._get_max_output_tokens(),
             "active_model": self.primary_model,
             "fallback_count": 0,
-            "session_output_budget": 200000,
-            "session_input_budget": 200000,
+            "session_output_budget": output_budget,
+            "session_input_budget": output_budget,
             "turn_input_tokens": 0,
             "turn_output_tokens": 0,
             "max_tokens_recovery_attempts": 0,

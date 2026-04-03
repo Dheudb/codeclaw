@@ -15,6 +15,13 @@ from codeclaw.tools.builtin_agents import VERIFICATION_SYSTEM_PROMPT, VERIFICATI
 
 
 VERIFICATION_THRESHOLD = 3
+VERIFIER_MAX_TURNS = 15
+VERIFIER_OUTPUT_BUDGET = 50000
+
+_SKIP_PATTERNS = (
+    ".codeclaw", ".git", "__pycache__", "node_modules",
+    ".egg-info", ".tox", ".mypy_cache",
+)
 
 
 class VerificationManager:
@@ -48,7 +55,11 @@ class VerificationManager:
     def get_files_to_verify(self) -> list[str]:
         current_set = set(self.modified_files.keys())
         new_files = current_set - self._last_verified_set
-        return sorted(new_files)
+        filtered = [
+            f for f in new_files
+            if not any(pat in f for pat in _SKIP_PATTERNS)
+        ]
+        return sorted(filtered)
 
     def mark_verified(self, files: list[str], result: str):
         self._last_verified_set.update(files)
@@ -121,6 +132,9 @@ async def run_verification_agent(
             api_base_url=getattr(parent_engine, "api_base_url", None),
             local_tokenizer_path=getattr(parent_engine, "local_tokenizer_path", None),
         )
+
+        sub_engine._max_turns_override = VERIFIER_MAX_TURNS
+        sub_engine._output_budget_override = VERIFIER_OUTPUT_BUDGET
 
         read_only_tools = {"file_read_tool", "grep_tool", "glob_tool"}
         parent_tools = getattr(parent_engine, "available_tools", {})
