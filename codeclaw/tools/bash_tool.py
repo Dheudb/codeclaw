@@ -219,11 +219,15 @@ When the user asks you to create a new git commit:
             if self._looks_like_git_commit(command):
                 commit_context = await self._build_commit_attribution(command, cwd=cwd)
 
+            env = os.environ.copy()
+            env["MPLBACKEND"] = "Agg"
+
             process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
             

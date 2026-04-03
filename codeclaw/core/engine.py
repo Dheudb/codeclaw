@@ -3224,16 +3224,22 @@ class QueryEngine:
             "</system-reminder>"
         )
 
+    _BUILTIN_CHECK_MAX_RETRIES = 3
+
     async def _builtin_syntax_check(self, loop_state: dict):
         """
-        Built-in stop hook: check files modified during this session.
+        Built-in stop hook: check Python files modified during this session.
 
         Phase 1 — py_compile: catch syntax errors.
         Phase 2 — import test: catch NameError, ImportError, etc. at module
                   load time (runs with MPLBACKEND=Agg to prevent GUI popups).
-
-        Only fires once per end_turn sequence (builtin_check_done flag).
+        Phase 3 — execution test: actually run scripts that appear to be
+                  entry points (main.py, *_demo.py, etc.) to catch runtime
+                  errors like missing variables, wrong paths, etc.
         """
+        retries = loop_state.get("builtin_check_retries", 0)
+        if retries >= self._BUILTIN_CHECK_MAX_RETRIES:
+            return None
         if loop_state.get("builtin_check_done"):
             return None
         if self.get_mode() == "plan":
@@ -3251,6 +3257,7 @@ class QueryEngine:
 
         from codeclaw.core.hooks import StopHookDecision
         errors = []
+        passed_import = []
 
         for fpath in modified_py[:20]:
             # Phase 1: syntax check
@@ -3268,8 +3275,7 @@ class QueryEngine:
             except (asyncio.TimeoutError, Exception):
                 continue
 
-            # Phase 2: import test — catches NameError, ImportError, AttributeError
-            # at module load time. Uses Agg backend to prevent matplotlib GUI popups.
+            # Phase 2: import test
             import_script = (
                 "import sys, importlib.util;"
                 f"spec = importlib.util.spec_from_file_location('_check', r'{fpath}');"
@@ -3289,21 +3295,71 @@ class QueryEngine:
                     err_text = stderr.decode("utf-8", errors="replace").strip()
                     last_lines = "\n".join(err_text.splitlines()[-8:])
                     errors.append(f"[runtime] {fpath}:\n{last_lines}")
+                else:
+                    passed_import.append(fpath)
             except asyncio.TimeoutError:
                 errors.append(f"[timeout] {fpath}: import test timed out (possible plt.show() or infinite loop)")
             except Exception:
                 continue
 
+        # Phase 3: execution test — run entry-point scripts to catch runtime errors
+        if not errors:
+            entry_points = [
+                fp for fp in passed_import
+                if self._looks_like_entry_point(fp)
+            ]
+            for fpath in entry_points[:3]:
+                try:
+                    env = {**os.environ, "MPLBACKEND": "Agg"}
+                    script_dir = os.path.dirname(fpath) or os.getcwd()
+                    proc = await asyncio.create_subprocess_exec(
+                        sys.executable, fpath,
+                        cwd=script_dir,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=env,
+                    )
+                    stdout_b, stderr_b = await asyncio.wait_for(
+                        proc.communicate(), timeout=60,
+                    )
+                    if proc.returncode != 0:
+                        err_text = stderr_b.decode("utf-8", errors="replace").strip()
+                        last_lines = "\n".join(err_text.splitlines()[-10:])
+                        errors.append(f"[execution] {fpath} exited with code {proc.returncode}:\n{last_lines}")
+                except asyncio.TimeoutError:
+                    errors.append(f"[timeout] {fpath}: execution timed out after 60s")
+                except Exception:
+                    continue
+
         loop_state["builtin_check_done"] = True
+        loop_state["builtin_check_retries"] = retries + 1
 
         if errors:
             feedback = (
                 "Errors detected in files you wrote/modified:\n\n"
                 + "\n\n".join(errors)
-                + "\n\nFix these errors before finishing."
+                + "\n\nYou MUST fix these errors before finishing. "
+                "Do NOT end the turn until all files pass syntax, import, and execution checks."
             )
             return StopHookDecision("block", feedback)
         return None
+
+    @staticmethod
+    def _looks_like_entry_point(fpath: str) -> bool:
+        """Heuristic: is this file a runnable script?"""
+        basename = os.path.basename(fpath).lower()
+        if basename in ("main.py", "run.py", "app.py", "demo.py", "example.py"):
+            return True
+        if basename.startswith("run_") or basename.endswith("_demo.py") or basename.endswith("_example.py"):
+            return True
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(8192)
+            if '__name__' in content and '__main__' in content:
+                return True
+        except Exception:
+            pass
+        return False
 
     def _build_stop_hook_feedback(self, reason: str) -> str:
         return (
@@ -4157,6 +4213,7 @@ class QueryEngine:
                     builtin_check = await self._builtin_syntax_check(loop_state)
                     if builtin_check and builtin_check.behavior in {"block", "retry"}:
                         loop_state["stop_hook_retries"] += 1
+                        loop_state["builtin_check_done"] = False
                         self.messages.append(create_user_message(
                             self._build_stop_hook_feedback(builtin_check.reason),
                             is_meta=True,

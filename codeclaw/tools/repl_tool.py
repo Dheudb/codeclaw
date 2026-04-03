@@ -91,12 +91,16 @@ class ReplTool(BaseAgenticTool):
                 f.write(code)
                 temp_path = f.name
 
+            env = os.environ.copy()
+            env["MPLBACKEND"] = "Agg"
+
             process = await asyncio.create_subprocess_exec(
                 interpreter,
                 temp_path,
                 cwd=run_cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(),
