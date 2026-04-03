@@ -3226,28 +3226,34 @@ class QueryEngine:
 
     async def _builtin_syntax_check(self, loop_state: dict):
         """
-        Built-in stop hook: check syntax of files modified during this session.
-        Mirrors Claude Code's stop hook exit-code-2 pattern, but runs automatically
-        without requiring user-configured hooks.json.
+        Built-in stop hook: check files modified during this session.
+
+        Phase 1 — py_compile: catch syntax errors.
+        Phase 2 — import test: catch NameError, ImportError, etc. at module
+                  load time (runs with MPLBACKEND=Agg to prevent GUI popups).
+
+        Only fires once per end_turn sequence (builtin_check_done flag).
         """
         if loop_state.get("builtin_check_done"):
             return None
         if self.get_mode() == "plan":
             return None
 
-        modified_files = []
+        modified_py = []
         for abs_path in self.artifact_tracker.file_history:
             if not os.path.isfile(abs_path):
                 continue
             if abs_path.endswith(".py"):
-                modified_files.append(abs_path)
+                modified_py.append(abs_path)
 
-        if not modified_files:
+        if not modified_py:
             return None
 
         from codeclaw.core.hooks import StopHookDecision
         errors = []
-        for fpath in modified_files[:20]:
+
+        for fpath in modified_py[:20]:
+            # Phase 1: syntax check
             try:
                 proc = await asyncio.create_subprocess_exec(
                     sys.executable, "-m", "py_compile", fpath,
@@ -3257,9 +3263,34 @@ class QueryEngine:
                 _, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
                 if proc.returncode != 0:
                     err_text = stderr.decode("utf-8", errors="replace").strip()
-                    errors.append(f"{fpath}: {err_text}")
-            except asyncio.TimeoutError:
+                    errors.append(f"[syntax] {fpath}: {err_text}")
+                    continue
+            except (asyncio.TimeoutError, Exception):
                 continue
+
+            # Phase 2: import test — catches NameError, ImportError, AttributeError
+            # at module load time. Uses Agg backend to prevent matplotlib GUI popups.
+            import_script = (
+                "import sys, importlib.util;"
+                f"spec = importlib.util.spec_from_file_location('_check', r'{fpath}');"
+                "mod = importlib.util.module_from_spec(spec);"
+                "spec.loader.exec_module(mod)"
+            )
+            try:
+                env = {**os.environ, "MPLBACKEND": "Agg"}
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-c", import_script,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                )
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                if proc.returncode != 0:
+                    err_text = stderr.decode("utf-8", errors="replace").strip()
+                    last_lines = "\n".join(err_text.splitlines()[-8:])
+                    errors.append(f"[runtime] {fpath}:\n{last_lines}")
+            except asyncio.TimeoutError:
+                errors.append(f"[timeout] {fpath}: import test timed out (possible plt.show() or infinite loop)")
             except Exception:
                 continue
 
@@ -3267,8 +3298,8 @@ class QueryEngine:
 
         if errors:
             feedback = (
-                "Syntax errors detected in files you wrote/modified:\n\n"
-                + "\n".join(errors)
+                "Errors detected in files you wrote/modified:\n\n"
+                + "\n\n".join(errors)
                 + "\n\nFix these errors before finishing."
             )
             return StopHookDecision("block", feedback)
