@@ -62,6 +62,7 @@ from codeclaw.tools.task_tools import (
 )
 from codeclaw.tools.web_tool import WebSearchTool, WebFetchTool
 from codeclaw.tools.notebook_tool import NotebookTool
+from codeclaw.tools.notebook_edit_tool import NotebookEditTool
 from codeclaw.tools.plan_tool import PlanTool
 from codeclaw.tools.todo_tool import TodoWriteTool
 from codeclaw.tools.agent_tool import AgentTool
@@ -215,6 +216,7 @@ class QueryEngine:
             "web_search_tool": WebSearchTool(),
             "web_fetch_tool": WebFetchTool(),
             "notebook_tool": NotebookTool(),
+            "notebook_edit_tool": NotebookEditTool(),
             "plan_tool": PlanTool(),
             "todo_write_tool": TodoWriteTool(),
             "agent_tool": AgentTool(),
@@ -1181,7 +1183,7 @@ class QueryEngine:
 
     PLAN_MODE_BLOCKED_TOOLS = {
         "bash_tool", "file_edit_tool", "file_write_tool",
-        "notebook_tool", "sandbox_tool",
+        "notebook_tool", "notebook_edit_tool", "sandbox_tool",
         "task_create_tool", "task_kill_tool",
     }
 
@@ -3340,9 +3342,76 @@ class QueryEngine:
 
                 text_fragments = []
                 tool_calls = {}
+                dispatched_indices = set()
                 emitted_tool_ids = set()
                 finish_reason = "end_turn"
                 usage_payload = self._make_usage_block()
+
+                openai_sibling_cancel = asyncio.Event()
+
+                def _dispatch_tool_if_ready(idx):
+                    """Dispatch a tool call as soon as its arguments are fully received."""
+                    if idx in dispatched_indices:
+                        return
+                    record = tool_calls.get(idx)
+                    if not record or not record["id"] or not record["name"]:
+                        return
+                    dispatched_indices.add(idx)
+
+                    tool_id = record["id"]
+                    raw_args = "".join(record.get("arguments", []) or [])
+                    try:
+                        parsed_args = json.loads(raw_args) if raw_args.strip() else {}
+                    except Exception:
+                        parsed_args = {}
+
+                    tool_block = SimpleNamespace(
+                        type="tool_use",
+                        id=tool_id,
+                        name=record["name"],
+                        input=parsed_args,
+                    )
+
+                    is_safe = self._is_concurrency_safe(record["name"], parsed_args)
+                    nonlocal previous_batch_gate, current_safe_batch_tasks, current_safe_batch_gate
+
+                    if is_safe:
+                        if current_safe_batch_tasks is None:
+                            current_safe_batch_gate = previous_batch_gate
+                            current_safe_batch_tasks = []
+                        task = asyncio.create_task(
+                            self._await_gate_and_execute_tool(
+                                current_safe_batch_gate,
+                                tool_block,
+                                sys_print_callback,
+                                turn=turn_count,
+                                event_callback=event_callback,
+                                semaphore=streaming_semaphore,
+                                sibling_cancel=openai_sibling_cancel,
+                            )
+                        )
+                        current_safe_batch_tasks.append(task)
+                    else:
+                        if current_safe_batch_tasks is not None:
+                            previous_batch_gate = asyncio.gather(*current_safe_batch_tasks)
+                            current_safe_batch_tasks = None
+                            current_safe_batch_gate = None
+                        task = asyncio.create_task(
+                            self._await_gate_and_execute_tool(
+                                previous_batch_gate,
+                                tool_block,
+                                sys_print_callback,
+                                turn=turn_count,
+                                event_callback=event_callback,
+                                semaphore=streaming_semaphore,
+                            )
+                        )
+                        previous_batch_gate = task
+
+                    tool_entries.append({
+                        "tool_use_id": tool_id,
+                        "task": task,
+                    })
 
                 stream = await self.client.chat.completions.create(**create_kwargs)
                 self.active_stream = stream
@@ -3350,6 +3419,8 @@ class QueryEngine:
                     "type": "message_start",
                     "turn": turn_count,
                 })
+
+                last_tool_index = -1
 
                 async for chunk in stream:
                     if self.abort_event.is_set():
@@ -3379,6 +3450,11 @@ class QueryEngine:
 
                         for tool_delta in list(getattr(delta, "tool_calls", []) or []):
                             index = int(getattr(tool_delta, "index", 0) or 0)
+
+                            if index > last_tool_index and last_tool_index >= 0:
+                                _dispatch_tool_if_ready(last_tool_index)
+                            last_tool_index = max(last_tool_index, index)
+
                             record = tool_calls.setdefault(index, {
                                 "id": "",
                                 "name": "",
@@ -3406,6 +3482,12 @@ class QueryEngine:
 
                     if getattr(choice, "finish_reason", None):
                         finish_reason = self._map_openai_finish_reason(choice.finish_reason)
+
+                for idx in sorted(tool_calls.keys()):
+                    _dispatch_tool_if_ready(idx)
+
+                if current_safe_batch_tasks is not None:
+                    previous_batch_gate = asyncio.gather(*current_safe_batch_tasks)
 
                 content_blocks = []
                 full_text = "".join(text_fragments)
@@ -3435,7 +3517,7 @@ class QueryEngine:
                     stop_reason=finish_reason,
                     content=content_blocks,
                     usage=usage_payload,
-                ), [], False
+                ), tool_entries, False
 
             system_blocks = self._build_cached_system_blocks(system_prompt)
             stream_kwargs = {
