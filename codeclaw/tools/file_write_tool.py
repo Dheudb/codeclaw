@@ -6,12 +6,8 @@ from codeclaw.tools.base import BaseAgenticTool
 
 
 class FileWriteToolInput(BaseModel):
-    absolute_path: str = Field(..., description="The absolute path to the file to create or overwrite.")
-    content: str = Field(..., description="The full content to write to the target file.")
-    overwrite: bool = Field(
-        False,
-        description="If true, overwrite an existing file. Existing files should normally be read before overwrite.",
-    )
+    file_path: str = Field(..., description="The absolute path of the file to write.")
+    content: str = Field(..., description="The content to write to the file.")
 
 
 class FileWriteTool(BaseAgenticTool):
@@ -31,43 +27,29 @@ class FileWriteTool(BaseAgenticTool):
 
     def prompt(self) -> str:
         return (
-            "If this is an existing file, you MUST use file_read_tool first to read the file's contents. This tool will fail if you did not read the file first. "
-            "Prefer file_edit_tool for modifying existing files — it only sends the diff. Only use this tool to create new files or for complete rewrites. "
+            "This tool will overwrite the existing file if there is one at the provided path. "
+            "If this is an existing file, you MUST use file_read_tool first to read the file's contents. "
+            "Prefer file_edit_tool for modifying existing files — it only sends the diff. "
+            "Only use this tool to create new files or for complete rewrites. "
             "NEVER create documentation files (*.md) or README files unless explicitly requested by the User. "
             "Only use emojis if the user explicitly requests it."
         )
 
-    def validate_input(
-        self,
-        absolute_path: str,
-        content: str,
-        overwrite: bool = False,
-    ):
-        if not absolute_path:
-            return "absolute_path is required."
+    def validate_input(self, file_path: str, content: str, **kwargs):
+        if not file_path:
+            return "file_path is required."
         return None
 
-    def build_permission_summary(
-        self,
-        absolute_path: str,
-        content: str,
-        overwrite: bool = False,
-    ) -> str:
+    def build_permission_summary(self, file_path: str, content: str, **kwargs) -> str:
         content_preview = content[:160] + ("..." if len(content) > 160 else "")
         return (
             "File write requested.\n"
-            f"path: {os.path.abspath(absolute_path)}\n"
-            f"overwrite: {overwrite}\n"
+            f"path: {os.path.abspath(file_path)}\n"
             f"content_preview: {content_preview}"
         )
 
-    async def execute(
-        self,
-        absolute_path: str,
-        content: str,
-        overwrite: bool = False,
-    ) -> dict:
-        abs_path = os.path.abspath(absolute_path)
+    async def execute(self, file_path: str, content: str, **kwargs) -> dict:
+        abs_path = os.path.abspath(file_path)
         file_exists = os.path.exists(abs_path)
         cache = self._cache()
         tracker = self._artifact_tracker()
@@ -89,16 +71,6 @@ class FileWriteTool(BaseAgenticTool):
         operation = "create"
         before_snapshot = None
         if file_exists:
-            if not overwrite:
-                return build_tool_result(
-                    ok=False,
-                    content=(
-                        f"Cannot write '{abs_path}' because it already exists. "
-                        "Set overwrite=True or use file_edit_tool for a precise in-place change."
-                    ),
-                    metadata={"path": abs_path, "operation": "write"},
-                    is_error=True,
-                )
             if not has_read:
                 return build_tool_result(
                     ok=False,

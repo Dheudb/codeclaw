@@ -27,34 +27,37 @@ class WebSearchTool(BaseAgenticTool):
             return f"Error executing Web Search: {str(e)}"
 
 class WebFetchInput(BaseModel):
-    url: str = Field(..., description="The exact URL of the webpage to fetch text from.")
+    url: str = Field(..., description="The URL to fetch content from.")
+    prompt: str = Field(..., description="A prompt describing what information to extract from the page.")
 
 class WebFetchTool(BaseAgenticTool):
     name = "web_fetch_tool"
-    description = "Fetch content from a specified URL and return its contents in a readable markdown format. Use this tool when you need to retrieve and analyze webpage content."
+    description = "Fetch content from a specified URL and return its contents in a readable format. Use a prompt to specify what information to extract."
     input_schema = WebFetchInput
     is_read_only = True
     risk_level = "low"
-    
-    async def execute(self, url: str) -> str:
+
+    async def execute(self, url: str, prompt: str = "", **kwargs) -> str:
         try:
             async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
-            
+
             soup = BeautifulSoup(resp.text, 'lxml')
-            
-            # Annihilate non-text logic blocks
+
             for script in soup(["script", "style", "nav", "footer", "meta", "noscript"]):
                 script.decompose()
-                
+
             text = soup.get_text(separator=' ', strip=True)
-            text = re.sub(r'\\s+', ' ', text)
-            
+            text = re.sub(r'\s+', ' ', text)
+
             if len(text) > 30000:
-                text = text[:30000] + "\\n\\n...[Agent Content Shield: Dump truncated due to extreme size constraints]..."
-                
-            return f"Content extracted successfully [ {url} ]:\\n\\n{text}"
-            
+                text = text[:30000] + "\n\n...[Content truncated due to size]..."
+
+            result = f"Content from {url}:\n\n{text}"
+            if prompt:
+                result += f"\n\n---\nExtraction prompt: {prompt}"
+            return result
+
         except Exception as e:
             return f"Error fetching webpage: {str(e)}"

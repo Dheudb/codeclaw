@@ -86,7 +86,7 @@ class BaseAgenticTool(ABC):
         # Transparent Path Redirector Strategy: Protect LLM Context Limitations
         if sandbox and sandbox.active_sandbox:
             mapped_any = False
-            for k in ["absolute_path", "TargetFile", "path", "cwd", "DirectoryPath"]:
+            for k in ["file_path", "absolute_path", "TargetFile", "path", "cwd", "DirectoryPath"]:
                 if k in kwargs and kwargs[k]:
                     if k == "cwd":
                         kwargs[k] = sandbox.resolve_working_directory(kwargs[k])

@@ -1048,15 +1048,35 @@ class QueryEngine:
         return blocks
 
     def _apply_message_cache_control(self, messages: list) -> list:
-        """Add cache_control to the last content block of each message.
+        """Add cache_control breakpoint to maximize Anthropic prefix-cache hits.
 
-        Mirrors Claude Code's per-message prompt caching strategy: the last
-        content block of every user/assistant message is tagged with
-        ``cache_control: {"type": "ephemeral"}`` so that Anthropic can reuse
-        the KV cache across turns.  Only applied when talking to native
-        Anthropic API.
+        Mirrors Claude Code's single-breakpoint strategy: only the last 1-2
+        messages get ``cache_control: {"type": "ephemeral"}``.  Anthropic's
+        cache works by prefix matching — tagging every message creates many
+        short cache segments with poor hit rates.  A single breakpoint near the
+        end lets the entire conversation prefix be cached as one segment.
         """
+        if not messages:
+            return messages
+
         for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        block.pop("cache_control", None)
+            elif isinstance(content, str):
+                pass
+
+        marker_indices = []
+        n = len(messages)
+        if n >= 2:
+            marker_indices = [n - 2, n - 1]
+        elif n == 1:
+            marker_indices = [0]
+
+        for idx in marker_indices:
+            msg = messages[idx]
             content = msg.get("content")
             if isinstance(content, str) and content:
                 msg["content"] = [
@@ -1070,6 +1090,7 @@ class QueryEngine:
                 last_block = content[-1]
                 if isinstance(last_block, dict):
                     last_block["cache_control"] = {"type": "ephemeral"}
+
         return messages
 
     def _build_mcp_instructions(self) -> str:
@@ -1782,19 +1803,6 @@ class QueryEngine:
         )
         tools_schema = self._get_anthropic_tools_schema()
         preserve_last_messages = 8 if aggressive else 12
-        micro_compacted_messages, micro_count = self.compactor.micro_compact_tool_results(
-            self.messages,
-            preserve_last_messages=preserve_last_messages,
-            max_tool_result_chars=300 if aggressive else 450,
-            preview_chars=120 if aggressive else 160,
-        )
-        if micro_count > 0:
-            self.messages = micro_compacted_messages
-            self._sync_message_context()
-            self.persist_session_state()
-            sys_print_callback(
-                f"[dim magenta]↳ Micro-compacted {micro_count} historical tool result(s).[/dim magenta]"
-            )
 
         snipped_messages, snipped_count = self.compactor.snip_old_compaction_boundaries(
             self.messages,
@@ -1807,6 +1815,20 @@ class QueryEngine:
             self.persist_session_state()
             sys_print_callback(
                 f"[dim magenta]↳ Snipped {snipped_count} stale compaction boundary message(s).[/dim magenta]"
+            )
+
+        micro_compacted_messages, micro_count = self.compactor.micro_compact_tool_results(
+            self.messages,
+            preserve_last_messages=preserve_last_messages,
+            max_tool_result_chars=300 if aggressive else 450,
+            preview_chars=120 if aggressive else 160,
+        )
+        if micro_count > 0:
+            self.messages = micro_compacted_messages
+            self._sync_message_context()
+            self.persist_session_state()
+            sys_print_callback(
+                f"[dim magenta]↳ Micro-compacted {micro_count} historical tool result(s).[/dim magenta]"
             )
 
         max_tool_result_chars = 800 if aggressive else 1200

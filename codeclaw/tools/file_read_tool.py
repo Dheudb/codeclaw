@@ -16,9 +16,10 @@ except ImportError:
     pymupdf = None
 
 class FileReadToolInput(BaseModel):
-    absolute_path: str = Field(..., description="The absolute path to the file to read.")
-    start_line: int = Field(None, description="Optional 1-indexed starting line to read (for text).")
-    end_line: int = Field(None, description="Optional 1-indexed ending line to read (inclusive).")
+    file_path: str = Field(..., description="The absolute path of the file to read.")
+    offset: int = Field(None, description="The line number to start reading from (1-indexed). Negative values count from end.")
+    limit: int = Field(None, description="The number of lines to read. Only provide if the file is too large to read at once.")
+    pages: str = Field(None, description="Page range for PDFs (e.g. '1-5'). Only used for PDF files.")
 
 class FileReadTool(BaseAgenticTool):
     name = "file_read_tool"
@@ -57,85 +58,87 @@ class FileReadTool(BaseAgenticTool):
             return True
         return False
     
-    async def execute(self, absolute_path: str, start_line: int = None, end_line: int = None) -> Union[str, List[Dict[str, Any]]]:
-        abs_path = os.path.abspath(absolute_path)
+    async def execute(self, file_path: str, offset: int = None, limit: int = None, pages: str = None, **kwargs) -> Union[str, List[Dict[str, Any]]]:
+        abs_path = os.path.abspath(file_path)
         cache = self._cache()
         tracker = self._artifact_tracker()
         agent_id = self.context.get("agent_id")
         session_id = self.context.get("session_id")
-        
+
         if not os.path.exists(abs_path):
             return f"Error: File at '{abs_path}' does not exist."
-            
+
         if not os.path.isfile(abs_path):
             return f"Error: '{abs_path}' is a directory, not a file."
-            
+
         ext = os.path.splitext(abs_path)[1].lower()
-        
+
         # 1. Image parsing (Multimodal vision)
         if ext in ['.png', '.jpg', '.jpeg', '.webp', '.gif']:
             if Image is None:
                 return "Error: Image reading requires the 'pillow' library to be installed."
-                
+
             try:
-                img = Image.open(absolute_path)
-                # Ensure RGB for JPEG
+                img = Image.open(abs_path)
                 if ext in ['.jpg', '.jpeg'] and img.mode != 'RGB':
                     img = img.convert('RGB')
-                    
-                # Downsample if too large to save Claude token limits
+
                 max_dim = 1500
                 if img.width > max_dim or img.height > max_dim:
                     img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-                    
+
                 output_buf = BytesIO()
                 media_type = f"image/{'jpeg' if ext in ['.jpg', '.jpeg'] else ext[1:]}"
-                
+
                 fmt = "JPEG" if ext in ['.jpg', '.jpeg'] else ext[1:].upper()
                 img.save(output_buf, format=fmt)
                 img_bytes = output_buf.getvalue()
                 b64_data = base64.b64encode(img_bytes).decode('utf-8')
-                
+
                 if cache is not None:
                     cache.record_read(abs_path, kind="image", chars=len(img_bytes))
                 self.context.setdefault("read_file_state", {})[abs_path] = True
                 if tracker is not None:
                     tracker.record_prefetch(
-                        path=abs_path,
-                        kind="image",
-                        source="file_read_tool",
-                        start_line=start_line,
-                        end_line=end_line,
-                        chars=len(img_bytes),
-                        agent_id=agent_id,
-                        session_id=session_id,
+                        path=abs_path, kind="image", source="file_read_tool",
+                        start_line=None, end_line=None,
+                        chars=len(img_bytes), agent_id=agent_id, session_id=session_id,
                     )
                     tracker.record_attachment(
-                        path=abs_path,
-                        kind="image",
-                        source="file_read_tool",
-                        agent_id=agent_id,
-                        session_id=session_id,
+                        path=abs_path, kind="image", source="file_read_tool",
+                        agent_id=agent_id, session_id=session_id,
                         metadata={"bytes": len(img_bytes), "media_type": media_type},
                     )
-                
-                # We return a List. The engine will seamlessly pack this into the API content block.
+
                 return [
                     {"type": "text", "text": f"Successfully read image '{abs_path}'. Size: {img.width}x{img.height}"},
                     {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64_data}}
                 ]
             except Exception as e:
                 return f"Error opening image: {str(e)}"
-                
+
         # 2. PDF parsing
         if ext == '.pdf':
             try:
-                if cache is not None and cache.should_skip_redundant_read(abs_path, start_line=start_line, end_line=end_line):
+                page_start, page_end_hint = 1, None
+                if pages:
+                    parts = pages.split("-")
+                    page_start = int(parts[0]) if parts[0] else 1
+                    page_end_hint = int(parts[1]) if len(parts) > 1 and parts[1] else None
+                elif offset is not None:
+                    page_start = max(1, offset)
+                    if limit is not None:
+                        page_end_hint = page_start + limit - 1
+
+                cache_start = page_start
+                cache_end = page_end_hint
+
+                if cache is not None and cache.should_skip_redundant_read(abs_path, start_line=cache_start, end_line=cache_end):
                     entry = cache.get_entry(abs_path) or {}
                     if tracker is not None:
                         tracker.record_prefetch(
                             path=abs_path, kind="pdf", source="file_read_tool",
-                            start_line=start_line, end_line=end_line,
+                            start_line=cache_start, end_line=cache_end,
                             cache_hit=True, chars=0,
                             agent_id=agent_id, session_id=session_id,
                         )
@@ -154,12 +157,12 @@ class FileReadTool(BaseAgenticTool):
                         pdf_bytes = f.read()
                     b64_data = base64.b64encode(pdf_bytes).decode('utf-8')
                     if cache is not None:
-                        cache.record_read(abs_path, kind="pdf", start_line=start_line, end_line=end_line, chars=len(pdf_bytes))
+                        cache.record_read(abs_path, kind="pdf", start_line=cache_start, end_line=cache_end, chars=len(pdf_bytes))
                     self.context.setdefault("read_file_state", {})[abs_path] = True
                     if tracker is not None:
                         tracker.record_prefetch(
                             path=abs_path, kind="pdf", source="file_read_tool",
-                            start_line=start_line, end_line=end_line,
+                            start_line=cache_start, end_line=cache_end,
                             chars=len(pdf_bytes), agent_id=agent_id, session_id=session_id,
                         )
                     return [
@@ -172,8 +175,7 @@ class FileReadTool(BaseAgenticTool):
 
                 doc = pymupdf.open(abs_path)
                 total_pages = len(doc)
-                page_start = max(1, start_line or 1)
-                page_end = min(total_pages, end_line or total_pages)
+                page_end = min(total_pages, page_end_hint or total_pages)
                 extracted_pages = []
                 for page_num in range(page_start - 1, page_end):
                     text = doc[page_num].get_text("text")
@@ -183,7 +185,7 @@ class FileReadTool(BaseAgenticTool):
                 output = f"PDF: {abs_path}\nPages: {page_start} to {page_end} of {total_pages}\n"
                 output += "=" * 40 + "\n" + "\n".join(extracted_pages)
                 if len(output) > 120000:
-                    output = output[:120000] + f"\n\n... [Truncated. Use start_line/end_line as page range to read specific pages.]"
+                    output = output[:120000] + f"\n\n... [Truncated. Use pages parameter (e.g. '3-7') to read specific pages.]"
 
                 if cache is not None:
                     cache.record_read(abs_path, kind="pdf", start_line=page_start, end_line=page_end, chars=len(output))
@@ -197,22 +199,23 @@ class FileReadTool(BaseAgenticTool):
                 return output
             except Exception as e:
                 return f"Error loading PDF: {str(e)}"
-                
+
         # 3. Text fallback
         try:
+            start_line = max(1, offset) if offset is not None else 1
+            if limit is not None:
+                end_line = start_line + limit - 1
+            else:
+                end_line = None
+
             if cache is not None and cache.should_skip_redundant_read(abs_path, start_line=start_line, end_line=end_line):
                 entry = cache.get_entry(abs_path) or {}
                 if tracker is not None:
                     tracker.record_prefetch(
-                        path=abs_path,
-                        kind="text",
-                        source="file_read_tool",
-                        start_line=start_line,
-                        end_line=end_line,
-                        cache_hit=True,
-                        chars=0,
-                        agent_id=agent_id,
-                        session_id=session_id,
+                        path=abs_path, kind="text", source="file_read_tool",
+                        start_line=start_line, end_line=end_line,
+                        cache_hit=True, chars=0,
+                        agent_id=agent_id, session_id=session_id,
                     )
                 return (
                     f"File '{abs_path}' is unchanged since the last identical read. "
@@ -223,52 +226,40 @@ class FileReadTool(BaseAgenticTool):
                 )
             with open(abs_path, "r", encoding="utf-8") as file:
                 lines = file.readlines()
-                
+
             total_lines = len(lines)
-            _start = start_line or 1
-            _end = end_line or total_lines
+            _start = start_line
+            _end = min(total_lines, end_line) if end_line is not None else total_lines
             _start = max(1, _start)
-            _end = min(total_lines, _end)
-            
+
             if _start > _end:
-                return f"Error: start_line ({_start}) > end_line ({_end})."
-                
-            content_slice = lines[_start-1:_end]
-            
+                return f"Error: computed start ({_start}) > end ({_end})."
+
+            content_slice = lines[_start - 1:_end]
+
             output = f"File: {abs_path}\n"
             output += f"Lines: {_start} to {_end} of {total_lines}\n"
             output += "-" * 40 + "\n"
-            
+
             newline_char = '\n'
             formatted_lines = [f"{_start + i}: {line.rstrip(newline_char)}" for i, line in enumerate(content_slice)]
-            
+
             output += "\n".join(formatted_lines)
             output += "\n" + "-" * 40
-            
+
             if cache is not None:
-                cache.record_read(
-                    abs_path,
-                    kind="text",
-                    start_line=_start,
-                    end_line=_end,
-                    chars=len(output),
-                )
+                cache.record_read(abs_path, kind="text", start_line=_start, end_line=_end, chars=len(output))
             self.context.setdefault("read_file_state", {})[abs_path] = True
             if tracker is not None:
                 tracker.record_prefetch(
-                    path=abs_path,
-                    kind="text",
-                    source="file_read_tool",
-                    start_line=_start,
-                    end_line=_end,
-                    chars=len(output),
-                    agent_id=agent_id,
-                    session_id=session_id,
+                    path=abs_path, kind="text", source="file_read_tool",
+                    start_line=_start, end_line=_end,
+                    chars=len(output), agent_id=agent_id, session_id=session_id,
                 )
-            
+
             return output
-            
+
         except UnicodeDecodeError:
             return f"Error: '{abs_path}' is binary or unrecognized. Text decode failed."
         except Exception as e:
-            return f"Error reading file manually: {str(e)}"
+            return f"Error reading file: {str(e)}"
