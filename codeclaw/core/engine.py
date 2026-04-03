@@ -4,6 +4,7 @@ import copy
 import inspect
 import json
 import logging
+import sys
 import time
 from types import SimpleNamespace
 from typing import Optional
@@ -3223,6 +3224,56 @@ class QueryEngine:
             "</system-reminder>"
         )
 
+    async def _builtin_syntax_check(self, loop_state: dict):
+        """
+        Built-in stop hook: check syntax of files modified during this session.
+        Mirrors Claude Code's stop hook exit-code-2 pattern, but runs automatically
+        without requiring user-configured hooks.json.
+        """
+        if loop_state.get("builtin_check_done"):
+            return None
+        if self.get_mode() == "plan":
+            return None
+
+        modified_files = []
+        for abs_path in self.artifact_tracker.file_history:
+            if not os.path.isfile(abs_path):
+                continue
+            if abs_path.endswith(".py"):
+                modified_files.append(abs_path)
+
+        if not modified_files:
+            return None
+
+        from codeclaw.core.hooks import StopHookDecision
+        errors = []
+        for fpath in modified_files[:20]:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-m", "py_compile", fpath,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+                if proc.returncode != 0:
+                    err_text = stderr.decode("utf-8", errors="replace").strip()
+                    errors.append(f"{fpath}: {err_text}")
+            except asyncio.TimeoutError:
+                continue
+            except Exception:
+                continue
+
+        loop_state["builtin_check_done"] = True
+
+        if errors:
+            feedback = (
+                "Syntax errors detected in files you wrote/modified:\n\n"
+                + "\n".join(errors)
+                + "\n\nFix these errors before finishing."
+            )
+            return StopHookDecision("block", feedback)
+        return None
+
     def _build_stop_hook_feedback(self, reason: str) -> str:
         return (
             "<system-reminder>\n"
@@ -4072,6 +4123,27 @@ class QueryEngine:
                             "[dim yellow]↳ Structured output validation failed; retrying with feedback.[/dim yellow]"
                         )
                         continue
+                    builtin_check = await self._builtin_syntax_check(loop_state)
+                    if builtin_check and builtin_check.behavior in {"block", "retry"}:
+                        loop_state["stop_hook_retries"] += 1
+                        self.messages.append(create_user_message(
+                            self._build_stop_hook_feedback(builtin_check.reason),
+                            is_meta=True,
+                            origin="builtin_syntax_check",
+                        ))
+                        self._sync_message_context()
+                        self.persist_session_state()
+                        await self._record_loop_transition(
+                            "builtin_syntax_check",
+                            turn=turn_count,
+                            event_callback=event_callback,
+                            retries=loop_state["stop_hook_retries"],
+                        )
+                        sys_print_callback(
+                            "[dim yellow]↳ Built-in syntax check found errors in modified files; agent must fix them.[/dim yellow]"
+                        )
+                        continue
+
                     stop_hook_decision = await self.hook_manager.evaluate_stop_hooks_async({
                         "cwd": os.getcwd(),
                         "mode": self.get_mode(),

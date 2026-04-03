@@ -69,6 +69,8 @@ def _section_doing_tasks() -> str:
         "Don't create helpers, utilities, or abstractions for one-time operations. Don't design for hypothetical future requirements.",
         "Avoid backwards-compatibility hacks like renaming unused _vars, re-exporting types, adding // removed comments for removed code. If you are certain that something is unused, delete it completely.",
         "Report outcomes faithfully: if tests fail, say so with the relevant output; if you did not run a verification step, say that rather than implying it succeeded. Never claim 'all tests pass' when output shows failures.",
+        "Before reporting a task complete, verify it actually works: run the test, execute the script, check the output. Minimum complexity means no gold-plating, not skipping the finish line. If you can't verify (no test exists, can't run the code), say so explicitly rather than claiming success.",
+        "Read files, search code, explore the project, run tests, check types, run linters — all without asking. If you wrote code, use bash_tool to run syntax checks (e.g. python -m py_compile) or execute the code to confirm it works before ending your turn.",
     ]
     return "# Doing tasks\n" + "\n".join(f" - {i}" for i in items)
 
