@@ -281,22 +281,75 @@ class ContextBuilder:
         return "# Session-specific guidance\n" + "\n".join(f" - {i}" for i in items)
 
     def _load_project_instructions(self) -> str:
-        """Load CLAUDE.md or .codeclaw/instructions.md from the project root."""
-        candidates = [
-            os.path.join(self.cwd, "CLAUDE.md"),
-            os.path.join(self.cwd, ".claude", "instructions.md"),
-            os.path.join(self.cwd, ".codeclaw", "instructions.md"),
+        """
+        Load project instructions from multiple levels, combining global
+        (user-home) and project-specific CLAUDE.md files.
+
+        Search order (all that exist are concatenated):
+          1. ~/.claude/CLAUDE.md  (global user preferences)
+          2. ~/CLAUDE.md          (global fallback)
+          3. Each parent dir up to cwd: .claude/CLAUDE.md, CLAUDE.md
+          4. .codeclaw/instructions.md in cwd (project-specific fallback)
+
+        Later entries are more specific and take priority when they conflict.
+        """
+        from pathlib import Path
+
+        home = Path.home()
+        cwd = Path(self.cwd)
+        seen = set()
+        loaded = []
+        max_chars_per_file = 6000
+        max_total_chars = 12000
+        consumed = 0
+
+        global_candidates = [
+            ("global", home / ".claude" / "CLAUDE.md"),
+            ("global", home / "CLAUDE.md"),
         ]
-        for path in candidates:
-            if os.path.isfile(path):
+
+        dirs_bottom_up = list(reversed([cwd] + list(cwd.parents)))
+        project_candidates = []
+        for d in dirs_bottom_up:
+            project_candidates.append(("project", d / ".claude" / "CLAUDE.md"))
+            project_candidates.append(("project", d / "CLAUDE.md"))
+        project_candidates.append(("project", cwd / ".codeclaw" / "instructions.md"))
+
+        for scope, path in global_candidates + project_candidates:
+            try:
+                resolved = str(path.resolve())
+            except Exception:
+                resolved = str(path)
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if not path.is_file():
+                continue
+            try:
+                content = path.read_text(encoding="utf-8").strip()
+            except UnicodeDecodeError:
                 try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        content = f.read().strip()
-                    if content:
-                        return content
+                    content = path.read_text(encoding="utf-8-sig").strip()
                 except Exception:
-                    pass
-        return ""
+                    continue
+            except Exception:
+                continue
+            if not content:
+                continue
+            remaining = max_total_chars - consumed
+            if remaining <= 0:
+                break
+            if len(content) > max_chars_per_file:
+                content = content[:max_chars_per_file].rstrip()
+            if len(content) > remaining:
+                content = content[:remaining].rstrip()
+            if not content:
+                break
+
+            loaded.append(f"[{scope.upper()}: {path}]\n{content}")
+            consumed += len(content)
+
+        return "\n\n".join(loaded)
 
     DYNAMIC_BOUNDARY = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__"
 

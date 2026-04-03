@@ -12,45 +12,34 @@ from codeclaw.tools.builtin_agents import (
 
 MAX_SUBAGENT_DEPTH = 2
 
+ALL_AGENT_DISALLOWED_TOOLS = frozenset({
+    "agent_tool",
+    "ask_user_question_tool",
+    "send_message_tool",
+    "team_create_tool",
+    "team_delete_tool",
+    "enter_plan_mode",
+    "exit_plan_mode",
+})
+
 class AgentToolInput(BaseModel):
-    task: str = Field(..., description="The comprehensive instruction outlining what you want the sub-agent to do. Provide full context since it boots with zero awareness of your history.")
-    agent_type: Optional[str] = Field(
+    description: str = Field(..., description="A short (3-5 word) description of the task")
+    prompt: str = Field(..., description="The task for the agent to perform")
+    subagent_type: Optional[str] = Field(
         None,
         description=(
-            "Optional built-in agent type to use. Each type has a specialized system prompt "
-            "and tool restrictions optimized for its role. Available types: "
-            "explore, plan, verification, general-purpose. "
+            "The type of specialized agent to use for this task. "
+            "Available types: explore, plan, verification, general-purpose. "
             "If omitted, defaults to general-purpose behavior."
         ),
     )
-    tasks: List[str] = Field(
-        default_factory=list,
-        description="Optional list of delegated tasks. When more than one task is supplied, the agent can execute them serially or in parallel.",
+    model: Optional[str] = Field(
+        None,
+        description="Optional model override for this agent. If omitted, inherits from the parent.",
     )
-    allowed_tools: List[str] = Field(
-        default_factory=list,
-        description="Optional tool allowlist for the sub-agent. If empty, it inherits the parent's tool pool except for recursive agent spawning.",
-    )
-    inherit_context: bool = Field(
-        True,
-        description="If true, inherit a sanitized copy of the parent's conversation context, plan state, and todos.",
-    )
-    parallel: bool = Field(
+    run_in_background: bool = Field(
         False,
-        description="If true and multiple tasks are supplied, spawn multiple sub-agents concurrently and aggregate their results.",
-    )
-    coordinator_mode: bool = Field(
-        False,
-        description="If true and multiple tasks are supplied, run a dedicated coordinator sub-agent to synthesize the child results into one final report.",
-    )
-    fork: bool = Field(
-        False,
-        description=(
-            "If true, fork the current agent: the child inherits the full conversation "
-            "context and system prompt (sharing the prompt cache prefix for efficiency). "
-            "Use fork for research tasks that benefit from the parent's accumulated context. "
-            "Incompatible with parallel/coordinator_mode."
-        ),
+        description="Set to true to run this agent in the background. You will be notified when it completes.",
     )
 
 class AgentTool(BaseAgenticTool):
@@ -103,31 +92,21 @@ Terse command-style prompts produce shallow, generic work."""
 
     def build_permission_summary(
         self,
-        task: str,
-        agent_type: str = None,
-        tasks: List[str] = None,
-        allowed_tools: List[str] = None,
-        inherit_context: bool = True,
-        parallel: bool = False,
-        coordinator_mode: bool = False,
-        fork: bool = False,
+        description: str = "",
+        prompt: str = "",
+        subagent_type: str = None,
+        model: str = None,
+        run_in_background: bool = False,
     ) -> str:
-        tasks = tasks or []
-        allowed_tools = allowed_tools or []
-        total_task_count = len(tasks) if tasks else (1 if task else 0)
-        preview_source = tasks[0] if tasks else task
-        preview = preview_source[:240] + ("..." if len(preview_source) > 240 else "") if preview_source else "<empty>"
-        mode_str = "fork" if fork else ("parallel" if parallel else "serial")
-        agent_type_str = agent_type or "general-purpose"
+        preview = prompt[:240] + ("..." if len(prompt) > 240 else "") if prompt else "<empty>"
+        agent_type_str = subagent_type or "general-purpose"
         return (
             "Sub-agent delegation requested.\n"
-            f"agent_type: {agent_type_str}\n"
-            f"mode: {mode_str}\n"
-            f"inherit_context: {inherit_context}\n"
-            f"coordinator_mode: {coordinator_mode}\n"
-            f"task_count: {total_task_count}\n"
-            f"allowed_tools: {', '.join(allowed_tools) if allowed_tools else '<inherit parent tool pool>'}\n"
-            f"task_preview: {preview}"
+            f"description: {description}\n"
+            f"subagent_type: {agent_type_str}\n"
+            f"model: {model or '<inherit>'}\n"
+            f"run_in_background: {run_in_background}\n"
+            f"prompt_preview: {preview}"
         )
 
     def _filter_incomplete_tool_messages(self, messages):
@@ -186,15 +165,16 @@ Terse command-style prompts produce shallow, generic work."""
         allowed_tools: List[str],
         disallowed_tools: set = None,
     ):
+        always_blocked = ALL_AGENT_DISALLOWED_TOOLS
+        merged_disallowed = set(always_blocked)
+        if disallowed_tools:
+            merged_disallowed |= set(disallowed_tools)
+
         filtered_tools = {
             name: copy.copy(tool)
             for name, tool in parent_tools.items()
+            if name not in merged_disallowed
         }
-        if "agent_tool" in filtered_tools:
-            del filtered_tools["agent_tool"]
-        if disallowed_tools:
-            for name in disallowed_tools:
-                filtered_tools.pop(name, None)
         if allowed_tools and "*" not in allowed_tools:
             allowset = set(allowed_tools)
             filtered_tools = {
@@ -610,19 +590,14 @@ Terse command-style prompts produce shallow, generic work."""
 
     async def execute(
         self,
-        task: str,
-        agent_type: str = None,
-        tasks: List[str] = None,
-        allowed_tools: List[str] = None,
-        inherit_context: bool = True,
-        parallel: bool = False,
-        coordinator_mode: bool = False,
-        fork: bool = False,
+        description: str = "",
+        prompt: str = "",
+        subagent_type: str = None,
+        model: str = None,
+        run_in_background: bool = False,
     ) -> str:
-        allowed_tools = allowed_tools or []
-        effective_tasks = self._get_effective_tasks(task, tasks)
-        if not effective_tasks:
-            return "Sub-agent spawn denied: no delegated task content was provided."
+        if not prompt:
+            return "Sub-agent spawn denied: no prompt was provided."
 
         parent_depth = int(self.context.get("agent_depth", 0) or 0)
         if parent_depth >= MAX_SUBAGENT_DEPTH:
@@ -631,63 +606,15 @@ Terse command-style prompts produce shallow, generic work."""
                 "Complete the remaining work in the current agent."
             )
 
-        builtin_def = get_builtin_agent(agent_type) if agent_type else None
-
+        builtin_def = get_builtin_agent(subagent_type) if subagent_type else None
         parent_agent_id = self.context.get("agent_id")
 
-        if fork and len(effective_tasks) == 1:
-            payload = await self._run_fork_subagent(
-                task=effective_tasks[0],
-                allowed_tools=allowed_tools,
-                parent_depth=parent_depth,
-                parent_agent_id=parent_agent_id,
-            )
-            return self._format_single_report(payload)
-
-        if len(effective_tasks) == 1:
-            payload = await self._run_single_subagent(
-                task=effective_tasks[0],
-                allowed_tools=allowed_tools,
-                inherit_context=inherit_context,
-                parent_depth=parent_depth,
-                parent_agent_id=parent_agent_id,
-                builtin_agent_def=builtin_def,
-            )
-            return self._format_single_report(payload)
-
-        if parallel:
-            payloads = await asyncio.gather(*[
-                self._run_single_subagent(
-                    task=item,
-                    allowed_tools=allowed_tools,
-                    inherit_context=inherit_context,
-                    parent_depth=parent_depth,
-                    parent_agent_id=parent_agent_id,
-                    builtin_agent_def=builtin_def,
-                )
-                for item in effective_tasks
-            ])
-        else:
-            payloads = []
-            for item in effective_tasks:
-                payloads.append(await self._run_single_subagent(
-                    task=item,
-                    allowed_tools=allowed_tools,
-                    inherit_context=inherit_context,
-                    parent_depth=parent_depth,
-                    parent_agent_id=parent_agent_id,
-                    builtin_agent_def=builtin_def,
-                ))
-
-        if coordinator_mode:
-            coordinator_payload = await self._run_coordinator_mode(
-                parent_task=task,
-                payloads=payloads,
-                parallel=parallel,
-                parent_depth=parent_depth,
-                parent_agent_id=parent_agent_id,
-                inherit_context=inherit_context,
-            )
-            return self._format_coordinator_report(coordinator_payload, payloads, parallel)
-
-        return self._format_batch_report(payloads, parallel=parallel)
+        payload = await self._run_single_subagent(
+            task=prompt,
+            allowed_tools=[],
+            inherit_context=True,
+            parent_depth=parent_depth,
+            parent_agent_id=parent_agent_id,
+            builtin_agent_def=builtin_def,
+        )
+        return self._format_single_report(payload)

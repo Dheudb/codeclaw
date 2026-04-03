@@ -4,8 +4,7 @@ setup(
     name="codeclaw",
     version="0.1.0",
     description="CodeClaw — Open-source agentic coding CLI engine",
-    packages=["codeclaw", "codeclaw.core", "codeclaw.tools", "codeclaw.protocols"],
-    package_dir={"codeclaw": "."},
+    packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[
         "anthropic>=0.40.0",

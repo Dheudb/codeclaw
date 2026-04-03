@@ -73,6 +73,7 @@ from codeclaw.tools.team_tools import TeamCreateTool, TeamDeleteTool
 from codeclaw.tools.send_message_tool import SendMessageTool
 from codeclaw.tools.ask_user_question_tool import AskUserQuestionTool
 from codeclaw.tools.brief_tool import BriefTool
+from codeclaw.tools.plan_mode_tools import EnterPlanModeTool, ExitPlanModeTool
 from codeclaw.core.messages import (
     create_user_message,
     create_assistant_message,
@@ -169,8 +170,9 @@ class QueryEngine:
             "cache_read_input_tokens": 0,
         }
         
-        # A persistent memory array for this session loop
         self.messages = []
+        self._compact_boundary_index = 0
+        self._tool_result_budget_chars = int(os.environ.get("CODECLAW_TOOL_RESULT_BUDGET_CHARS", "0")) or 400000
         self.session_manager = SessionManager()
         self.session_id = str(uuid.uuid4())
         self.last_persist_ok = True
@@ -225,6 +227,8 @@ class QueryEngine:
             "send_message_tool": SendMessageTool(),
             "ask_user_question_tool": AskUserQuestionTool(),
             "brief_tool": BriefTool(),
+            "enter_plan_mode": EnterPlanModeTool(),
+            "exit_plan_mode": ExitPlanModeTool(),
         }
         latent_tool_names = {
             "browser_tool",
@@ -931,6 +935,76 @@ class QueryEngine:
             cleared_ids=self._frc_cleared_ids,
         )
 
+    # ── Compact Boundary Slicing ──────────────────────────────────────
+    def _find_last_compact_boundary_index(self) -> int:
+        """Find the index of the last compaction boundary message."""
+        for i in range(len(self.messages) - 1, -1, -1):
+            msg = self.messages[i]
+            content = msg.get("content", "")
+            if isinstance(content, str) and "[CompactionBoundary:" in content:
+                return i
+        return 0
+
+    def _get_messages_after_compact_boundary(self) -> list:
+        """Return only messages from the last compact boundary onward for API calls.
+
+        This avoids sending both the summary and the original messages that
+        were summarized, which wastes tokens and degrades compact effectiveness.
+        """
+        boundary = self._compact_boundary_index
+        if boundary <= 0 or boundary >= len(self.messages):
+            return self.messages
+        return self.messages[boundary:]
+
+    def _update_compact_boundary(self):
+        """Refresh the boundary index after compaction modifies self.messages."""
+        self._compact_boundary_index = self._find_last_compact_boundary_index()
+
+    # ── Tool Result Budget Pool ───────────────────────────────────────
+    def _apply_tool_result_budget(self, messages: list) -> list:
+        """Enforce a total character budget across all tool_result content blocks.
+
+        Scans messages from newest to oldest.  Newest results are kept intact;
+        once the cumulative size exceeds the budget, older results are replaced
+        with a short placeholder.
+        """
+        budget = self._tool_result_budget_chars
+        if budget <= 0:
+            return messages
+
+        indexed = []
+        for idx, msg in enumerate(messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    text = block.get("content", "")
+                    if isinstance(text, str):
+                        indexed.append((idx, block, len(text)))
+
+        total = 0
+        over_budget_blocks = []
+        for idx, block, size in reversed(indexed):
+            total += size
+            if total > budget:
+                over_budget_blocks.append((idx, block))
+
+        if not over_budget_blocks:
+            return messages
+
+        for idx, block in over_budget_blocks:
+            original_len = len(block.get("content", ""))
+            tool_id = block.get("tool_use_id", "unknown")
+            block["content"] = (
+                f"[Tool result truncated by budget — original {original_len} chars, "
+                f"tool_use_id={tool_id}. Re-run the tool if you need the full output.]"
+            )
+
+        return messages
+
     def _is_native_anthropic(self) -> bool:
         """True only when talking to Anthropic's own API, not a third-party proxy."""
         base = (self.api_base_url or os.environ.get("ANTHROPIC_BASE_URL", "")).lower()
@@ -972,6 +1046,31 @@ class QueryEngine:
             },
         ]
         return blocks
+
+    def _apply_message_cache_control(self, messages: list) -> list:
+        """Add cache_control to the last content block of each message.
+
+        Mirrors Claude Code's per-message prompt caching strategy: the last
+        content block of every user/assistant message is tagged with
+        ``cache_control: {"type": "ephemeral"}`` so that Anthropic can reuse
+        the KV cache across turns.  Only applied when talking to native
+        Anthropic API.
+        """
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, str) and content:
+                msg["content"] = [
+                    {
+                        "type": "text",
+                        "text": content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            elif isinstance(content, list) and content:
+                last_block = content[-1]
+                if isinstance(last_block, dict):
+                    last_block["cache_control"] = {"type": "ephemeral"}
+        return messages
 
     def _build_mcp_instructions(self) -> str:
         """Collect instructions from connected MCP servers for system prompt injection."""
@@ -1779,6 +1878,7 @@ class QueryEngine:
             ),
         }
         self.messages = head + [reminder] + tail
+        self._update_compact_boundary()
         self._sync_message_context()
         self.persist_session_state()
         sys_print_callback(
@@ -1809,6 +1909,7 @@ class QueryEngine:
             )
             if collapse_meta.get("collapsed"):
                 self.messages = collapsed_messages
+                self._update_compact_boundary()
                 self._sync_message_context()
                 self.persist_session_state()
                 sys_print_callback(
@@ -1816,7 +1917,114 @@ class QueryEngine:
                     f"[dim magenta]↳ Post-summary estimated tokens before collapse: {collapsed_estimated_tokens} "
                     f"(source={collapsed_estimate_source})[/dim magenta]"
                 )
+
+        restored = self._post_compact_restore_state(sys_print_callback)
+        if restored:
+            self._sync_message_context()
+            self.persist_session_state()
         return True
+
+    POST_COMPACT_MAX_FILES = 5
+    POST_COMPACT_TOKEN_BUDGET = 50_000
+    POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
+
+    def _post_compact_restore_state(self, sys_print_callback=print) -> bool:
+        """
+        Re-inject critical context after compaction so the agent doesn't lose
+        awareness of recently-read files, the active plan, or loaded skills.
+        Mirrors Claude Code's post-compact state recovery in compact.ts.
+        """
+        restore_parts = []
+        budget_remaining = self.POST_COMPACT_TOKEN_BUDGET
+
+        recently_read = self._collect_recently_read_files()
+        files_restored = 0
+        for path, content in recently_read:
+            if files_restored >= self.POST_COMPACT_MAX_FILES:
+                break
+            token_est = len(content) // 4
+            capped = min(token_est, self.POST_COMPACT_MAX_TOKENS_PER_FILE, budget_remaining)
+            if capped <= 0:
+                break
+            char_limit = capped * 4
+            snippet = content[:char_limit]
+            if len(content) > char_limit:
+                snippet += "\n... [truncated for post-compact budget]"
+            restore_parts.append(f"[Recently read file: {path}]\n{snippet}")
+            budget_remaining -= capped
+            files_restored += 1
+
+        plan_content = self.plan_manager.render_prompt_summary()
+        if plan_content:
+            plan_tokens = len(plan_content) // 4
+            if plan_tokens <= budget_remaining:
+                restore_parts.append(f"[Active plan state]\n{plan_content}")
+                budget_remaining -= plan_tokens
+
+        todo_content = self.todo_manager.render_prompt_summary()
+        if todo_content:
+            todo_tokens = len(todo_content) // 4
+            if todo_tokens <= budget_remaining:
+                restore_parts.append(f"[Active todo state]\n{todo_content}")
+                budget_remaining -= todo_tokens
+
+        mcp_instructions = self._build_mcp_instructions()
+        if mcp_instructions:
+            mcp_tokens = len(mcp_instructions) // 4
+            if mcp_tokens <= budget_remaining:
+                restore_parts.append(f"[MCP tool instructions]\n{mcp_instructions}")
+                budget_remaining -= mcp_tokens
+
+        if not restore_parts:
+            return False
+
+        restore_text = (
+            "<system-reminder>\n"
+            "[Post-compaction context restoration]\n"
+            "The conversation was compacted. The following recently-accessed context "
+            "is re-injected so you can continue without re-reading these resources.\n\n"
+            + "\n\n".join(restore_parts)
+            + "\n</system-reminder>"
+        )
+        self.messages.append(create_user_message(
+            restore_text,
+            is_meta=True,
+            origin="post_compact_restore",
+        ))
+        sys_print_callback(
+            f"[dim magenta]↳ Post-compact: restored {files_restored} file(s), "
+            f"plan={'yes' if plan_content else 'no'}, "
+            f"todos={'yes' if todo_content else 'no'}, "
+            f"mcp={'yes' if mcp_instructions else 'no'}.[/dim magenta]"
+        )
+        return True
+
+    def _collect_recently_read_files(self) -> list:
+        """Return (path, content) pairs for files tracked by file_state_cache, most recent first."""
+        entries = self.file_state_cache.entries
+        if not entries:
+            return []
+
+        candidates = []
+        for abs_path, entry in entries.items():
+            if not entry.get("has_been_read"):
+                continue
+            if not os.path.isfile(abs_path):
+                continue
+            mtime = entry.get("mtime", 0)
+            candidates.append((mtime, abs_path))
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+
+        result = []
+        for _, abs_path in candidates[:self.POST_COMPACT_MAX_FILES * 2]:
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                result.append((abs_path, content))
+            except Exception:
+                continue
+        return result
 
     def _is_context_overflow_error(self, error: Exception) -> bool:
         rendered = str(error).lower()
@@ -1832,6 +2040,9 @@ class QueryEngine:
             "input length and `max_tokens` exceed",
         ]
         return any(marker in rendered for marker in markers)
+
+    MAX_TOOL_CONCURRENCY = 10
+    SIBLING_CANCEL_TOOLS = frozenset({"bash_tool"})
 
     def _is_concurrency_safe(self, tool_name: str, tool_inputs: dict) -> bool:
         handler = self.available_tools.get(tool_name)
@@ -1998,23 +2209,37 @@ class QueryEngine:
     async def _execute_tool_batches(self, tool_calls, sys_print_callback=print, *, turn: int = 0, event_callback=None):
         results = []
         batches = self._partition_tool_batches(tool_calls)
+        semaphore = asyncio.Semaphore(self.MAX_TOOL_CONCURRENCY)
 
         for batch in batches:
             blocks = batch["blocks"]
             if batch["is_concurrency_safe"]:
                 sys_print_callback(
-                    f"[bold dim yellow]❯ Executing {len(blocks)} concurrency-safe tool call(s) in parallel...[/bold dim yellow]"
+                    f"[bold dim yellow]❯ Executing {len(blocks)} concurrency-safe tool call(s) in parallel "
+                    f"(max concurrency={self.MAX_TOOL_CONCURRENCY})...[/bold dim yellow]"
                 )
-                batch_results = await asyncio.gather(
-                    *(
-                        self._execute_tool_wrapper(
-                            tc,
-                            sys_print_callback,
-                            turn=turn,
-                            event_callback=event_callback,
+                sibling_cancel = asyncio.Event()
+
+                async def _run_with_sibling_cancel(tc):
+                    async with semaphore:
+                        if sibling_cancel.is_set():
+                            tool_id = self._tb_get(tc, "id", "")
+                            tool_name = self._tb_get(tc, "name", "")
+                            return {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": f"Cancelled: sibling tool in batch failed ({tool_name}).",
+                                "is_error": True,
+                            }
+                        res = await self._execute_tool_wrapper(
+                            tc, sys_print_callback, turn=turn, event_callback=event_callback,
                         )
-                        for tc in blocks
-                    )
+                        if res.get("is_error") and self._tb_get(tc, "name", "") in self.SIBLING_CANCEL_TOOLS:
+                            sibling_cancel.set()
+                        return res
+
+                batch_results = await asyncio.gather(
+                    *(_run_with_sibling_cancel(tc) for tc in blocks)
                 )
                 results.extend(batch_results)
             else:
@@ -2262,6 +2487,7 @@ class QueryEngine:
             })
 
         normalized_messages = self._filter_incomplete_tool_messages_for_api(normalized_messages)
+        normalized_messages = self._strip_error_causing_attachments(normalized_messages)
 
         collapsed = []
         for msg in normalized_messages:
@@ -2274,8 +2500,187 @@ class QueryEngine:
                 )
             else:
                 collapsed.append(msg)
+
+        collapsed = self._filter_orphaned_thinking_only_messages(collapsed)
+        collapsed = self._strip_trailing_thinking_from_last_assistant(collapsed)
+        collapsed = self._filter_whitespace_only_assistant_messages(collapsed)
+        collapsed = self._ensure_non_empty_assistant_content(collapsed)
         return collapsed
-        
+
+    # ------------------------------------------------------------------
+    # Post-normalization sanitizers (prevent API 400 in long conversations)
+    # ------------------------------------------------------------------
+
+    _ERROR_ATTACHMENT_MARKERS = {
+        "pdf is too large": {"document"},
+        "document is too large": {"document"},
+        "image exceeds": {"image"},
+        "image is too large": {"image"},
+        "request too large": {"document", "image"},
+        "request_too_large": {"document", "image"},
+        "payload too large": {"document", "image"},
+    }
+
+    def _strip_error_causing_attachments(self, messages: list) -> list:
+        """Remove document/image blocks from user messages that triggered 413.
+
+        When a large PDF or image causes a prompt-too-large error, the API
+        returns a synthetic error assistant message.  If the offending
+        attachment stays in history, every subsequent turn will also 413.
+        This method back-tracks from each error message and strips the
+        block types that caused it from the nearest prior user message.
+        """
+        strip_targets: dict[int, set[str]] = {}
+        for i, msg in enumerate(messages):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "text":
+                    continue
+                text_lower = block.get("text", "").lower()
+                for marker, block_types in self._ERROR_ATTACHMENT_MARKERS.items():
+                    if marker in text_lower:
+                        for j in range(i - 1, -1, -1):
+                            if messages[j].get("role") == "user":
+                                strip_targets.setdefault(j, set()).update(block_types)
+                                break
+
+        if not strip_targets:
+            return messages
+
+        result = []
+        for i, msg in enumerate(messages):
+            if i not in strip_targets:
+                result.append(msg)
+                continue
+            types_to_strip = strip_targets[i]
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                result.append(msg)
+                continue
+            cleaned = [
+                b for b in content
+                if not (isinstance(b, dict) and b.get("type") in types_to_strip)
+            ]
+            if cleaned:
+                result.append({**msg, "content": cleaned})
+        return result
+
+    def _filter_orphaned_thinking_only_messages(self, messages: list) -> list:
+        """Remove assistant messages that contain no substantive content.
+
+        After compaction or streaming fallback, the history may contain
+        assistant messages that originally had thinking + text/tool_use but
+        lost their non-thinking blocks.  Consecutive assistant messages with
+        mismatched thinking signatures cause API 400 errors.
+        """
+        filtered = []
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                filtered.append(msg)
+                continue
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                filtered.append(msg)
+                continue
+            has_substantive = any(
+                isinstance(b, dict) and b.get("type") in {"text", "tool_use"}
+                for b in content
+            )
+            if has_substantive:
+                filtered.append(msg)
+        return filtered
+
+    def _strip_trailing_thinking_from_last_assistant(self, messages: list) -> list:
+        """Strip thinking/redacted_thinking blocks from the last assistant message.
+
+        The API rejects trailing thinking blocks that lack a valid signature
+        continuation.  Order matters: this runs BEFORE the whitespace-only
+        filter so that a message like [text("\\n"), thinking("...")] doesn't
+        survive the whitespace check only to be rejected later.
+        """
+        if not messages:
+            return messages
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "assistant":
+                content = messages[i].get("content", [])
+                if isinstance(content, list):
+                    cleaned = [
+                        b for b in content
+                        if not (isinstance(b, dict)
+                                and b.get("type") in {"thinking", "redacted_thinking"})
+                    ]
+                    if cleaned != content:
+                        messages[i] = {**messages[i], "content": cleaned}
+                break
+        return messages
+
+    def _filter_whitespace_only_assistant_messages(self, messages: list) -> list:
+        """Drop assistant messages whose text content is only whitespace."""
+        filtered = []
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                filtered.append(msg)
+                continue
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                filtered.append(msg)
+                continue
+            has_non_whitespace = False
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                btype = b.get("type")
+                if btype == "tool_use":
+                    has_non_whitespace = True
+                    break
+                if btype == "text" and b.get("text", "").strip():
+                    has_non_whitespace = True
+                    break
+            if has_non_whitespace:
+                filtered.append(msg)
+        return filtered
+
+    def _ensure_non_empty_assistant_content(self, messages: list) -> list:
+        """Guarantee every assistant message has at least one content block."""
+        filtered = []
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                content = msg.get("content", [])
+                if isinstance(content, list) and not content:
+                    continue
+            filtered.append(msg)
+        return filtered
+
+    def _strip_thinking_signatures_from_history(self):
+        """Remove thinking/redacted_thinking blocks from all assistant messages.
+
+        Thinking signatures are model-bound: replaying a protected-thinking
+        block produced by one model (e.g. sonnet) to a different fallback
+        model (e.g. opus) causes API 400 errors.  This must be called before
+        retrying with a different model.
+        """
+        changed = False
+        for msg in self.messages:
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            cleaned = [
+                b for b in content
+                if not (isinstance(b, dict)
+                        and b.get("type") in {"thinking", "redacted_thinking"})
+            ]
+            if len(cleaned) != len(content):
+                msg["content"] = cleaned
+                changed = True
+        if changed:
+            self._sync_message_context()
+
     def load_session(self, sid: str) -> bool:
         state = self.session_manager.load_session_state(sid)
         msgs = state.get("messages", [])
@@ -2358,6 +2763,7 @@ class QueryEngine:
             })
             self.tool_context["token_usage_history"] = self.token_usage_history
             self.tool_context["session_token_usage"] = self.session_token_usage
+            self._update_compact_boundary()
             self._sync_message_context()
             self.session_started = metadata.get("hooks", {}).get("session_started", False)
             return True
@@ -2824,17 +3230,42 @@ class QueryEngine:
         ]
         return any(marker in rendered for marker in markers)
 
-    async def _await_gate_and_execute_tool(self, gate, tool_block, sys_print_callback=print, *, turn: int = 0, event_callback=None):
+    async def _await_gate_and_execute_tool(
+        self, gate, tool_block, sys_print_callback=print, *,
+        turn: int = 0, event_callback=None,
+        semaphore: asyncio.Semaphore = None,
+        sibling_cancel: asyncio.Event = None,
+    ):
         if gate is not None:
             await gate
         if self.abort_event.is_set():
             raise AbortRequestedError("Abort requested before tool execution.")
-        return await self._execute_tool_wrapper(
-            tool_block,
-            sys_print_callback,
-            turn=turn,
-            event_callback=event_callback,
-        )
+        if sibling_cancel is not None and sibling_cancel.is_set():
+            tool_id = getattr(tool_block, "id", "") or (tool_block.get("id", "") if isinstance(tool_block, dict) else "")
+            return {
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": "Cancelled: sibling tool in batch failed.",
+                "is_error": True,
+            }
+
+        async def _do_execute():
+            res = await self._execute_tool_wrapper(
+                tool_block, sys_print_callback, turn=turn, event_callback=event_callback,
+            )
+            if (
+                res.get("is_error")
+                and sibling_cancel is not None
+                and (getattr(tool_block, "name", "") or (tool_block.get("name", "") if isinstance(tool_block, dict) else ""))
+                in self.SIBLING_CANCEL_TOOLS
+            ):
+                sibling_cancel.set()
+            return res
+
+        if semaphore is not None:
+            async with semaphore:
+                return await _do_execute()
+        return await _do_execute()
 
     async def _cancel_streaming_tool_tasks(self, entries: list):
         pending = [
@@ -2860,11 +3291,14 @@ class QueryEngine:
         sys_print_callback=print,
         event_callback=None,
     ):
+        """Returns (response, tool_entries, streaming_fallback_occurred)."""
         tool_entries = []
         self.active_streaming_tool_entries = tool_entries
         previous_batch_gate = None
         current_safe_batch_gate = None
         current_safe_batch_tasks = None
+        streaming_semaphore = asyncio.Semaphore(self.MAX_TOOL_CONCURRENCY)
+        streaming_sibling_cancel = asyncio.Event()
 
         try:
             if self.model_provider == "openai":
@@ -2979,7 +3413,7 @@ class QueryEngine:
                     stop_reason=finish_reason,
                     content=content_blocks,
                     usage=usage_payload,
-                ), []
+                ), [], False
 
             system_blocks = self._build_cached_system_blocks(system_prompt)
             stream_kwargs = {
@@ -2992,109 +3426,163 @@ class QueryEngine:
             if thinking_config is not None and self._is_native_anthropic():
                 stream_kwargs["thinking"] = thinking_config
 
-            async with self.client.messages.stream(**stream_kwargs) as stream:
-                self.active_stream = stream
-                while True:
-                    next_event_task = asyncio.create_task(stream.__anext__())
-                    abort_wait_task = asyncio.create_task(self.abort_event.wait())
-                    done, pending = await asyncio.wait(
-                        {next_event_task, abort_wait_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in pending:
-                        task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
+            try:
+                async with self.client.messages.stream(**stream_kwargs) as stream:
+                    self.active_stream = stream
+                    while True:
+                        next_event_task = asyncio.create_task(stream.__anext__())
+                        abort_wait_task = asyncio.create_task(self.abort_event.wait())
+                        done, pending = await asyncio.wait(
+                            {next_event_task, abort_wait_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for task in pending:
+                            task.cancel()
+                        await asyncio.gather(*pending, return_exceptions=True)
 
-                    if abort_wait_task in done and self.abort_event.is_set():
-                        next_event_task.cancel()
-                        await asyncio.gather(next_event_task, return_exceptions=True)
-                        raise AbortRequestedError("Abort requested during streaming response.")
+                        if abort_wait_task in done and self.abort_event.is_set():
+                            next_event_task.cancel()
+                            await asyncio.gather(next_event_task, return_exceptions=True)
+                            raise AbortRequestedError("Abort requested during streaming response.")
 
-                    try:
-                        event = next_event_task.result()
-                    except StopAsyncIteration:
-                        break
+                        try:
+                            event = next_event_task.result()
+                        except StopAsyncIteration:
+                            break
 
-                    event_type = getattr(event, "type", "")
-                    if event_type == "message_start":
-                        await self._emit_stream_event(event_callback, {
-                            "type": "message_start",
-                            "turn": turn_count,
-                        })
-                    elif event_type == "content_block_delta":
-                        delta = getattr(event, "delta", None)
-                        if getattr(delta, "type", "") == "text_delta":
+                        event_type = getattr(event, "type", "")
+                        if event_type == "message_start":
                             await self._emit_stream_event(event_callback, {
-                                "type": "text_delta",
+                                "type": "message_start",
                                 "turn": turn_count,
-                                "text": getattr(delta, "text", ""),
                             })
-                    elif event_type == "content_block_stop":
-                        content_block = getattr(event, "content_block", None)
-                        if getattr(content_block, "type", "") == "tool_use":
-                            is_safe = self._is_concurrency_safe(
-                                getattr(content_block, "name", ""),
-                                getattr(content_block, "input", {}) or {},
-                            )
-                            if is_safe:
-                                if current_safe_batch_tasks is None:
-                                    current_safe_batch_gate = previous_batch_gate
-                                    current_safe_batch_tasks = []
-                                task = asyncio.create_task(
-                                    self._await_gate_and_execute_tool(
-                                        current_safe_batch_gate,
-                                        content_block,
-                                        sys_print_callback,
-                                        turn=turn_count,
-                                        event_callback=event_callback,
-                                    )
+                        elif event_type == "content_block_delta":
+                            delta = getattr(event, "delta", None)
+                            if getattr(delta, "type", "") == "text_delta":
+                                await self._emit_stream_event(event_callback, {
+                                    "type": "text_delta",
+                                    "turn": turn_count,
+                                    "text": getattr(delta, "text", ""),
+                                })
+                        elif event_type == "content_block_stop":
+                            content_block = getattr(event, "content_block", None)
+                            if getattr(content_block, "type", "") == "tool_use":
+                                is_safe = self._is_concurrency_safe(
+                                    getattr(content_block, "name", ""),
+                                    getattr(content_block, "input", {}) or {},
                                 )
-                                current_safe_batch_tasks.append(task)
-                            else:
-                                if current_safe_batch_tasks is not None:
-                                    previous_batch_gate = asyncio.gather(*current_safe_batch_tasks)
-                                    current_safe_batch_tasks = None
-                                    current_safe_batch_gate = None
-                                task = asyncio.create_task(
-                                    self._await_gate_and_execute_tool(
-                                        previous_batch_gate,
-                                        content_block,
-                                        sys_print_callback,
-                                        turn=turn_count,
-                                        event_callback=event_callback,
+                                if is_safe:
+                                    if current_safe_batch_tasks is None:
+                                        current_safe_batch_gate = previous_batch_gate
+                                        current_safe_batch_tasks = []
+                                    task = asyncio.create_task(
+                                        self._await_gate_and_execute_tool(
+                                            current_safe_batch_gate,
+                                            content_block,
+                                            sys_print_callback,
+                                            turn=turn_count,
+                                            event_callback=event_callback,
+                                            semaphore=streaming_semaphore,
+                                            sibling_cancel=streaming_sibling_cancel,
+                                        )
                                     )
-                                )
-                                previous_batch_gate = task
+                                    current_safe_batch_tasks.append(task)
+                                else:
+                                    if current_safe_batch_tasks is not None:
+                                        previous_batch_gate = asyncio.gather(*current_safe_batch_tasks)
+                                        current_safe_batch_tasks = None
+                                        current_safe_batch_gate = None
+                                    task = asyncio.create_task(
+                                        self._await_gate_and_execute_tool(
+                                            previous_batch_gate,
+                                            content_block,
+                                            sys_print_callback,
+                                            turn=turn_count,
+                                            event_callback=event_callback,
+                                            semaphore=streaming_semaphore,
+                                        )
+                                    )
+                                    previous_batch_gate = task
 
-                            tool_entries.append({
-                                "tool_use_id": getattr(content_block, "id", None),
-                                "task": task,
-                            })
+                                tool_entries.append({
+                                    "tool_use_id": getattr(content_block, "id", None),
+                                    "task": task,
+                                })
+                                await self._emit_stream_event(event_callback, {
+                                    "type": "tool_scheduled",
+                                    "turn": turn_count,
+                                    "tool_name": getattr(content_block, "name", ""),
+                                    "tool_use_id": getattr(content_block, "id", None),
+                                })
+
                             await self._emit_stream_event(event_callback, {
-                                "type": "tool_scheduled",
+                                "type": "content_block_stop",
                                 "turn": turn_count,
-                                "tool_name": getattr(content_block, "name", ""),
-                                "tool_use_id": getattr(content_block, "id", None),
+                                "index": getattr(event, "index", None),
+                            })
+                        elif event_type == "message_stop":
+                            snapshot = stream.current_message_snapshot
+                            await self._emit_stream_event(event_callback, {
+                                "type": "message_stop",
+                                "turn": turn_count,
+                                "stop_reason": getattr(snapshot, "stop_reason", None),
                             })
 
-                        await self._emit_stream_event(event_callback, {
-                            "type": "content_block_stop",
-                            "turn": turn_count,
-                            "index": getattr(event, "index", None),
-                        })
-                    elif event_type == "message_stop":
-                        snapshot = stream.current_message_snapshot
-                        await self._emit_stream_event(event_callback, {
-                            "type": "message_stop",
-                            "turn": turn_count,
-                            "stop_reason": getattr(snapshot, "stop_reason", None),
-                        })
+                    if current_safe_batch_tasks is not None:
+                        previous_batch_gate = asyncio.gather(*current_safe_batch_tasks)
 
-                if current_safe_batch_tasks is not None:
-                    previous_batch_gate = asyncio.gather(*current_safe_batch_tasks)
+                    final_message = await stream.get_final_message()
+                    return final_message, tool_entries, False
+            except AbortRequestedError:
+                raise
+            except Exception as stream_err:
+                if self._is_context_overflow_error(stream_err):
+                    raise
+                await self._cancel_streaming_tool_tasks(tool_entries)
+                tool_entries.clear()
+                previous_batch_gate = None
+                current_safe_batch_gate = None
+                current_safe_batch_tasks = None
 
-                final_message = await stream.get_final_message()
-                return final_message, tool_entries
+                disable_fallback = os.environ.get(
+                    "CODECLAW_DISABLE_NONSTREAMING_FALLBACK", ""
+                )
+                if disable_fallback:
+                    raise
+
+                sys_print_callback(
+                    "[dim yellow]↳ Streaming request failed mid-stream; "
+                    "retrying as non-streaming request.[/dim yellow]"
+                )
+                create_kwargs = {
+                    k: v for k, v in stream_kwargs.items()
+                }
+                response = await self.client.messages.create(**create_kwargs)
+                await self._emit_stream_event(event_callback, {
+                    "type": "message_start",
+                    "turn": turn_count,
+                })
+                for block in response.content:
+                    btype = getattr(block, "type", "")
+                    if btype == "text":
+                        await self._emit_stream_event(event_callback, {
+                            "type": "text_delta",
+                            "turn": turn_count,
+                            "text": getattr(block, "text", ""),
+                        })
+                    elif btype == "tool_use":
+                        await self._emit_stream_event(event_callback, {
+                            "type": "tool_scheduled",
+                            "turn": turn_count,
+                            "tool_name": getattr(block, "name", ""),
+                            "tool_use_id": getattr(block, "id", None),
+                        })
+                await self._emit_stream_event(event_callback, {
+                    "type": "message_stop",
+                    "turn": turn_count,
+                    "stop_reason": getattr(response, "stop_reason", None),
+                })
+                return response, [], True
         finally:
             self.active_stream = None
             self.active_streaming_tool_entries = []
@@ -3163,7 +3651,11 @@ class QueryEngine:
                     return "Session output token budget exhausted before another turn could start."
                 self._inject_turn_attachments(turn_count)
                 self._apply_frc_if_needed()
-                api_messages = self._clean_roles_for_api(self.messages)
+                boundary_messages = self._get_messages_after_compact_boundary()
+                self._apply_tool_result_budget(boundary_messages)
+                api_messages = self._clean_roles_for_api(boundary_messages)
+                if self.model_provider == "anthropic" and self._is_native_anthropic():
+                    api_messages = self._apply_message_cache_control(api_messages)
                 loaded_memory_files = self.refresh_memory_files()
                 effective_thinking_config = self._resolve_thinking_config()
                 system_prompt = self.context_builder.generate_system_prompt(
@@ -3198,6 +3690,7 @@ class QueryEngine:
                     max_tokens=min(loop_state["max_tokens"], remaining_output_budget),
                     thinking=effective_thinking_config,
                 )
+                streaming_fallback = False
                 replayed_response = self.vcr_manager.try_replay(vcr_request_payload)
                 if replayed_response is not None:
                     response = replayed_response
@@ -3208,8 +3701,7 @@ class QueryEngine:
                         event_callback=event_callback,
                     )
                 else:
-                    # Emit streaming call to Anthropic API
-                    response, streaming_tool_entries = await self._stream_model_response(
+                    response, streaming_tool_entries, streaming_fallback = await self._stream_model_response(
                         system_prompt=system_prompt,
                         api_messages=api_messages,
                         tools_schema=tools_schema,
@@ -3220,6 +3712,11 @@ class QueryEngine:
                         sys_print_callback=sys_print_callback,
                         event_callback=event_callback,
                     )
+                    if streaming_fallback:
+                        await self._emit_stream_event(event_callback, {
+                            "type": "streaming_fallback",
+                            "turn": turn_count,
+                        })
                     self.vcr_manager.record(
                         vcr_request_payload,
                         self._serialize_response_for_vcr(response),
@@ -3464,6 +3961,7 @@ class QueryEngine:
                     and loop_state["active_model"] != self.fallback_model
                     and self.fallback_model
                 ):
+                    self._strip_thinking_signatures_from_history()
                     loop_state["active_model"] = self.fallback_model
                     loop_state["fallback_count"] += 1
                     await self._record_loop_transition(
@@ -3478,38 +3976,79 @@ class QueryEngine:
                     )
                     continue
                 if self._is_context_overflow_error(e):
+                    retries = loop_state.get("reactive_compact_retries", 0)
+
+                    # Withhold-then-recover: attempt transparent recovery
+                    # without surfacing the error to the user. Each stage
+                    # is progressively more aggressive; if any succeeds the
+                    # loop continues seamlessly.
+
+                    # Stage 1: reduce max_tokens (zero-cost, no data loss)
                     current_max = loop_state["max_tokens"]
-                    if current_max > 4096:
+                    if retries == 0 and current_max > 4096:
                         new_max = max(4096, current_max // 2)
                         loop_state["max_tokens"] = new_max
+                        loop_state["reactive_compact_retries"] = 1
                         await self._record_loop_transition(
-                            "max_tokens_auto_reduce",
+                            "reactive_withhold_stage1",
                             turn=turn_count,
                             event_callback=event_callback,
                             old_max=current_max,
                             new_max=new_max,
                         )
                         sys_print_callback(
-                            f"[dim yellow]↳ Context overflow detected. Reducing max_tokens {current_max} → {new_max}. Error: {str(e)[:200]}[/dim yellow]"
+                            f"[dim yellow]↳ Context overflow withheld (stage 1). "
+                            f"Reducing max_tokens {current_max} → {new_max}.[/dim yellow]"
                         )
                         continue
-                    compacted = await self._apply_layered_compaction_if_needed(
-                        sys_print_callback,
-                        force=True,
-                        aggressive=True,
-                    )
-                    if compacted:
-                        loop_state["reactive_compact_retries"] += 1
-                        await self._record_loop_transition(
-                            "reactive_compact_retry",
-                            turn=turn_count,
-                            event_callback=event_callback,
-                            retries=loop_state["reactive_compact_retries"],
+
+                    # Stage 2: normal compaction + post-compact restore
+                    if retries <= 1:
+                        compacted = await self._apply_layered_compaction_if_needed(
+                            sys_print_callback,
+                            force=True,
+                            aggressive=False,
                         )
-                        sys_print_callback(
-                            "[dim magenta]↳ Retrying current turn after aggressive context compaction.[/dim magenta]"
+                        if compacted:
+                            loop_state["reactive_compact_retries"] = 2
+                            loop_state["max_tokens"] = self._get_max_output_tokens()
+                            await self._record_loop_transition(
+                                "reactive_withhold_stage2",
+                                turn=turn_count,
+                                event_callback=event_callback,
+                                retries=2,
+                                stage="normal",
+                                max_tokens_restored=loop_state["max_tokens"],
+                            )
+                            sys_print_callback(
+                                "[dim magenta]↳ Context overflow withheld (stage 2). "
+                                "Retrying after normal compaction + state restore.[/dim magenta]"
+                            )
+                            continue
+
+                    # Stage 3: aggressive compaction + restore
+                    if retries <= 2:
+                        compacted = await self._apply_layered_compaction_if_needed(
+                            sys_print_callback,
+                            force=True,
+                            aggressive=True,
                         )
-                        continue
+                        if compacted:
+                            loop_state["reactive_compact_retries"] = 3
+                            loop_state["max_tokens"] = self._get_max_output_tokens()
+                            await self._record_loop_transition(
+                                "reactive_withhold_stage3",
+                                turn=turn_count,
+                                event_callback=event_callback,
+                                retries=3,
+                                stage="aggressive",
+                                max_tokens_restored=loop_state["max_tokens"],
+                            )
+                            sys_print_callback(
+                                "[dim magenta]↳ Context overflow withheld (stage 3). "
+                                "Retrying after aggressive compaction + state restore.[/dim magenta]"
+                            )
+                            continue
                 rolled_back = self._rollback_incomplete_tool_turn(assistant_message)
                 if rolled_back:
                     return (

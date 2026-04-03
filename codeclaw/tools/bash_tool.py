@@ -6,18 +6,13 @@ from codeclaw.tools.base import BaseAgenticTool
 from codeclaw.core.tool_results import build_tool_result
 
 class BashToolInput(BaseModel):
-    action: str = Field(
-        "run",
-        description="One of: run, status, read, kill, list.",
-    )
-    command: str = Field(None, description="The shell command to execute.")
-    cwd: str = Field(None, description="Optional working directory to run the command in.")
+    command: str = Field(..., description="The command to execute")
+    timeout: int = Field(None, description="Optional timeout in milliseconds (max 600000)")
+    description: str = Field(None, description="Clear, concise description of what this command does in active voice.")
     run_in_background: bool = Field(
         False,
-        description="If true, start the command in the background and return a task id immediately.",
+        description="Set to true to run this command in the background. Use file_read_tool to read the output later.",
     )
-    task_id: str = Field(None, description="Task identifier for status, read, or kill.")
-    tail_chars: int = Field(4000, description="How many trailing characters to return for read.")
 
 class BashTool(BaseAgenticTool):
     name = "bash_tool"
@@ -151,152 +146,55 @@ When the user asks you to create a new git commit:
 
     def validate_input(
         self,
-        action: str = "run",
         command: str = None,
-        cwd: str = None,
+        timeout: int = None,
+        description: str = None,
         run_in_background: bool = False,
-        task_id: str = None,
-        tail_chars: int = 4000,
     ):
-        valid_actions = {"run", "status", "read", "kill", "list"}
-        if action not in valid_actions:
-            return f"Unsupported bash_tool action '{action}'."
-        if action == "run" and not command:
-            return "command is required when action='run'."
-        if action in {"status", "read", "kill"} and not task_id:
-            return f"task_id is required when action='{action}'."
+        if not command:
+            return "command is required."
+        if timeout is not None and timeout > 600000:
+            return "timeout cannot exceed 600000ms (10 minutes)."
         return None
 
     def is_read_only_call(
         self,
-        action: str = "run",
         command: str = None,
-        cwd: str = None,
+        timeout: int = None,
+        description: str = None,
         run_in_background: bool = False,
-        task_id: str = None,
-        tail_chars: int = 4000,
     ) -> bool:
-        return action in {"status", "read", "list"}
+        return False
 
     def build_permission_summary(
         self,
-        action: str = "run",
         command: str = None,
-        cwd: str = None,
+        timeout: int = None,
+        description: str = None,
         run_in_background: bool = False,
-        task_id: str = None,
-        tail_chars: int = 4000,
     ) -> str:
-        location = cwd or os.getcwd()
         return (
             "Shell command execution requested.\n"
-            f"action: {action}\n"
-            f"cwd: {location}\n"
             f"command: {command or '<none>'}\n"
-            f"run_in_background: {run_in_background}\n"
-            f"task_id: {task_id or '<none>'}"
+            f"description: {description or '<none>'}\n"
+            f"run_in_background: {run_in_background}"
         )
     
     async def execute(
         self,
-        action: str = "run",
         command: str = None,
-        cwd: str = None,
+        timeout: int = None,
+        description: str = None,
         run_in_background: bool = False,
-        task_id: str = None,
-        tail_chars: int = 4000,
     ) -> dict:
         task_manager = self.context.get("shell_task_manager")
-
-        if action == "list":
-            tasks = task_manager.list_tasks() if task_manager else []
-            return build_tool_result(
-                ok=True,
-                content="Background task list retrieved.",
-                metadata={"action": action, "tasks": tasks, "task_count": len(tasks)},
-            )
-
-        if action == "status":
-            if not task_id:
-                return build_tool_result(
-                    ok=False,
-                    content="task_id is required for status.",
-                    metadata={"action": action},
-                    is_error=True,
-                )
-            record = task_manager.get_task(task_id) if task_manager else None
-            if not record:
-                return build_tool_result(
-                    ok=False,
-                    content=f"Unknown task '{task_id}'.",
-                    metadata={"action": action, "task_id": task_id},
-                    is_error=True,
-                )
-            return build_tool_result(
-                ok=True,
-                content=f"Task '{task_id}' status is {record['status']}.",
-                metadata={"action": action, **record},
-            )
-
-        if action == "read":
-            if not task_id:
-                return build_tool_result(
-                    ok=False,
-                    content="task_id is required for read.",
-                    metadata={"action": action},
-                    is_error=True,
-                )
-            record = task_manager.read_output(task_id, tail_chars=tail_chars) if task_manager else None
-            if not record:
-                return build_tool_result(
-                    ok=False,
-                    content=f"Unknown task '{task_id}'.",
-                    metadata={"action": action, "task_id": task_id},
-                    is_error=True,
-                )
-            output = record.pop("output", "")
-            output_chars = record.pop("output_chars", 0)
-            return build_tool_result(
-                ok=True,
-                content=output or "Task log is currently empty.",
-                metadata={"action": action, "tail_chars": tail_chars, "output_chars": output_chars, **record},
-            )
-
-        if action == "kill":
-            if not task_id:
-                return build_tool_result(
-                    ok=False,
-                    content="task_id is required for kill.",
-                    metadata={"action": action},
-                    is_error=True,
-                )
-            record = await task_manager.terminate_task(task_id) if task_manager else None
-            if not record:
-                return build_tool_result(
-                    ok=False,
-                    content=f"Unknown task '{task_id}'.",
-                    metadata={"action": action, "task_id": task_id},
-                    is_error=True,
-                )
-            return build_tool_result(
-                ok=True,
-                content=f"Task '{task_id}' terminated.",
-                metadata={"action": action, **record},
-            )
-
-        if action != "run":
-            return build_tool_result(
-                ok=False,
-                content=f"Unsupported bash action '{action}'.",
-                metadata={"action": action},
-                is_error=True,
-            )
+        cwd = None
 
         if not command:
             return build_tool_result(
                 ok=False,
-                content="command is required for run.",
-                metadata={"action": action},
+                content="command is required.",
+                metadata={},
                 is_error=True,
             )
 
@@ -305,31 +203,29 @@ When the user asks you to create a new git commit:
                 return build_tool_result(
                     ok=False,
                     content="Shell task manager is unavailable.",
-                    metadata={"action": action, "command": command},
+                    metadata={"command": command},
                     is_error=True,
                 )
             record = await task_manager.start_task(command, cwd=cwd)
             return build_tool_result(
                 ok=True,
                 content=f"Background task started: {record['task_id']}",
-                metadata={"action": action, "run_in_background": True, **record},
+                metadata={"run_in_background": True, **record},
             )
 
+        effective_timeout = min((timeout or 120000), 600000) / 1000.0
         try:
             commit_context = {}
             if self._looks_like_git_commit(command):
                 commit_context = await self._build_commit_attribution(command, cwd=cwd)
 
-            # Setting shell=True to allow powershell/cmd/bash commands organically
             process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
-            # Enforce 60 second timeout for commands to prevent infinite blocking loops (e.g. frozen builds or tail -f)
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=80.0)
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
             
             output = ""
             if stdout_bytes:
@@ -449,11 +345,11 @@ When the user asks you to create a new git commit:
                     )
             return build_tool_result(
                 ok=False,
-                content=f"Command '{command}' timed out after 80 seconds and was forcefully killed.",
+                content=f"Command '{command}' timed out after {effective_timeout:.0f} seconds and was forcefully killed.",
                 metadata={
                     "command": command,
                     "cwd": cwd or os.getcwd(),
-                    "timeout_seconds": 80,
+                    "timeout_ms": timeout or 120000,
                 },
                 is_error=True,
             )

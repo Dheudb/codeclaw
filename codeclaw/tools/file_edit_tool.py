@@ -6,14 +6,14 @@ from codeclaw.tools.base import BaseAgenticTool
 from codeclaw.core.tool_results import build_tool_result
 
 class FileEditToolInput(BaseModel):
-    absolute_path: str = Field(..., description="The absolute path to the file to edit.")
-    target_content: str = Field(..., description="The EXACT sequence of lines/characters to be replaced. Must uniquely match a block in the file. Providing an empty string means you want to create a new file.")
-    replacement_content: str = Field(..., description="The new content to write in place of the target_content.")
-    replace_all: bool = Field(False, description="If True, replaces all occurrences if multiple matches are found. Default is False.")
+    file_path: str = Field(..., description="The absolute path to the file to modify")
+    old_string: str = Field(..., description="The text to replace")
+    new_string: str = Field(..., description="The text to replace it with (must be different from old_string)")
+    replace_all: bool = Field(False, description="Replace all occurrences of old_string (default false)")
 
 class FileEditTool(BaseAgenticTool):
     name = "file_edit_tool"
-    description = "Performs exact string replacements in files. You must use file_read_tool at least once before editing a file."
+    description = "Performs exact string replacements in files. The edit will FAIL if old_string is not unique in the file. You must use file_read_tool at least once before editing."
     input_schema = FileEditToolInput
     risk_level = "high"
 
@@ -126,41 +126,42 @@ class FileEditTool(BaseAgenticTool):
             "Only use emojis if the user explicitly requests it. "
             "The edit will FAIL if old_string is not unique in the file — provide more context to make it unique, or use replace_all. "
             "Use the smallest old_string that's clearly unique — usually 2-4 adjacent lines is sufficient. Avoid including 10+ lines of context when less uniquely identifies the target. "
-            "Use replace_all for renaming strings across the file."
+            "Use replace_all for renaming strings across the file. "
+            "Optional parameter: replace_all (boolean, default false) — if true, replaces all occurrences of old_string in the file."
         )
 
     def validate_input(
         self,
-        absolute_path: str,
-        target_content: str,
-        replacement_content: str,
+        file_path: str,
+        old_string: str,
+        new_string: str,
         replace_all: bool = False,
     ):
-        if not absolute_path:
-            return "absolute_path is required."
-        if target_content == replacement_content and target_content != "":
-            return "target_content and replacement_content are identical; no edit would occur."
+        if not file_path:
+            return "file_path is required."
+        if old_string == new_string and old_string != "":
+            return "old_string and new_string are identical; no edit would occur."
         return None
 
     def build_permission_summary(
         self,
-        absolute_path: str,
-        target_content: str,
-        replacement_content: str,
+        file_path: str,
+        old_string: str,
+        new_string: str,
         replace_all: bool = False,
     ) -> str:
-        target_preview = target_content[:120] + ("..." if len(target_content) > 120 else "")
-        replacement_preview = replacement_content[:120] + ("..." if len(replacement_content) > 120 else "")
+        target_preview = old_string[:120] + ("..." if len(old_string) > 120 else "")
+        replacement_preview = new_string[:120] + ("..." if len(new_string) > 120 else "")
         return (
             "File edit requested.\n"
-            f"path: {os.path.abspath(absolute_path)}\n"
+            f"path: {os.path.abspath(file_path)}\n"
             f"replace_all: {replace_all}\n"
-            f"target_preview: {target_preview or '<new file>'}\n"
-            f"replacement_preview: {replacement_preview}"
+            f"old_string: {target_preview or '<new file>'}\n"
+            f"new_string: {replacement_preview}"
         )
     
-    async def execute(self, absolute_path: str, target_content: str, replacement_content: str, replace_all: bool = False) -> dict:
-        abs_path = os.path.abspath(absolute_path)
+    async def execute(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> dict:
+        abs_path = os.path.abspath(file_path)
         file_exists = os.path.exists(abs_path)
         cache = self._cache()
         tracker = self._artifact_tracker()
@@ -174,9 +175,8 @@ class FileEditTool(BaseAgenticTool):
         )
         
         if not has_read:
-            # Creation Exception: empty target for missing file means we want to create it
-            if not file_exists and target_content == "":
-                pass # Authorized
+            if not file_exists and old_string == "":
+                pass
             else:
                 return build_tool_result(
                     ok=False,
@@ -185,8 +185,7 @@ class FileEditTool(BaseAgenticTool):
                     is_error=True,
                 )
         
-        # 2. CREATE NEW FILE SCENARIO
-        if target_content == "":
+        if old_string == "":
             if file_exists:
                 return build_tool_result(
                     ok=False,
@@ -198,7 +197,7 @@ class FileEditTool(BaseAgenticTool):
             def _perform_create():
                 os.makedirs(os.path.dirname(abs_path) or '.', exist_ok=True)
                 with open(abs_path, "w", encoding="utf-8") as f:
-                    f.write(replacement_content)
+                    f.write(new_string)
                 created_snapshot = cache.record_write(abs_path) if cache is not None else None
                 self.context.setdefault("read_file_state", {})[abs_path] = True
                 if tracker is not None:
@@ -207,8 +206,8 @@ class FileEditTool(BaseAgenticTool):
                         operation="create",
                         before_snapshot=None,
                         after_snapshot=created_snapshot,
-                        target_preview=target_content,
-                        replacement_preview=replacement_content,
+                        target_preview=old_string,
+                        replacement_preview=new_string,
                         agent_id=agent_id,
                         session_id=session_id,
                     )
@@ -221,7 +220,7 @@ class FileEditTool(BaseAgenticTool):
                     metadata={
                         "path": abs_path,
                         "operation": "create",
-                        "bytes_written": len(replacement_content.encode("utf-8")),
+                        "bytes_written": len(new_string.encode("utf-8")),
                         "sha256": (created_snapshot or {}).get("sha256"),
                         "size": (created_snapshot or {}).get("size"),
                         "mtime": (created_snapshot or {}).get("mtime"),
@@ -265,11 +264,10 @@ class FileEditTool(BaseAgenticTool):
             match_strategy = "exact"
             match_ratio = 1.0
             fuzzy_meta = {}
-            occurrences = content.count(target_content)
+            occurrences = content.count(old_string)
 
-            # Line ending fallback gracefully handled for cross-OS discrepancies
             if occurrences == 0:
-                target_norm = target_content.replace('\\r\\n', '\\n')
+                target_norm = old_string.replace('\\r\\n', '\\n')
                 content_norm = content.replace('\\r\\n', '\\n')
 
                 occurrences = content_norm.count(target_norm)
@@ -277,16 +275,16 @@ class FileEditTool(BaseAgenticTool):
                     if replace_all:
                         return build_tool_result(
                             ok=False,
-                            content="target_content not found in the file. Fuzzy replacement is disabled when replace_all=True.",
+                            content="old_string not found in the file. Fuzzy replacement is disabled when replace_all=True.",
                             metadata={"path": abs_path, "operation": "edit"},
                             is_error=True,
                         )
 
-                    fuzzy_match = self._find_fuzzy_line_match(content, target_content)
+                    fuzzy_match = self._find_fuzzy_line_match(content, old_string)
                     if not fuzzy_match:
                         return build_tool_result(
                             ok=False,
-                            content="target_content not found in the file. Exact, line-ending-normalized, and fuzzy patch matching all failed.",
+                            content="old_string not found in the file. Exact, line-ending-normalized, and fuzzy patch matching all failed.",
                             metadata={"path": abs_path, "operation": "edit"},
                             is_error=True,
                         )
@@ -309,7 +307,7 @@ class FileEditTool(BaseAgenticTool):
 
                     target_to_use = fuzzy_match["matched_text"]
                     content_to_use = content
-                    repl_to_use = replacement_content
+                    repl_to_use = new_string
                     os_fallback_used = False
                     match_strategy = "fuzzy_line_match"
                     match_ratio = float(fuzzy_match.get("ratio", 0.0) or 0.0)
@@ -322,19 +320,19 @@ class FileEditTool(BaseAgenticTool):
                 else:
                     target_to_use = target_norm
                     content_to_use = content_norm
-                    repl_to_use = replacement_content.replace('\\r\\n', '\\n')
+                    repl_to_use = new_string.replace('\\r\\n', '\\n')
                     os_fallback_used = True
                     match_strategy = "line_ending_normalized"
             else:
-                target_to_use = target_content
+                target_to_use = old_string
                 content_to_use = content
-                repl_to_use = replacement_content
+                repl_to_use = new_string
                 os_fallback_used = False
 
             if occurrences > 1 and not replace_all:
                 return build_tool_result(
                     ok=False,
-                    content=f"target_content matched {occurrences} times. Set replace_all=True or provide more surrounding context.",
+                    content=f"old_string matched {occurrences} times. Set replace_all=True or provide more surrounding context.",
                     metadata={
                         "path": abs_path,
                         "operation": "edit",
@@ -352,13 +350,13 @@ class FileEditTool(BaseAgenticTool):
             # Keep read state fresh since we're the ones modifying it
             self.context.setdefault("read_file_state", {})[abs_path] = True
             if tracker is not None:
-                tracker.record_file_change(
+                    tracker.record_file_change(
                     path=abs_path,
                     operation="edit",
                     before_snapshot=before_snapshot,
                     after_snapshot=after_snapshot,
-                    target_preview=target_content,
-                    replacement_preview=replacement_content,
+                    target_preview=old_string,
+                    replacement_preview=new_string,
                     agent_id=agent_id,
                     session_id=session_id,
                 )

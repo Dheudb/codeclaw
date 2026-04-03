@@ -53,7 +53,11 @@ class PermissionManager:
         self.always_allow_tools = set()
         self.always_deny_tools = set()
         self.always_ask_tools = set()
-        self.plan_mode_allowlist = {"todo_write_tool", "plan_tool"}
+        self.plan_mode_allowlist = {
+            "todo_write_tool", "plan_tool", "exit_plan_mode",
+            "file_read_tool", "grep_tool", "glob_tool",
+            "tool_search_tool", "web_search_tool", "web_fetch_tool",
+        }
         self.denial_history = []
         self.consecutive_denials = {}
         self.denial_escalation_threshold = 3
@@ -151,10 +155,10 @@ class PermissionManager:
             else:
                 return finalized_classifier
 
-        if current_mode == "plan" and tool_name not in self.plan_mode_allowlist:
+        if current_mode == "plan" and tool_name not in self.plan_mode_allowlist and not is_read_only:
             return self._finalize_permission_decision(tool_name, PermissionDecision(
                 "deny",
-                "Plan mode is active. Mutating tools are blocked until you switch back to normal mode.",
+                "Plan mode is active. Use exit_plan_mode to return to normal mode before making changes.",
                 source="plan_mode",
             ), request)
 

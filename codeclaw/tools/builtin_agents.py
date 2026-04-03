@@ -11,6 +11,10 @@ Each agent type has:
 
 DISALLOWED_WRITE_TOOLS = frozenset({
     "agent_tool",
+    "ask_user_question_tool",
+    "send_message_tool",
+    "team_create_tool",
+    "team_delete_tool",
     "file_edit_tool",
     "file_write_tool",
 })
