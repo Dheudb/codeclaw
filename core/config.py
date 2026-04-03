@@ -23,6 +23,7 @@ _PERSISTED_KEYS = {
     "anthropic_api_key": "ANTHROPIC_API_KEY",
     "openai_api_key": "OPENAI_API_KEY",
     "max_output_tokens": "CODECLAW_MAX_OUTPUT_TOKENS",
+    "max_turns": "CODECLAW_MAX_TURNS",
 }
 
 

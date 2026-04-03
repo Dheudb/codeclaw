@@ -17,6 +17,7 @@ setup(
         "duckduckgo-search",
         "gitpython",
         "wcwidth",
+        "pymupdf",
     ],
     entry_points={
         "console_scripts": [

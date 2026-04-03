@@ -931,6 +931,13 @@ class QueryEngine:
             cleared_ids=self._frc_cleared_ids,
         )
 
+    def _is_native_anthropic(self) -> bool:
+        """True only when talking to Anthropic's own API, not a third-party proxy."""
+        base = (self.api_base_url or os.environ.get("ANTHROPIC_BASE_URL", "")).lower()
+        if not base or "anthropic.com" in base:
+            return True
+        return False
+
     def _build_cached_system_blocks(self, system_prompt: str) -> list:
         """
         Split system prompt into cached blocks for Anthropic's prompt caching.
@@ -938,9 +945,11 @@ class QueryEngine:
         The static prefix (identity, rules, tool guidance) is marked with
         cache_control so it's reused across turns. The dynamic suffix
         (environment, git, todos, memory) changes each turn.
+        Only used for native Anthropic API; third-party proxies (MiniMax etc.)
+        get a plain string to avoid incompatible parameters.
         """
         boundary = self.context_builder.DYNAMIC_BOUNDARY
-        if self.model_provider != "anthropic":
+        if self.model_provider != "anthropic" or not self._is_native_anthropic():
             return system_prompt
 
         static, dynamic = self.context_builder.generate_system_prompt_split(
@@ -1717,15 +1726,18 @@ class QueryEngine:
 
         cache_signal = self._build_cache_compaction_signal()
         api_messages = self._clean_roles_for_api(self.messages)
+        context_window = int(os.environ.get("CODECLAW_CONTEXT_WINDOW", "0")) or 200000
+        budget = int(context_window * 0.75) if aggressive else int(context_window * 0.80)
+        reserve = int(context_window * 0.08) if aggressive else int(context_window * 0.06)
         should_compact, estimated_tokens, estimate_source = await self.compactor.should_compact_precise(
             api_messages,
             model=self.primary_model,
             system=system_prompt,
             tools=tools_schema,
             thinking=effective_thinking_config,
-            token_budget=52000 if aggressive else 60000,
-            reserve_tokens=16000 if aggressive else 12000,
-            hard_message_count=24 if aggressive else 30,
+            token_budget=budget,
+            reserve_tokens=reserve,
+            hard_message_count=80 if aggressive else 100,
             cache_read_input_tokens=cache_signal.get("recent_cache_read_input_tokens", 0),
             cache_creation_input_tokens=cache_signal.get("recent_cache_creation_input_tokens", 0),
             max_cache_penalty_tokens=14000 if aggressive else 10000,
@@ -1816,9 +1828,8 @@ class QueryEngine:
             "input is too long",
             "context window exceeds",
             "exceed context limit",
-            "exceeds limit",
-            "max_tokens",
             "context_length_exceeded",
+            "input length and `max_tokens` exceed",
         ]
         return any(marker in rendered for marker in markers)
 
@@ -1831,17 +1842,23 @@ class QueryEngine:
         if callable(inspector):
             try:
                 return bool(inspector(**tool_inputs))
-            except TypeError:
-                return bool(inspector(tool_inputs))
             except Exception:
                 return False
 
         return False
 
+    @staticmethod
+    def _tb_get(tool_block, key, default=""):
+        if isinstance(tool_block, dict):
+            return tool_block.get(key, default)
+        return getattr(tool_block, key, default)
+
     def _partition_tool_batches(self, tool_calls):
         batches = []
         for tool_block in tool_calls:
-            is_safe = self._is_concurrency_safe(tool_block.name, tool_block.input)
+            name = self._tb_get(tool_block, "name", "")
+            inp = self._tb_get(tool_block, "input", {}) or {}
+            is_safe = self._is_concurrency_safe(name, inp)
             if is_safe and batches and batches[-1]["is_concurrency_safe"]:
                 batches[-1]["blocks"].append(tool_block)
             else:
@@ -1852,9 +1869,9 @@ class QueryEngine:
         return batches
 
     async def _execute_tool_wrapper(self, tool_block, sys_print_callback=print, *, turn: int = 0, event_callback=None):
-        tool_name = tool_block.name
-        tool_id = tool_block.id
-        tool_inputs = copy.deepcopy(tool_block.input)
+        tool_name = self._tb_get(tool_block, "name", "")
+        tool_id = self._tb_get(tool_block, "id", "")
+        tool_inputs = copy.deepcopy(self._tb_get(tool_block, "input", {}) or {})
         spill_recorder = self._build_spill_recorder(tool_name=tool_name, tool_use_id=tool_id)
 
         sys_print_callback(f"  [dim cyan]↳ calling {tool_name}[/dim cyan]")
@@ -2172,31 +2189,51 @@ class QueryEngine:
         return [block for block in normalized if isinstance(block, dict)]
 
     def _filter_incomplete_tool_messages_for_api(self, messages):
+        """
+        Ensure tool_use / tool_result pairs are always complete.
+        Drop assistant messages whose tool_use has no matching tool_result,
+        AND strip tool_result blocks whose tool_use_id has no matching tool_use.
+        """
         if not messages:
             return []
 
-        tool_result_ids = set()
+        tool_use_ids_all = set()
+        tool_result_ids_all = set()
         for msg in messages:
-            if msg.get("role") != "user":
-                continue
-            for block in msg.get("content", []):
-                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id"):
-                    tool_result_ids.add(block.get("tool_use_id"))
+            for block in (msg.get("content", []) if isinstance(msg.get("content"), list) else []):
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use" and block.get("id"):
+                    tool_use_ids_all.add(block["id"])
+                if block.get("type") == "tool_result" and block.get("tool_use_id"):
+                    tool_result_ids_all.add(block["tool_use_id"])
 
         filtered = []
         for msg in messages:
-            if msg.get("role") != "assistant":
-                filtered.append(msg)
-                continue
-
+            role = msg.get("role")
             content = msg.get("content", [])
-            tool_use_ids = [
-                block.get("id")
-                for block in content
-                if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id")
-            ]
-            if tool_use_ids and any(tool_use_id not in tool_result_ids for tool_use_id in tool_use_ids):
-                continue
+
+            if role == "assistant" and isinstance(content, list):
+                use_ids = [
+                    b.get("id") for b in content
+                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id")
+                ]
+                if use_ids and any(uid not in tool_result_ids_all for uid in use_ids):
+                    continue
+
+            if role == "user" and isinstance(content, list):
+                cleaned_content = []
+                for block in content:
+                    if (isinstance(block, dict)
+                            and block.get("type") == "tool_result"
+                            and block.get("tool_use_id")
+                            and block["tool_use_id"] not in tool_use_ids_all):
+                        continue
+                    cleaned_content.append(block)
+                if not cleaned_content:
+                    continue
+                msg = {**msg, "content": cleaned_content}
+
             filtered.append(msg)
 
         return filtered
@@ -2375,6 +2412,13 @@ class QueryEngine:
         }
 
     def persist_session_state(self):
+        if self.agent_depth > 0:
+            self.session_manager.save_subagent_transcript(
+                self.agent_id or self.session_id,
+                {"messages": self.messages, "metadata": self._build_session_metadata()},
+            )
+            return
+
         ok = self.session_manager.save_session_state(
             self.session_id,
             self.messages,
@@ -2553,7 +2597,8 @@ class QueryEngine:
             content = assistant_message.get("content")
             if isinstance(content, list):
                 has_tool_use = any(
-                    getattr(block, "type", None) == "tool_use" for block in content
+                    (block.get("type") if isinstance(block, dict) else getattr(block, "type", None)) == "tool_use"
+                    for block in content
                 )
                 if has_tool_use:
                     self.messages.pop()
@@ -2652,8 +2697,10 @@ class QueryEngine:
         return 32000
 
     def _build_loop_state(self) -> dict:
+        env_max = os.environ.get("CODECLAW_MAX_TURNS", "")
+        max_turns = int(env_max) if env_max.isdigit() else 1000
         return {
-            "max_turns": 15,
+            "max_turns": max_turns,
             "turn_count": 0,
             "max_tokens": self._get_max_output_tokens(),
             "active_model": self.primary_model,
@@ -2942,7 +2989,7 @@ class QueryEngine:
                 "tools": tools_schema,
                 "max_tokens": max_tokens,
             }
-            if thinking_config is not None:
+            if thinking_config is not None and self._is_native_anthropic():
                 stream_kwargs["thinking"] = thinking_config
 
             async with self.client.messages.stream(**stream_kwargs) as stream:
@@ -3201,10 +3248,10 @@ class QueryEngine:
                     "mode": self.get_mode(),
                 })
                 
-                # We MUST store the exact sequence the assistant returned 
-                # (including its tool-use blocks and <thinking> strings)
+                content_as_dicts = [self._block_to_dict(b) for b in response.content]
+                content_as_dicts = [b for b in content_as_dicts if b is not None]
                 assistant_message = create_assistant_message(
-                    response.content,
+                    content_as_dicts,
                     model=loop_state.get("active_model", ""),
                     stop_reason=getattr(response, "stop_reason", ""),
                 )
@@ -3221,7 +3268,7 @@ class QueryEngine:
                                 raise AbortRequestedError("Abort requested while awaiting tool results.")
                             tool_results.append(await item["task"])
                     else:
-                        tool_calls = [block for block in response.content if block.type == "tool_use"]
+                        tool_calls = [b for b in content_as_dicts if isinstance(b, dict) and b.get("type") == "tool_use"]
                         tool_results = []
                         results = await self._execute_tool_batches(
                             tool_calls,
@@ -3308,7 +3355,7 @@ class QueryEngine:
                     if streaming_tool_entries:
                         await self._cancel_streaming_tool_tasks(streaming_tool_entries)
                     # Normal completion without Tool calls => Return final answer
-                    texts = [b.text for b in response.content if b.type == "text"]
+                    texts = [b.get("text", "") for b in content_as_dicts if isinstance(b, dict) and b.get("type") == "text"]
                     final_answer = "\n".join(texts)
                     structured_ok, structured_reason = self.structured_output_manager.validate(final_answer)
                     if not structured_ok:
@@ -3443,7 +3490,7 @@ class QueryEngine:
                             new_max=new_max,
                         )
                         sys_print_callback(
-                            f"[dim yellow]↳ Context window overflow. Reducing max_tokens {current_max} → {new_max} and retrying.[/dim yellow]"
+                            f"[dim yellow]↳ Context overflow detected. Reducing max_tokens {current_max} → {new_max}. Error: {str(e)[:200]}[/dim yellow]"
                         )
                         continue
                     compacted = await self._apply_layered_compaction_if_needed(

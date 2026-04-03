@@ -7,7 +7,6 @@ from collections import deque
 from contextlib import contextmanager
 
 from rich.console import Console, Group
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
@@ -20,10 +19,22 @@ console = Console()
 
 
 class InteractiveTerminalTUI:
+    """Flicker-free streaming TUI.
+
+    Instead of rich.Live (erase-N-lines + rewrite = flicker), we:
+    - Print a one-line status bar that updates in-place via carriage return
+    - Stream text_delta content directly to stdout (append-only, zero clearing)
+    This matches how Claude Code (Ink/React) renders: only the changed part repaints.
+    """
+
+    HIDE_CURSOR = "\x1b[?25l"
+    SHOW_CURSOR = "\x1b[?25h"
+    ERASE_LINE  = "\x1b[2K"
+
     def __init__(self, console: Console, engine_getter):
         self.console = console
         self.engine_getter = engine_getter
-        self.live = None
+        self._stream = sys.stderr if sys.stderr.isatty() else sys.stdout
         self.reset_turn()
 
     @property
@@ -42,36 +53,42 @@ class InteractiveTerminalTUI:
         self.pending_auto_commit = False
         self.replayed = False
         self.event_log = deque(maxlen=10)
+        self._status_visible = False
+        self._streaming_text = False
 
-    def attach_live(self, live: Live):
-        self.live = live
-        self.refresh()
-
-    def detach_live(self):
-        self.live = None
-
-    def refresh(self):
-        if self.live is not None:
-            self.live.update(self.render(), refresh=True)
-
-    @contextmanager
-    def suspend_live(self):
-        if self.live is None:
-            yield
-            return
-        self.live.stop()
+    def _write_status_line(self):
+        """Overwrite the current line with a compact status bar."""
+        icon = "● RUNNING" if self.running else "○ IDLE"
+        mode = self.engine.get_mode()
+        parts = [icon, f"Mode: {mode}", f"Turn: {self.turn_number or '-'}",
+                 f"Tools: {self.tool_count}"]
+        if self.last_tool:
+            parts.append(f"Active: {self.last_tool}")
+        line = " │ ".join(parts)
         try:
-            yield
-        finally:
-            self.live.start(refresh=True)
-            self.refresh()
+            cols = os.get_terminal_size().columns
+        except OSError:
+            cols = 100
+        line = line[:cols - 1]
+        self._stream.write(f"\r{self.ERASE_LINE}{line}")
+        self._stream.flush()
+        self._status_visible = True
 
-    def log(self, message: str):
-        message = str(message or "").strip()
-        if not message:
-            return
-        self.event_log.appendleft(message)
-        self.refresh()
+    def _clear_status_line(self):
+        if self._status_visible:
+            self._stream.write(f"\r{self.ERASE_LINE}\r")
+            self._stream.flush()
+            self._status_visible = False
+
+    def start_streaming(self):
+        self._stream.write(self.HIDE_CURSOR)
+        self._stream.flush()
+        self._write_status_line()
+
+    def stop_streaming(self):
+        self._clear_status_line()
+        self._stream.write(self.SHOW_CURSOR)
+        self._stream.flush()
 
     def track_stream_event(self, event: dict):
         event_type = event.get("type")
@@ -80,84 +97,62 @@ class InteractiveTerminalTUI:
             self.turn_number = int(event.get("turn", 0) or 0)
             self.current_turn_text = ""
             self.last_stop_reason = ""
-            self.log(f"Turn {self.turn_number} started")
+            self._write_status_line()
         elif event_type == "text_delta":
             text = event.get("text", "")
             if text:
                 self.current_turn_text += text
                 self.replayed = bool(event.get("replayed"))
-                self.refresh()
+                if not self._streaming_text:
+                    self._clear_status_line()
+                    self._streaming_text = True
+                self._stream.write(text)
+                self._stream.flush()
         elif event_type == "tool_scheduled":
             self.tool_count += 1
             self.last_tool = event.get("tool_name", "") or ""
-            self.log(f"Tool queued: {self.last_tool}")
+            if self._streaming_text:
+                self._stream.write("\n")
+                self._streaming_text = False
+            self._clear_status_line()
+            self.console.print(f"  [dim cyan]⚡ {self.last_tool}[/dim cyan]")
+            self._write_status_line()
         elif event_type == "loop_transition":
             self.last_transition = event.get("reason", "") or ""
-            self.log(f"State transition: {self.last_transition}")
+            if self._streaming_text:
+                self._stream.write("\n")
+                self._streaming_text = False
+            self._clear_status_line()
+            self.console.print(f"  [dim]⚡ State transition: {self.last_transition}[/dim]")
+            self._write_status_line()
         elif event_type == "auto_commit_proposal":
             self.pending_auto_commit = True
-            self.log("Auto-commit proposal generated")
         elif event_type == "message_stop":
             self.running = False
             self.last_stop_reason = event.get("stop_reason", "") or ""
+            if self._streaming_text:
+                self._stream.write("\n")
+                self._streaming_text = False
+            self._clear_status_line()
             if self.last_stop_reason:
-                self.log(f"Message stopped: {self.last_stop_reason}")
-            self.refresh()
+                self.console.print(f"  [dim]⚡ Message stopped: {self.last_stop_reason}[/dim]")
 
-    def render(self):
-        status_color = "bold green" if self.running else "dim"
-        status_icon = "● RUNNING" if self.running else "○ IDLE"
-        mode = self.engine.get_mode()
-        
-        parts = [
-            f"[{status_color}]{status_icon}[/{status_color}]",
-            f"[dim]Mode:[/dim] [cyan]{mode}[/cyan]",
-            f"[dim]Turn:[/dim] [yellow]{self.turn_number or '-'}[/yellow]",
-            f"[dim]Tools:[/dim] [magenta]{self.tool_count}[/magenta]"
-        ]
-        
-        if self.last_tool:
-            parts.append(f"[dim]Active:[/dim] [cyan]{self.last_tool}[/cyan]")
-        if self.pending_auto_commit:
-            parts.append("[bold red]! PENDING COMMIT[/bold red]")
-        if self.replayed:
-            parts.append("[blue]↺ REPLAY[/blue]")
-            
-        header = Text.from_markup(" │ ".join(parts))
-
-        output_preview = self.current_turn_text[-4000:].strip()
-        if output_preview:
-            output_renderable = Text(output_preview)
-        else:
-            output_renderable = Text("Thinking & executing...", style="dim italic")
-
-        prompt_title = f" User: {self.user_input[:60]}... " if self.user_input else " Agentic Loop "
-
-        if self.event_log:
-            latest_event = str(self.event_log[0]).replace("\n", " ")
-            footer = Text.from_markup(f"[dim]⚡ {latest_event[:80]}[/dim]")
-        else:
-            footer = Text("")
-
-        content = Group(
-            header,
-            Text("─" * 70, style="dim"),
-            output_renderable,
-            Text(""),
-            footer
-        )
-
-        return Panel(
-            content,
-            title=prompt_title,
-            title_align="left",
-            border_style="deep_sky_blue1",
-            expand=False,
-            padding=(1, 2)
-        )
+    @contextmanager
+    def suspend_streaming(self):
+        was_visible = self._status_visible
+        self._clear_status_line()
+        self._stream.write(self.SHOW_CURSOR)
+        self._stream.flush()
+        try:
+            yield
+        finally:
+            if was_visible:
+                self._stream.write(self.HIDE_CURSOR)
+                self._stream.flush()
+                self._write_status_line()
 
     def choose_menu(self, *, title: str, body_lines: list[str], options: list[dict], prompt_label: str, default_value=None):
-        with self.suspend_live():
+        with self.suspend_streaming():
             self.console.print()
             self.console.print(
                 Panel("\n".join(body_lines), title=title, border_style="yellow", expand=False)
@@ -309,7 +304,7 @@ def run_command_palette(tui: InteractiveTerminalTUI) -> str:
         default_value="",
     )
     if choice == "/resume":
-        with tui.suspend_live():
+        with tui.suspend_streaming():
             sid = console.input("[bold yellow]Session ID[/bold yellow]: ").strip()
         return f"/resume {sid}" if sid else ""
     return choice or ""
@@ -375,19 +370,19 @@ async def _interactive_model_switch(engine, tui):
     key_env = preset.get("key_env", "")
     model_env = preset.get("model_env", "")
 
-    with tui.suspend_live():
+    with tui.suspend_streaming():
         model_input = console.input(
             f"[bold yellow]Model name[/bold yellow] [dim](current: {current_model}, Enter to keep)[/dim]: "
         ).strip()
 
-    with tui.suspend_live():
+    with tui.suspend_streaming():
         url_input = console.input(
             f"[bold yellow]API Base URL[/bold yellow] [dim](current: {current_base}, Enter to keep)[/dim]: "
         ).strip()
 
     current_key_set = bool(os.environ.get(key_env, ""))
     key_hint = "set" if current_key_set else "not set"
-    with tui.suspend_live():
+    with tui.suspend_streaming():
         key_input = console.input(
             f"[bold yellow]API Key ({key_env})[/bold yellow] [dim](currently {key_hint}, Enter to keep)[/dim]: "
         ).strip()
@@ -427,7 +422,7 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
 
     def permission_prompt(request):
         if auto_approve:
-            tui.log(f"[dim]Auto-approved: {request.tool_name}[/dim]")
+            console.print(f"[dim]Auto-approved: {request.tool_name}[/dim]")
             return "y"
         decision = tui.choose_menu(
             title="Permission Required",
@@ -445,7 +440,7 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
             prompt_label="授权选择",
             default_value="n",
         )
-        tui.log(f"权限决策: {request.tool_name} -> {decision}")
+        console.print(f"权限决策: {request.tool_name} -> {decision}")
         return decision
 
     async def prompt_auto_commit(proposal: dict):
@@ -486,12 +481,11 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
         )
         if result.get("ok"):
             console.print(f"[green]{result.get('content')}[/green]")
-            tui.log(result.get("content", "Auto-commit handled."))
+            console.print(result.get("content", "Auto-commit handled."))
         else:
             console.print(f"[red]{result.get('content')}[/red]")
-            tui.log(result.get("content", "Auto-commit failed."))
+            console.print(result.get("content", "Auto-commit failed."))
         tui.pending_auto_commit = False
-        tui.refresh()
 
     engine = QueryEngine(permission_handler=permission_prompt)
 
@@ -508,10 +502,7 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
             console.print("Use [cyan]/model[/cyan] to configure, or set the environment variable.\n")
 
     def agent_events_callback(text: str):
-        if tui.live is not None:
-            tui.log(text)
-        else:
-            console.print(text)
+        console.print(text)
 
     with console.status("[bold cyan]Bootstrapping Advanced Protocols...", spinner="dots"):
         await engine.start_protocols(sys_print=agent_events_callback)
@@ -761,26 +752,26 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
             final_answer = ""
             turn_was_aborted = False
             tui.reset_turn(user_input)
+            tui.start_streaming()
 
             try:
-                with Live(tui.render(), console=console, refresh_per_second=8, transient=True) as live:
-                    tui.attach_live(live)
-                    async for event in engine.submit_message(user_input, sys_print_callback=agent_events_callback):
-                        tui.track_stream_event(event)
-                        event_type = event.get("type")
-                        if event_type == "auto_commit_proposal":
+                async for event in engine.submit_message(user_input, sys_print_callback=agent_events_callback):
+                    tui.track_stream_event(event)
+                    event_type = event.get("type")
+                    if event_type == "auto_commit_proposal":
+                        with tui.suspend_streaming():
                             await prompt_auto_commit(event.get("proposal") or {})
-                        elif event_type == "final":
-                            final_answer = event.get("text", "")
-                    tui.detach_live()
+                    elif event_type == "final":
+                        final_answer = event.get("text", "")
             except (KeyboardInterrupt, asyncio.CancelledError):
-                tui.detach_live()
                 last_interrupt_time = 0
                 try:
                     await engine.request_abort()
                 except Exception:
                     pass
                 turn_was_aborted = True
+            finally:
+                tui.stop_streaming()
 
             # Show whatever content was received (partial on abort, full on completion)
             display_text = final_answer or tui.current_turn_text.strip()
@@ -839,9 +830,20 @@ def main():
 
     initial_prompt = args.prompt_text or (" ".join(args.prompt) if args.prompt else None)
 
+    # Suppress Windows ProactorEventLoop cleanup noise on exit.
+    # Transport.__del__ may fire after the loop is closed, which is harmless.
+    if sys.platform == "win32":
+        from asyncio.proactor_events import _ProactorBasePipeTransport  # type: ignore[attr-defined]
+        _orig_del = _ProactorBasePipeTransport.__del__
+
+        def _silent_del(self, *args, **kwargs):
+            try:
+                _orig_del(self, *args, **kwargs)
+            except RuntimeError:
+                pass
+        _ProactorBasePipeTransport.__del__ = _silent_del
+
     try:
-        if os.name == 'nt':
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         asyncio.run(interactive_loop(
             resume_session_id=resume_id,
             initial_prompt=initial_prompt,

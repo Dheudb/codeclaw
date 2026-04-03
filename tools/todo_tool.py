@@ -1,10 +1,18 @@
+import uuid
 from typing import List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from codeclaw.tools.base import BaseAgenticTool
 
 
 class TodoItemInput(BaseModel):
-    id: str = Field(..., description="Stable identifier for the todo item.")
+    id: str = Field(default="", description="Stable identifier for the todo item.")
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _fill_id(cls, v):
+        if not v:
+            return f"auto_{uuid.uuid4().hex[:8]}"
+        return v
     content: str = Field(..., description="Human-readable task description in imperative form (e.g., 'Run tests').")
     status: str = Field(
         ...,

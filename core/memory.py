@@ -649,6 +649,9 @@ class MemoryCompactor:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1024
             )
-            return response.content[0].text
+            for block in response.content:
+                if getattr(block, "type", "") == "text":
+                    return getattr(block, "text", "")
+            return "[System: Compaction response contained no text blocks]"
         except Exception as e:
             return f"[System: Context summarization bypass failed due to API Error - {str(e)}]"

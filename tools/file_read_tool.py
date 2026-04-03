@@ -10,6 +10,11 @@ try:
 except ImportError:
     Image = None
 
+try:
+    import fitz as pymupdf
+except ImportError:
+    pymupdf = None
+
 class FileReadToolInput(BaseModel):
     absolute_path: str = Field(..., description="The absolute path to the file to read.")
     start_line: int = Field(None, description="Optional 1-indexed starting line to read (for text).")
@@ -41,6 +46,16 @@ class FileReadTool(BaseAgenticTool):
 
     def _artifact_tracker(self):
         return self.context.get("artifact_tracker")
+
+    def _is_native_anthropic(self) -> bool:
+        """Only Anthropic's own API supports native PDF document blocks."""
+        provider = os.environ.get("CODECLAW_MODEL_PROVIDER", "").lower()
+        if provider and provider != "anthropic":
+            return False
+        base = os.environ.get("ANTHROPIC_BASE_URL", "").lower()
+        if not base or "anthropic.com" in base:
+            return True
+        return False
     
     async def execute(self, absolute_path: str, start_line: int = None, end_line: int = None) -> Union[str, List[Dict[str, Any]]]:
         abs_path = os.path.abspath(absolute_path)
@@ -112,22 +127,17 @@ class FileReadTool(BaseAgenticTool):
             except Exception as e:
                 return f"Error opening image: {str(e)}"
                 
-        # 2. PDF parsing (Native Document capabilities)
+        # 2. PDF parsing
         if ext == '.pdf':
             try:
                 if cache is not None and cache.should_skip_redundant_read(abs_path, start_line=start_line, end_line=end_line):
                     entry = cache.get_entry(abs_path) or {}
                     if tracker is not None:
                         tracker.record_prefetch(
-                            path=abs_path,
-                            kind="pdf",
-                            source="file_read_tool",
-                            start_line=start_line,
-                            end_line=end_line,
-                            cache_hit=True,
-                            chars=0,
-                            agent_id=agent_id,
-                            session_id=session_id,
+                            path=abs_path, kind="pdf", source="file_read_tool",
+                            start_line=start_line, end_line=end_line,
+                            cache_hit=True, chars=0,
+                            agent_id=agent_id, session_id=session_id,
                         )
                     return (
                         f"File '{abs_path}' is unchanged since the last identical read. "
@@ -136,36 +146,55 @@ class FileReadTool(BaseAgenticTool):
                         f"mtime={entry.get('mtime', 0)}, sha256={entry.get('sha256', '')}, "
                         f"range={entry.get('last_read_range', '1:*')}"
                     )
-                with open(abs_path, "rb") as f:
-                    pdf_bytes = f.read()
-                b64_data = base64.b64encode(pdf_bytes).decode('utf-8')
-                
+
+                use_native_pdf = self._is_native_anthropic()
+
+                if use_native_pdf:
+                    with open(abs_path, "rb") as f:
+                        pdf_bytes = f.read()
+                    b64_data = base64.b64encode(pdf_bytes).decode('utf-8')
+                    if cache is not None:
+                        cache.record_read(abs_path, kind="pdf", start_line=start_line, end_line=end_line, chars=len(pdf_bytes))
+                    self.context.setdefault("read_file_state", {})[abs_path] = True
+                    if tracker is not None:
+                        tracker.record_prefetch(
+                            path=abs_path, kind="pdf", source="file_read_tool",
+                            start_line=start_line, end_line=end_line,
+                            chars=len(pdf_bytes), agent_id=agent_id, session_id=session_id,
+                        )
+                    return [
+                        {"type": "text", "text": f"Successfully loaded PDF '{abs_path}'"},
+                        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64_data}}
+                    ]
+
+                if pymupdf is None:
+                    return "Error: PDF text extraction requires 'PyMuPDF'. Install with: pip install pymupdf"
+
+                doc = pymupdf.open(abs_path)
+                total_pages = len(doc)
+                page_start = max(1, start_line or 1)
+                page_end = min(total_pages, end_line or total_pages)
+                extracted_pages = []
+                for page_num in range(page_start - 1, page_end):
+                    text = doc[page_num].get_text("text")
+                    extracted_pages.append(f"--- Page {page_num + 1} ---\n{text}")
+                doc.close()
+
+                output = f"PDF: {abs_path}\nPages: {page_start} to {page_end} of {total_pages}\n"
+                output += "=" * 40 + "\n" + "\n".join(extracted_pages)
+                if len(output) > 120000:
+                    output = output[:120000] + f"\n\n... [Truncated. Use start_line/end_line as page range to read specific pages.]"
+
                 if cache is not None:
-                    cache.record_read(abs_path, kind="pdf", start_line=start_line, end_line=end_line, chars=len(pdf_bytes))
+                    cache.record_read(abs_path, kind="pdf", start_line=page_start, end_line=page_end, chars=len(output))
                 self.context.setdefault("read_file_state", {})[abs_path] = True
                 if tracker is not None:
                     tracker.record_prefetch(
-                        path=abs_path,
-                        kind="pdf",
-                        source="file_read_tool",
-                        start_line=start_line,
-                        end_line=end_line,
-                        chars=len(pdf_bytes),
-                        agent_id=agent_id,
-                        session_id=session_id,
+                        path=abs_path, kind="pdf", source="file_read_tool",
+                        start_line=page_start, end_line=page_end,
+                        chars=len(output), agent_id=agent_id, session_id=session_id,
                     )
-                    tracker.record_attachment(
-                        path=abs_path,
-                        kind="pdf",
-                        source="file_read_tool",
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        metadata={"bytes": len(pdf_bytes)},
-                    )
-                return [
-                    {"type": "text", "text": f"Successfully loaded PDF '{abs_path}'"},
-                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64_data}}
-                ]
+                return output
             except Exception as e:
                 return f"Error loading PDF: {str(e)}"
                 
