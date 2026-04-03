@@ -79,7 +79,7 @@ def save_current_env_to_config():
 # Slot-reservation cap: most requests use < 5k output tokens, so the
 # main loop caps to DEFAULT_CAPPED to avoid wasting slot capacity.
 # On overflow the loop escalates to ESCALATED.
-DEFAULT_CAPPED_MAX_TOKENS = 8_000
+DEFAULT_CAPPED_MAX_TOKENS = 16_000
 ESCALATED_MAX_TOKENS = 64_000
 COMPACT_MAX_OUTPUT_TOKENS = 20_000
 
