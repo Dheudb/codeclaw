@@ -46,7 +46,7 @@ class GlobTool(BaseAgenticTool):
                     rel_root = ""
                     
                 depth = rel_root.count(os.sep) if rel_root else 0
-                if depth > 3 and not pattern:
+                if depth > 6 and not pattern:
                     # Skip plunging too deep if we're just blindly mapping territory
                     continue
                     
@@ -57,9 +57,10 @@ class GlobTool(BaseAgenticTool):
                     if not pattern or f.endswith(pattern.replace('*','')):
                         matches.append(f"   📄 {os.path.join(rel_root, f) if rel_root else f}")
                         
-                # Circuit breaker to defend context window
-                if len(matches) > 150:
-                    matches.append("\\n... [Tree List Truncated - Over 150 elements detected. Navigate via target specific sub-directories.] ...")
+                # Soft limit aligned with Claude Code's maxResultSizeChars: 100_000
+                # (~50 chars/line × 2000 items ≈ 100K)
+                if len(matches) > 2000:
+                    matches.append("\n... [Tree list truncated at 2000 items. Use a glob pattern or navigate to a specific sub-directory.] ...")
                     break
                     
             if not matches:

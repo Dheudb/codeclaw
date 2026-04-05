@@ -359,15 +359,35 @@ class MemoryCompactor:
             or "compaction summary:" in lowered
         )
 
+    # Matching Claude Code's COMPACTABLE_TOOLS whitelist from microCompact.ts
+    # Only compact results from these specific tools — others are preserved.
+    COMPACTABLE_TOOLS = {
+        "file_read_tool", "bash_tool", "grep_tool", "glob_tool",
+        "web_search_tool", "web_fetch_tool", "file_edit_tool", "file_write_tool",
+    }
+
     def micro_compact_tool_results(
         self,
         messages: list,
         preserve_last_messages: int = 12,
-        max_tool_result_chars: int = 450,
-        preview_chars: int = 160,
+        max_tool_result_chars: int = 1200,
+        preview_chars: int = 300,
     ) -> tuple[list, int]:
         if not messages:
             return messages, 0
+
+        # Build tool_use_id -> tool_name map from assistant messages
+        compactable_ids = set()
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    if block.get("name", "") in self.COMPACTABLE_TOOLS:
+                        compactable_ids.add(block.get("id", ""))
 
         cloned = copy.deepcopy(messages)
         compacted_count = 0
@@ -380,6 +400,11 @@ class MemoryCompactor:
 
             for block in content:
                 if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+
+                # Only compact results from whitelisted tools
+                tool_use_id = block.get("tool_use_id", "")
+                if tool_use_id and tool_use_id not in compactable_ids:
                     continue
 
                 block_content = block.get("content")
@@ -436,10 +461,23 @@ class MemoryCompactor:
     ) -> tuple[list, int]:
         """
         Trim oversized historical tool results while preserving the most recent
-        message window intact.
+        message window intact. Only targets COMPACTABLE_TOOLS.
         """
         if not messages:
             return messages, 0
+
+        # Build compactable tool_use_ids from assistant messages
+        compactable_ids = set()
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    if block.get("name", "") in self.COMPACTABLE_TOOLS:
+                        compactable_ids.add(block.get("id", ""))
 
         cloned = copy.deepcopy(messages)
         trimmed_count = 0
@@ -454,6 +492,11 @@ class MemoryCompactor:
                 if not isinstance(block, dict):
                     continue
                 if block.get("type") != "tool_result":
+                    continue
+
+                # Only prune results from whitelisted tools
+                tool_use_id = block.get("tool_use_id", "")
+                if tool_use_id and tool_use_id not in compactable_ids:
                     continue
 
                 block_content = block.get("content")

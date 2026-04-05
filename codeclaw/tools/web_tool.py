@@ -78,8 +78,8 @@ Usage notes:
             text = soup.get_text(separator=' ', strip=True)
             text = re.sub(r'\s+', ' ', text)
 
-            if len(text) > 30000:
-                text = text[:30000] + "\n\n...[Content truncated due to size]..."
+            if len(text) > 100000:
+                text = text[:100000] + "\n\n...[Content truncated due to size]..."
 
             result = f"Content from {url}:\n\n{text}"
             if prompt:

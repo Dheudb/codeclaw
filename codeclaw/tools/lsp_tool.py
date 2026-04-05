@@ -82,10 +82,10 @@ Note: LSP servers must be configured for the file type. If no server is availabl
             if not res:
                 return f"LSP daemon returned empty response (No references or definition found for line {line} char {character}). Is it a standard keyword?"
                 
-            # Stringify safely truncating massive arrays if any
+            # Stringify safely — aligned with Claude Code's maxResultSizeChars: 100_000
             dump = json.dumps(res, indent=2)
-            if len(dump) > 8000:
-                dump = dump[:8000] + "\\n... [LSP TRUNCATED DUE TO SIZE]"
+            if len(dump) > 100000:
+                dump = dump[:100000] + "\n... [LSP result truncated due to size]"
             return dump
             
         except Exception as e:

@@ -41,8 +41,8 @@ Unlike hosted solutions, **you own the code, you choose the model, you control t
 
 | Category | Capabilities |
 |---|---|
-| **Agent Core** | Multi-turn agentic loop with tool use, auto-continuation on token limits, session persistence & resume |
-| **Tool System** | 20+ built-in tools — file read/write/edit, bash, grep (ripgrep), glob, web search/fetch, REPL, notebook, browser, LSP diagnostics |
+| **Agent Core** | Multi-turn agentic loop with tool use, budget-based context management, auto-continuation on token limits, session persistence & resume |
+| **Tool System** | 20+ built-in tools (aligned to 100K char soft limits) — file read/write/edit, bash, ripgrep, glob, web fetch, REPL, notebook, browser, LSP |
 | **Sub-agents** | Spawn child agents, fork mode (inherits parent context), built-in agent types (explore, plan, verify, general-purpose) |
 | **Coordinator** | Multi-agent team collaboration — create teams, assign roles, inter-agent messaging |
 | **Planning** | Plan mode with tool restrictions, Ultraplan deep-planning sub-agent |
@@ -51,6 +51,7 @@ Unlike hosted solutions, **you own the code, you choose the model, you control t
 | **Verification** | Auto-spawns a verification sub-agent after 3+ file modifications |
 | **Protocols** | MCP (Model Context Protocol) bridge, LSP client/manager |
 | **Model Flexibility** | Runtime hot-swap via `/model` — switch provider, model, API URL, key without restarting. Config persists in `~/.codeclaw/config.json` |
+| **Feishu Integration** | Built-in Feishu (Lark) WebSocket Gateway for remote team orchestration and interactive UI bridging |
 | **Security** | Multi-layer permission system, risk classification, sandbox isolation |
 
 ### Quickstart
@@ -190,8 +191,8 @@ CodeClaw 是一个**完全开源的、纯 Python 实现的 AI 编程智能体 CL
 
 | 分类 | 能力 |
 |---|---|
-| **智能体核心** | 多轮对话智能体循环、工具调用、token 耗尽自动续写、会话持久化与恢复 |
-| **工具系统** | 20+ 内置工具——文件读/写/编辑、Bash、Grep (ripgrep)、Glob、Web 搜索/抓取、REPL、Notebook、浏览器、LSP 诊断 |
+| **智能体核心** | 多轮对话智能体循环、工具调用、基于预算的大上下文窗口管理、token 耗尽自动续写、会话持久化 |
+| **工具系统** | 20+ 内置工具（全面对齐 100K 字符软限制）——文件读/写/编辑、Bash、ripgrep、Glob、Web、REPL、LSP |
 | **子代理** | 生成子代理、Fork 模式（继承父上下文）、内置代理类型（explore、plan、verify、general-purpose） |
 | **协调器** | 多代理团队协作——创建团队、分配角色、代理间消息传递 |
 | **规划** | Plan 模式（限制为只读工具）、Ultraplan 深度规划子代理 |
@@ -200,6 +201,7 @@ CodeClaw 是一个**完全开源的、纯 Python 实现的 AI 编程智能体 CL
 | **验证** | 修改 3+ 个文件后自动生成验证子代理 |
 | **协议** | MCP（模型上下文协议）桥接、LSP 客户端/管理器 |
 | **模型灵活性** | 通过 `/model` 命令运行时热切换——无需重启即可更换供应商、模型、API 地址、密钥。配置持久化到 `~/.codeclaw/config.json` |
+| **飞书网关** | 内置飞书 (Lark) WebSocket 网关，支持通过 IM 远程直接操控智能体团队与跨端交互式选择题渲染 |
 | **安全** | 多层权限系统、风险分类、沙盒隔离 |
 
 ### 快速开始

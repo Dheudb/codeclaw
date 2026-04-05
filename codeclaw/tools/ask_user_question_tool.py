@@ -101,19 +101,18 @@ Plan mode note: In plan mode, use this tool to clarify requirements or choose be
             options = q.get("options", [])
             multi = q.get("multiSelect", False)
 
-            print(f"\n{'─'*60}")
-            print(f"  {q_text}")
+            prompt_text = f"\n{'─'*60}\n  {q_text}\n"
             for j, opt in enumerate(options):
                 label = opt.get("label", f"Option {j+1}")
                 desc = opt.get("description", "")
                 desc_str = f" — {desc}" if desc else ""
-                print(f"    [{j+1}] {label}{desc_str}")
-            print(f"    [0] Other (type custom answer)")
+                prompt_text += f"    [{j+1}] {label}{desc_str}\n"
+            prompt_text += f"    [0] Other (type custom answer)\n"
 
             if multi:
-                raw = input("  Select one or more (comma-separated numbers): ").strip()
+                raw = input(prompt_text + "  Select one or more (comma-separated numbers): ").strip()
             else:
-                raw = input("  Select: ").strip()
+                raw = input(prompt_text + "  Select: ").strip()
 
             if not raw or raw == "0":
                 custom = input("  Your answer: ").strip()

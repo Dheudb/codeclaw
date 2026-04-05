@@ -300,13 +300,13 @@ When the user asks you to create a new git commit:
                     is_error=process.returncode != 0,
                 )
                 
-            # Safeguard Truncation logic (keep first 2000 and last 2000 chars)
-            max_length = 6000
+            # Safeguard Truncation logic — aligned with Claude Code's maxResultSizeChars: 30_000
+            max_length = 30000
             truncated = False
             if len(output) > max_length:
-                prefix = output[:2500]
-                suffix = output[-2500:]
-                output = f"{prefix}\n\n... [TRUNCATED {len(output) - 5000} chars] ...\n\n{suffix}"
+                prefix = output[:12000]
+                suffix = output[-12000:]
+                output = f"{prefix}\n\n... [TRUNCATED {len(output) - 24000} chars] ...\n\n{suffix}"
                 truncated = True
                 
             return build_tool_result(

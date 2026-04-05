@@ -14,7 +14,7 @@ class SkillToolInput(BaseModel):
     )
     skill_name: str = Field(None, description="Skill name to read. Usually the folder name that contains SKILL.md.")
     query: str = Field(None, description="Optional search query for list/search.")
-    max_chars: int = Field(8000, description="Maximum characters to return when reading a skill.")
+    max_chars: int = Field(100000, description="Maximum characters to return when reading a skill.")
 
 
 class SkillTool(BaseAgenticTool):
@@ -35,7 +35,7 @@ class SkillTool(BaseAgenticTool):
         action: str = "list",
         skill_name: str = None,
         query: str = None,
-        max_chars: int = 8000,
+        max_chars: int = 100000,
     ):
         if action not in {"list", "search", "read"}:
             return "action must be one of: list, search, read."
@@ -110,7 +110,7 @@ class SkillTool(BaseAgenticTool):
         action: str = "list",
         skill_name: str = None,
         query: str = None,
-        max_chars: int = 8000,
+        max_chars: int = 100000,
     ) -> dict:
         discovered = self._discover_skills()
         query_lower = str(query or "").strip().lower()

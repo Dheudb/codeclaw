@@ -17,6 +17,9 @@ setup(
         "gitpython",
         "wcwidth",
         "pymupdf",
+        "lark-oapi",
+        "loguru",
+        "python-dotenv",
     ],
     entry_points={
         "console_scripts": [

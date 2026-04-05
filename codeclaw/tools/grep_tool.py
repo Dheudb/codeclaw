@@ -118,7 +118,7 @@ class GrepTool(BaseAgenticTool):
 
                 if output_mode in ("files_with_matches", "count"):
                     effective_offset = offset or 0
-                    effective_limit = head_limit or 250
+                    effective_limit = head_limit or 500
                     if effective_offset > 0:
                         lines = lines[effective_offset:]
                     if len(lines) > effective_limit:
@@ -153,7 +153,7 @@ class GrepTool(BaseAgenticTool):
                 if effective_offset > 0:
                     sorted_lines = sorted_lines[effective_offset:]
 
-                effective_limit = head_limit or 250
+                effective_limit = head_limit or 500
                 if len(sorted_lines) > effective_limit:
                     visible_block = sorted_lines[:effective_limit]
                     next_offset = effective_offset + effective_limit

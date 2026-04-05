@@ -120,7 +120,9 @@ class QueryEngine:
         model_provider: str = None,
         api_base_url: str = None,
         local_tokenizer_path: str = None,
+        cwd: Optional[str] = None,
     ):
+        self.session_cwd = cwd or os.getcwd()
         self.model_provider = self._resolve_model_provider(model_provider, model)
         self.api_base_url = api_base_url or os.environ.get("OPENAI_BASE_URL", "")
         self.local_tokenizer_path = (
@@ -204,7 +206,7 @@ class QueryEngine:
         )
         self.memory_extractor = MemoryExtractor(
             compactor=self.compactor,
-            project_dir=os.getcwd(),
+            project_dir=self.session_cwd,
         )
         self.file_state_cache = FileStateCache()
         self.artifact_tracker = ArtifactTracker()
@@ -265,6 +267,7 @@ class QueryEngine:
         
         # Share state across instances for locks and cross-tool persistence
         self.tool_context = {
+            "session_cwd": self.session_cwd,
             "read_file_state": {},
             "file_state_cache": self.file_state_cache,
             "artifact_tracker": self.artifact_tracker,
@@ -950,8 +953,8 @@ class QueryEngine:
             return
         self.messages, num_cleared, self._frc_cleared_ids = clear_old_function_results(
             self.messages,
-            preserve_recent_results=6,
-            min_content_chars=200,
+            preserve_recent_results=12,
+            min_content_chars=800,
             cleared_ids=self._frc_cleared_ids,
         )
 
@@ -1819,8 +1822,8 @@ class QueryEngine:
         micro_compacted_messages, micro_count = self.compactor.micro_compact_tool_results(
             self.messages,
             preserve_last_messages=preserve_last_messages,
-            max_tool_result_chars=300 if aggressive else 450,
-            preview_chars=120 if aggressive else 160,
+            max_tool_result_chars=800 if aggressive else 1200,
+            preview_chars=200 if aggressive else 300,
         )
         if micro_count > 0:
             self.messages = micro_compacted_messages
@@ -3176,9 +3179,9 @@ class QueryEngine:
             "continue_reason": "initial_turn",
         }
 
-    async def _record_loop_transition(self, reason: str, *, turn: int, event_callback=None, **details):
+    async def _record_loop_transition(self, transition_reason: str, *, turn: int, event_callback=None, **details):
         record = {
-            "reason": reason,
+            "reason": transition_reason,
             "turn": turn,
             **details,
         }
@@ -3922,7 +3925,9 @@ class QueryEngine:
                     self.persist_session_state()
                     return "Session output token budget exhausted before another turn could start."
                 self._inject_turn_attachments(turn_count)
-                self._apply_frc_if_needed()
+                # NOTE: FRC (Function Result Clearing) removed — Claude Code does
+                # not blindly clear old tool results. Budget enforcement via
+                # ContentReplacementManager handles oversized results instead.
                 boundary_messages = self._get_messages_after_compact_boundary()
                 self._apply_tool_result_budget(boundary_messages)
                 api_messages = self._clean_roles_for_api(boundary_messages)

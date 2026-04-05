@@ -6,7 +6,7 @@ from typing import Optional
 
 
 TOOL_RESULT_BUDGET_CHARS = 200_000
-PREVIEW_CHARS = 300
+PREVIEW_CHARS = 2000
 MIN_REPLACE_CHARS = 500
 
 
@@ -208,9 +208,12 @@ class ContentReplacementManager:
 
         preview = original[:PREVIEW_CHARS]
         return (
-            f"[Tool result replaced by budget — original {size:,} chars. "
-            f"Saved to disk. Re-run the tool if you need the full output.]\n"
-            f"Preview:\n{preview}"
+            f"<persisted-output>\n"
+            f"Output too large ({size:,} chars). Full output saved to: {file_path}\n\n"
+            f"Preview (first {PREVIEW_CHARS} chars):\n"
+            f"{preview}"
+            + ("\n...\n" if len(original) > PREVIEW_CHARS else "\n")
+            + "</persisted-output>"
         )
 
     def render_summary(self) -> str:
