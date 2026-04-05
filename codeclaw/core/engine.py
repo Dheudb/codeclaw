@@ -25,28 +25,28 @@ try:
     import git
 except ImportError:
     git = None
-from codeclaw.core.auto_commit import AutoCommitManager
-from codeclaw.core.browser import BrowserSessionManager
-from codeclaw.core.context import ContextBuilder
-from codeclaw.core.content_replacement import ContentReplacementManager
-from codeclaw.core.incremental_write_queue import IncrementalWriteQueue
-from codeclaw.core.artifact_tracker import ArtifactTracker
-from codeclaw.core.file_state_cache import FileStateCache
+from codeclaw.features.auto_commit import AutoCommitManager
+from codeclaw.features.browser import BrowserSessionManager
+from codeclaw.context.context import ContextBuilder
+from codeclaw.features.content_replacement import ContentReplacementManager
+from codeclaw.features.incremental_write_queue import IncrementalWriteQueue
+from codeclaw.features.artifact_tracker import ArtifactTracker
+from codeclaw.context.file_state_cache import FileStateCache
 from codeclaw.core.hooks import HookManager
-from codeclaw.core.memory import MemoryCompactor
-from codeclaw.core.memory_files import MemoryFileManager
-from codeclaw.core.session_memory import SessionMemoryManager
-from codeclaw.core.extract_memories import MemoryExtractor
-from codeclaw.core.security_classifier import AutoSecurityClassifier
-from codeclaw.core.structured_output import StructuredOutputManager
-from codeclaw.core.plans import PlanManager, is_session_plan_file
-from codeclaw.core.permissions import PermissionManager
-from codeclaw.core.shell_tasks import ShellTaskManager
-from codeclaw.core.tool_results import build_tool_result, serialize_tool_result
-from codeclaw.core.todos import TodoManager
-from codeclaw.core.vcr import VCRManager
-from codeclaw.core.ultraplan import UltraplanManager
-from codeclaw.core.team import TeamManager
+from codeclaw.memory.memory import MemoryCompactor
+from codeclaw.context.memory_files import MemoryFileManager
+from codeclaw.memory.session_memory import SessionMemoryManager
+from codeclaw.memory.extract_memories import MemoryExtractor
+from codeclaw.security.security_classifier import AutoSecurityClassifier
+from codeclaw.features.structured_output import StructuredOutputManager
+from codeclaw.features.plans import PlanManager, is_session_plan_file
+from codeclaw.security.permissions import PermissionManager
+from codeclaw.utils.shell_tasks import ShellTaskManager
+from codeclaw.context.tool_results import build_tool_result, serialize_tool_result
+from codeclaw.features.todos import TodoManager
+from codeclaw.utils.vcr import VCRManager
+from codeclaw.features.ultraplan import UltraplanManager
+from codeclaw.agents.team import TeamManager
 from codeclaw.tools.bash_tool import BashTool
 from codeclaw.tools.file_read_tool import FileReadTool
 from codeclaw.tools.file_edit_tool import FileEditTool
@@ -55,7 +55,7 @@ from codeclaw.tools.grep_tool import GrepTool
 from codeclaw.tools.glob_tool import GlobTool
 from codeclaw.protocols.mcp_bridge import MCPBridge
 from codeclaw.protocols.lsp_manager import LSPManager
-from codeclaw.core.sandbox import SandboxManager
+from codeclaw.security.sandbox import SandboxManager
 from codeclaw.core.session import SessionManager
 from codeclaw.tools.lsp_tool import LspTool
 from codeclaw.tools.sandbox_tool import SandboxTool
@@ -71,10 +71,10 @@ from codeclaw.tools.notebook_tool import NotebookTool
 from codeclaw.tools.notebook_edit_tool import NotebookEditTool
 from codeclaw.tools.plan_tool import PlanTool
 from codeclaw.tools.todo_tool import TodoWriteTool
-from codeclaw.tools.agent_tool import AgentTool
+from codeclaw.agents.agent_tool import AgentTool
 from codeclaw.tools.browser_tool import BrowserTool
 from codeclaw.tools.repl_tool import ReplTool
-from codeclaw.tools.skill_tool import SkillTool
+from codeclaw.skills.skill_tool import SkillTool
 from codeclaw.tools.tool_search_tool import ToolSearchTool
 from codeclaw.tools.team_tools import TeamCreateTool, TeamDeleteTool
 from codeclaw.tools.send_message_tool import SendMessageTool
@@ -90,9 +90,9 @@ from codeclaw.core.messages import (
     rollback_incomplete_turn,
     export_messages_state,
 )
-from codeclaw.core.attachments import AttachmentCollector
-from codeclaw.core.frc import clear_old_function_results
-from codeclaw.core.verification import VerificationManager, run_verification_agent
+from codeclaw.context.attachments import AttachmentCollector
+from codeclaw.utils.frc import clear_old_function_results
+from codeclaw.features.verification import VerificationManager, run_verification_agent
 import uuid
 
 

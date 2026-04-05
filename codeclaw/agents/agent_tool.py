@@ -4,7 +4,7 @@ import uuid
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from codeclaw.tools.base import BaseAgenticTool
-from codeclaw.tools.builtin_agents import (
+from codeclaw.agents.builtin_agents import (
     BUILTIN_AGENTS,
     get_builtin_agent,
     list_builtin_agent_descriptions,

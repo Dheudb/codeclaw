@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from codeclaw.core.tool_results import build_tool_result
+from codeclaw.context.tool_results import build_tool_result
 from codeclaw.tools.base import BaseAgenticTool
 
 

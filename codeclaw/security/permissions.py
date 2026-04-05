@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
-from codeclaw.core.plans import is_session_plan_file
+from codeclaw.features.plans import is_session_plan_file
 
 
 @dataclass

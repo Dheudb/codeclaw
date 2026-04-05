@@ -3,7 +3,7 @@ import asyncio
 import re
 from pydantic import BaseModel, Field
 from codeclaw.tools.base import BaseAgenticTool
-from codeclaw.core.tool_results import build_tool_result
+from codeclaw.context.tool_results import build_tool_result
 
 class BashToolInput(BaseModel):
     command: str = Field(..., description="The command to execute")

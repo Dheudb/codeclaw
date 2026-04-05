@@ -11,7 +11,7 @@ import uuid
 import os
 from typing import Optional
 
-from codeclaw.tools.builtin_agents import VERIFICATION_SYSTEM_PROMPT, VERIFICATION_CRITICAL_REMINDER
+from codeclaw.agents.builtin_agents import VERIFICATION_SYSTEM_PROMPT, VERIFICATION_CRITICAL_REMINDER
 
 
 VERIFICATION_THRESHOLD = 3

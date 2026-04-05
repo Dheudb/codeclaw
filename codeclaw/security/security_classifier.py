@@ -1,7 +1,7 @@
 import copy
 import time
 
-from codeclaw.core.permissions import PermissionDecision
+from codeclaw.security.permissions import PermissionDecision
 
 
 class AutoSecurityClassifier:

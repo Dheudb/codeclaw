@@ -1,7 +1,7 @@
 import os
 from pydantic import BaseModel, Field
 from codeclaw.tools.base import BaseAgenticTool
-from codeclaw.core.tool_results import build_tool_result
+from codeclaw.context.tool_results import build_tool_result
 
 
 class BrowserToolInput(BaseModel):
