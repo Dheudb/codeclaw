@@ -123,8 +123,8 @@ Import `examples/agents` after importing the example skill to try `reviewer`.
 - Running workers from a prior process are marked interrupted, not silently replayed.
 - Git Changes shows tracked diffs and lists untracked paths separately.
 - Existing project `mcp_servers.json` is connected through the Python MCP bridge
-  when the optional MCP package is installed. The connection lifecycle belongs to
-  one task; this preview has no separate MCP configuration interface.
+  when the optional MCP package is installed. Each connection has its own owner
+  task, including transport cleanup and failure isolation.
 - The renderer has no Node integration and uses an allowlisted IPC interface.
 
 ```powershell
@@ -144,3 +144,52 @@ skill. Screenshots are generated in the ignored `desktop/test-results` directory
 
 Automatic updates, a plugin marketplace, bundled Python, signed installers and
 arbitrary platform-plugin compatibility remain outside this first desktop preview.
+
+## MCP 市场与联网搜索
+
+打开项目后，点击侧边栏底部的 **MCP 市场**。
+
+- **精选目录**：包含 Exa Search、Brave Search、Fetch、Filesystem 和 GitHub。
+- **官方 MCP 注册表**：按名称或用途搜索、加载下一页。仅展示当前能完整表达
+  连接方式及启动参数的记录；其余条目可以参考服务文档手动配置。网络失败不影响精选目录。
+- **我的服务**：编辑配置、测试连接、启用、停用和移除。
+- **自定义服务**：支持本地 stdio 程序及远程 Streamable HTTP MCP，包括手动配置请求头。
+  OAuth 登录和旧版 SSE 连接暂未实现。
+
+安装只保存配置，新服务默认停用。**测试连接**会实际启动本地程序或访问远程服务，
+执行 MCP 握手并发现工具，不需要配置模型 API。测试本身不执行搜索工具。
+启用后，下一次任务会加载服务；已有会话也可点击“刷新连接”。其他同项目会话会在下一次
+任务前重新读取配置，正在执行的任务继续使用它启动时的连接。CLI 在启动时读取同一份配置。
+工具执行仍走现有权限流程。服务本身的凭据、额度和费用由服务提供方决定。
+
+MCP 需要 **Python 3.10+**，使用该解释器在仓库根目录运行：
+
+```powershell
+python -m pip install -e ".[mcp]"
+```
+
+在“设置与模型”选择安装了这些依赖的 Python 解释器，然后重新打开项目/会话。
+Python 3.9 仍可使用原有 CLI、桌面和内置搜索，但不能运行当前官方 Python MCP SDK。
+市场会显示当前解释器及缺失依赖，不会静默忽略已启用的服务。
+
+配置写入项目根目录 `mcp_servers.json`，与 CLI 共用。它可能包含凭据，已加入忽略规则，
+也不会自动附加到模型上下文。环境变量和 HTTP 请求头的已保存值不会回传界面，
+编辑时留空保留原值，删除字段清除。凭据仍以明文存储在本地配置文件；这不是系统密钥库。
+手动把凭据写入命令参数时，参数会显示在配置预览中，请优先使用环境变量或请求头。
+
+内置 DuckDuckGo 搜索保持独立，不需要 MCP 或搜索 API Key；请求在后台线程运行，
+避免阻塞流式对话与停止操作。它不提供服务可用性保证；搜索为空或失败会明确返回结果。
+内置 WebFetch 提取静态 HTML 的纯文本，动态网页仍需浏览器工具。
+配置搜索 MCP 后，模型可以选择它提供的搜索工具；当前没有自动切换搜索源的路由规则。
+
+```powershell
+# Run with the Python interpreter containing the MCP extra
+python -m unittest discover -s tests -v
+cd desktop
+$env:CODECLAW_PYTHON = "C:\path\to\python.exe"
+npm run test:mcp
+```
+
+MCP 验收使用隐藏 Electron 窗口、本机 MCP 协议测试服务和模拟模型 API，
+覆盖市场安装、凭据保留/脱敏、stdio/HTTP 握手、权限审批后的工具调用以及停用重连。
+不调用真实模型或付费搜索服务。第三方市场条目实际联网可用性需要使用自己的配置验证。

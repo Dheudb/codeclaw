@@ -19,12 +19,14 @@ import {
   ShieldCheck,
   Square,
   X,
+  Store,
 } from "lucide-react";
 import type { InitialSession, SessionView, ModelConfig } from "./types";
 import { applyEvent, beginTurn, createSession } from "./state";
 import CapabilityPanel from "./CapabilityPanel";
 import { InteractionCard, SettingsDialog } from "./Dialogs";
 import Markdown from "./Markdown";
+import McpDialog from "./McpDialog";
 
 const basename = (value: string) =>
   value.split(/[\\/]/).filter(Boolean).pop() || value;
@@ -35,6 +37,7 @@ export default function App() {
   const [recent, setRecent] = useState<string[]>([]);
   const [python, setPython] = useState("python");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelTab, setPanelTab] = useState("skills");
   const [opening, setOpening] = useState(false);
@@ -337,6 +340,17 @@ export default function App() {
           )}
         </div>
         <div className="sidebar-bottom">
+          <button
+            className="sidebar-action"
+            disabled={!active}
+            title={
+              !active ? "先打开项目，再管理 MCP 服务" : "为当前项目管理外部工具"
+            }
+            onClick={() => setMcpOpen(true)}
+          >
+            <Store size={16} />
+            MCP 市场
+          </button>
           <div className="local-status">
             <span />
             本地工作区<span className="version">v0.1.0</span>
@@ -688,6 +702,18 @@ export default function App() {
           close={() => setSettingsOpen(false)}
           save={saveModel}
           choosePython={choosePython}
+        />
+      )}
+      {mcpOpen && active && (
+        <McpDialog
+          key={active.id}
+          sessionId={active.id}
+          busy={
+            active.busy ||
+            active.workers.some((worker) => worker.status === "running")
+          }
+          invoke={invoke}
+          close={() => setMcpOpen(false)}
         />
       )}
     </div>

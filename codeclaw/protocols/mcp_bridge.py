@@ -1,131 +1,165 @@
-import os
-import json
+"""MCP connections owned and closed by one asyncio task."""
 import asyncio
+import json
+import os
+import re
+import sys
 from contextlib import AsyncExitStack
-from typing import Dict, Any, List
+from datetime import timedelta
+from urllib.parse import urlsplit
+import ipaddress
+import httpx
+
+from codeclaw.protocols.mcp_config import MCPConfigStore, validate_server
 
 try:
     from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
+    from mcp.client.stdio import stdio_client, get_default_environment
+    from mcp.client.streamable_http import streamable_http_client
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False
 
+
+def runtime_info():
+    return {"available": MCP_AVAILABLE, "python": sys.version.split()[0], "executable": sys.executable,
+            "message": "" if MCP_AVAILABLE else "MCP 需要 Python 3.10+ 及 mcp 依赖。选择相应解释器并安装 codeclaw[mcp]。"}
+
+
+def connection_error(exc):
+    # SDK exceptions can contain request URLs/headers. Do not send them to the UI/model.
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return "连接超时；检查网络、启动命令及服务配置。"
+    if isinstance(exc, FileNotFoundError):
+        return "找不到启动程序；检查服务所需的 npx、uvx 或其他运行环境。"
+    return "MCP 连接或请求失败（" + type(exc).__name__ + "）；检查运行环境、地址及凭据。"
+
+
 class MCPToolWrapper:
-    """
-    Wraps an official remote MCP Tool to look and feel exactly like a local CodeClaw BaseAgenticTool,
-    transparently forwarding payload validation limits to Anthropic.
-    """
-    def __init__(self, server_name: str, session, mcp_tool):
-        # We prefix the tool name to avoid collisions, e.g., "sqlite_query"
-        self.name = f"{server_name}_{mcp_tool.name}"
-        self.description = mcp_tool.description or f"MCP Server tool '{mcp_tool.name}' offloaded via {server_name}"
+    def __init__(self, server_name, session, mcp_tool):
+        safe = re.sub(r"[^A-Za-z0-9_-]", "_", server_name + "_" + mcp_tool.name)
+        self.name = safe[:64]
+        self.description = mcp_tool.description or "MCP tool from " + server_name
         self.mcp_tool_name = mcp_tool.name
         self.session = session
         self.raw_schema = mcp_tool.inputSchema
-        self.context = {} # Shared context injection point
+        self.context = {}
         self.is_read_only = False
         self.risk_level = "high"
-        
-    def get_tool_definition(self) -> Dict[str, Any]:
-        """Bypass Pydantic logic and directly vend the raw remote schema."""
-        return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self.raw_schema
-        }
+
+    def get_tool_definition(self):
+        return {"name": self.name, "description": self.description, "input_schema": self.raw_schema}
 
     def is_read_only_call(self, **kwargs):
-        return self.is_read_only
+        return False
 
     def is_concurrency_safe_call(self, **kwargs):
-        return self.is_read_only_call(**kwargs)
+        return False
 
     def get_risk_level(self, **kwargs):
         return self.risk_level
 
     def build_permission_summary(self, **kwargs):
-        preview_lines = []
-        for key, value in list(kwargs.items())[:4]:
-            rendered = str(value)
-            if len(rendered) > 160:
-                rendered = rendered[:157] + "..."
-            preview_lines.append(f"{key}: {rendered}")
+        return "MCP tool '" + self.name + "' requested.\n" + "\n".join(str(k) + ": " + str(v)[:160] for k, v in list(kwargs.items())[:4])
 
-        summary = f"Remote MCP tool '{self.name}' requested."
-        if preview_lines:
-            summary += "\n" + "\n".join(preview_lines)
-        return summary
-        
     async def __call__(self, **kwargs):
-        """Invoke the remote tool via the established STDIO ClientSession."""
         try:
             result = await self.session.call_tool(self.mcp_tool_name, arguments=kwargs)
-            # Result has content block array (e.g. result.content = [TextContent(...)])
-            text_blocks = []
-            for c in result.content:
-                if getattr(c, "type", "text") == "text":
-                    text_blocks.append(c.text)
-                else:
-                    text_blocks.append(f"[{c.type} block hidden]")
-            return "\\n".join(text_blocks)
-        except Exception as e:
-            return f"Error executing remote MCP tool '{self.name}': {str(e)}"
+            blocks = [c.text if getattr(c, "type", "") == "text" else "[" + str(c.type) + " block omitted]" for c in result.content]
+            if getattr(result, "structuredContent", None) and not blocks:
+                blocks.append(json.dumps(result.structuredContent, ensure_ascii=False))
+            text = "\n".join(blocks)[:100000]
+            return ("MCP tool returned an error:\n" if getattr(result, "isError", False) else "") + text
+        except Exception as exc:
+            return connection_error(exc)
+
 
 class MCPBridge:
-    """
-    Managers the asynchronous lifecycle of multiple STDIO-based Model Context Protocol sessions
-    by reading local mcp_servers.json configuration files.
-    """
     def __init__(self, config_file="mcp_servers.json"):
-        self.config_file = config_file
+        self.store = MCPConfigStore(config_file)
         self.sessions = {}
-        self.exit_stack = AsyncExitStack()
-        
-    async def load_and_connect(self) -> Dict[str, MCPToolWrapper]:
-        if not MCP_AVAILABLE:
-            return {}
-            
-        if not os.path.exists(self.config_file):
-            return {}
-            
-        discovered_tools = {}
+        self.connections = []
+        self.statuses = {}
+
+    async def load_and_connect(self, only=None, include_disabled=False):
+        discovered = {}
+        for name, raw in self.store.read()["mcpServers"].items():
+            if only is not None and name != only:
+                continue
+            if isinstance(raw, dict) and raw.get("enabled", True) is False and not include_disabled:
+                self.statuses[name] = {"status": "disabled", "tools": []}
+                continue
+            if not MCP_AVAILABLE:
+                self.statuses[name] = {"status": "error", "error": runtime_info()["message"], "tools": []}
+                continue
+            ready = asyncio.get_running_loop().create_future()
+            stop = asyncio.Event()
+            task = asyncio.create_task(self._connection(name, raw, ready, stop))
+            self.connections.append((task, stop))
+            tools = await asyncio.shield(ready)
+            if any(key in discovered for key in tools):
+                self.statuses[name] = {"status": "error", "error": "MCP tool name collision", "tools": []}
+                stop.set()
+                await task
+            else:
+                discovered.update(tools)
+        return discovered
+
+    async def _connection(self, name, raw, ready, stop):
+        # A disconnected transport can cancel its AnyIO scope. Keep each
+        # connection on its own owner so one failed service cannot stop another.
         try:
-            with open(self.config_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                
-            servers = data.get("mcpServers", {})
-            for name, config in servers.items():
-                cmd = config.get("command")
-                args = config.get("args", [])
-                env = os.environ.copy()
-                if "env" in config:
-                    env.update(config["env"])
-                    
-                server_params = StdioServerParameters(command=cmd, args=args, env=env)
-                
-                try:
-                    # Safely bind lifecycle to our stack
-                    stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
-                    read, write = stdio_transport
-                    session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-                    
-                    await session.initialize()
-                    self.sessions[name] = session
-                    
-                    # Interrogate its tool capabilities!
-                    result = await session.list_tools()
-                    for t in result.tools:
-                        wrapper = MCPToolWrapper(name, session, t)
-                        discovered_tools[wrapper.name] = wrapper
-                        
-                except Exception as e:
-                    print(f"\\n[MCP Warning] Failed to connect to local MCP Server '{name}': {e}")
-                    
-        except Exception as e:
-            print(f"\\n[MCP Warning] Failed to parse {self.config_file}: {e}")
-            
-        return discovered_tools
-        
+            async with AsyncExitStack() as stack:
+                config = validate_server(raw)
+                if config["type"] == "stdio":
+                    inherited = get_default_environment()
+                    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
+                        if key in os.environ:
+                            inherited[key] = os.environ[key]
+                    params = StdioServerParameters(command=config["command"], args=config.get("args", []), env={**inherited, **config.get("env", {})})
+                    sink = stack.enter_context(open(os.devnull, "w"))
+                    channels = await stack.enter_async_context(stdio_client(params, errlog=sink))
+                else:
+                    hostname = urlsplit(config["url"]).hostname
+                    try:
+                        local = ipaddress.ip_address(hostname).is_loopback
+                    except ValueError:
+                        local = hostname == "localhost"
+                    client = await stack.enter_async_context(httpx.AsyncClient(headers=config.get("headers", {}), timeout=httpx.Timeout(30, connect=15), trust_env=not local, follow_redirects=False))
+                    channels = await stack.enter_async_context(streamable_http_client(config["url"], http_client=client))
+                session = await stack.enter_async_context(ClientSession(channels[0], channels[1], read_timeout_seconds=timedelta(seconds=20)))
+                # AnyIO cancel scopes must stay on their owning task. The session owns deadlines.
+                await session.initialize()
+                tools = []
+                cursor = None
+                for _ in range(20):
+                    page = await session.list_tools(cursor=cursor)
+                    tools.extend(page.tools)
+                    cursor = getattr(page, "nextCursor", None)
+                    if not cursor:
+                        break
+                if cursor:
+                    raise ValueError("MCP tool pagination exceeded limit")
+                wrappers = [MCPToolWrapper(name, session, tool) for tool in tools]
+                names = [tool.name for tool in wrappers]
+                if len(names) != len(set(names)):
+                    raise ValueError("MCP tool name collision")
+                self.sessions[name] = session
+                self.statuses[name] = {"status": "connected", "tools": [tool.name for tool in tools]}
+                ready.set_result({tool.name: tool for tool in wrappers})
+                await stop.wait()
+        except BaseException as exc:
+            self.statuses[name] = {"status": "error", "error": connection_error(exc), "tools": []}
+            if not ready.done():
+                ready.set_result({})
+        finally:
+            self.sessions.pop(name, None)
+            if not ready.done():
+                ready.set_result({})
+
     async def cleanup(self):
-        await self.exit_stack.aclose()
+        for task, stop in self.connections:
+            stop.set()
+        await asyncio.gather(*(task for task, _ in self.connections), return_exceptions=True)
+        self.connections.clear()
+        self.sessions.clear()

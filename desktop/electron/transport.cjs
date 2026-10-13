@@ -67,10 +67,13 @@ class EngineTransport {
     if (this.closed) return Promise.reject(new Error("Engine is closed"));
     return new Promise((resolve, reject) => {
       const id = ++this.sequence;
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error("请求超时：" + method));
-      }, 60000);
+      const timer = setTimeout(
+        () => {
+          this.pending.delete(id);
+          reject(new Error("请求超时：" + method));
+        },
+        method === "mcp.reload" ? 180000 : 60000,
+      );
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
     });

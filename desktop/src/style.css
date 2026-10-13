@@ -1341,6 +1341,243 @@ a,
     transform: rotate(360deg);
   }
 }
+.mcp-dialog {
+  width: min(1020px, 94vw);
+  padding: 25px;
+}
+.mcp-dialog header {
+  margin-bottom: 20px;
+}
+.mcp-subtitle {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #8c9089;
+}
+.mcp-toolbar,
+.mcp-installed-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.mcp-toolbar button,
+.mcp-search button,
+.mcp-card button,
+.mcp-installed-heading button {
+  font-size: 11px;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  white-space: nowrap;
+}
+.mcp-tabs {
+  display: flex;
+  gap: 6px;
+}
+.mcp-tabs button {
+  border-color: transparent;
+  background: transparent;
+  padding: 8px 12px;
+}
+.mcp-tabs button.active {
+  background: #f7ece8;
+  color: #b96954;
+}
+.mcp-body {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+}
+.mcp-main {
+  flex: 1;
+  min-width: 0;
+  max-height: 58vh;
+  overflow: auto;
+  padding-right: 3px;
+}
+.mcp-search {
+  display: flex;
+  gap: 7px;
+  margin-bottom: 16px;
+}
+.mcp-search select {
+  width: 145px;
+  font-size: 11px;
+}
+.mcp-search input {
+  flex: 1;
+  min-width: 60px;
+  font-size: 12px;
+}
+.mcp-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.mcp-card {
+  border: 1px solid #e9e9e3;
+  border-radius: 11px;
+  padding: 16px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mcp-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9a806f;
+}
+.mcp-card-head strong {
+  color: #555b50;
+  font-size: 13px;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.mcp-card-head > span {
+  font-size: 9px;
+  color: #9b9e95;
+}
+.mcp-card p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #7f837a;
+  overflow-wrap: anywhere;
+}
+.mcp-card small,
+.mcp-footnote {
+  color: #9c9f95;
+  font-size: 10px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.mcp-card small {
+  flex: 1;
+}
+.mcp-card-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.mcp-card-actions .mcp-doc-link {
+  margin-right: auto;
+  border: 0;
+  padding-left: 0;
+}
+.mcp-card code {
+  font-size: 10px;
+  color: #a39b8c;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.mcp-card.installed {
+  margin-bottom: 12px;
+}
+.mcp-card .mcp-status.connected {
+  color: #7d9565;
+}
+.mcp-card .mcp-status.error,
+.mcp-card button.danger {
+  color: #bd7560;
+}
+.mcp-installed-heading p {
+  font-size: 11px;
+  color: #9a9c91;
+}
+.mcp-editor {
+  width: 290px;
+  flex-shrink: 0;
+  max-height: 58vh;
+  overflow: auto;
+  border-left: 1px solid #eeeee8;
+  padding-left: 20px;
+}
+.with-editor .mcp-grid {
+  grid-template-columns: 1fr;
+}
+.mcp-editor-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.mcp-editor h3 {
+  font-size: 13px;
+  color: #696f60;
+}
+.mcp-editor .form-section {
+  padding-top: 0;
+  border: 0;
+}
+.mcp-editor pre {
+  font-size: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #f8f8f4;
+  border-radius: 6px;
+  padding: 10px;
+  margin-top: 10px;
+  color: #929480;
+}
+.mcp-editor small {
+  display: block;
+  margin-top: 4px;
+  font-size: 9px;
+  line-height: 1.6;
+}
+.mcp-editor textarea {
+  width: 100%;
+  min-height: 75px;
+  font-size: 11px;
+  margin-top: 6px;
+}
+.mcp-save {
+  width: 100%;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.mcp-footer {
+  justify-content: space-between !important;
+  border-top: 1px solid #eeeee8;
+  padding-top: 15px;
+  font-size: 10px;
+  color: #a0a394;
+}
+.mcp-warning,
+.mcp-message {
+  font-size: 11px;
+  line-height: 1.7;
+  border-radius: 7px;
+  padding: 9px 12px;
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+  background: #fff6ef;
+  color: #ae7958;
+}
+.mcp-message {
+  background: #f3f7ed;
+  color: #7e916b;
+}
+.mcp-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr 22px;
+  gap: 5px;
+  margin-top: 8px;
+}
+.mcp-pair input {
+  font-size: 10px;
+  min-width: 0;
+}
+.mcp-add-pair {
+  margin-top: 7px;
+  font-size: 10px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
 @keyframes pulse {
   50% {
     opacity: 0.3;

@@ -2319,6 +2319,9 @@ class QueryEngine:
         # 2. Start MCP Background Connections
         self.mcp_bridge = MCPBridge()
         remote_tools = await self.mcp_bridge.load_and_connect()
+        for name, status in self.mcp_bridge.statuses.items():
+            if status.get("status") == "error":
+                sys_print("MCP " + name + ": " + status["error"])
         if remote_tools:
             for name, tool in remote_tools.items():
                 tool.context = self.tool_context

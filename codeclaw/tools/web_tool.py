@@ -1,4 +1,5 @@
 import re
+import asyncio
 import httpx
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
@@ -7,7 +8,7 @@ from codeclaw.tools.base import BaseAgenticTool
 
 class WebSearchInput(BaseModel):
     query: str = Field(..., description="The search query to look up on the web.")
-    max_results: int = Field(5, description="Number of results to return (max 10).")
+    max_results: int = Field(5, ge=1, le=10, description="Number of results to return (1–10).")
 
 class WebSearchTool(BaseAgenticTool):
     name = "web_search_tool"
@@ -33,10 +34,14 @@ IMPORTANT - Use the correct year in search queries:
 
     async def execute(self, query: str, max_results: int = 5) -> str:
         try:
-            results = DDGS().text(query, max_results=max_results)
-            out = f"Web Search Results for: '{query}'\\n" + "="*40 + "\\n"
+            limit = max(1, min(int(max_results), 10))
+            # DDGS is synchronous; its network calls must not block streaming or Stop.
+            results = await asyncio.to_thread(lambda: list(DDGS(timeout=12).text(query, max_results=limit)))
+            if not results:
+                return "No web search results were returned. Try another query or an available search MCP."
+            out = f"Web Search Results for: '{query}'\n" + "="*40 + "\n"
             for r in results:
-                out += f"Title: {r.get('title')}\\nURL: {r.get('href')}\\nSnippet: {r.get('body')}\\n\\n"
+                out += f"Title: {r.get('title')}\nURL: {r.get('href')}\nSnippet: {r.get('body')}\n\n"
             return out
         except Exception as e:
             return f"Error executing Web Search: {str(e)}"
@@ -53,15 +58,14 @@ class WebFetchTool(BaseAgenticTool):
     risk_level = "low"
 
     def prompt(self) -> str:
-        return """Fetches content from a specified URL and processes it using an AI model. Takes a URL and a prompt as input, fetches the URL content, converts HTML to markdown, and processes the content with the prompt.
+        return """Fetches static HTML from a URL, removes scripts and navigation, and returns plain text for you to analyze. The optional extraction prompt is included with the returned text; no separate AI extraction is performed.
 
 Usage notes:
 - The URL must be a fully-formed valid URL
-- HTTP URLs will be automatically upgraded to HTTPS
 - The prompt should describe what information you want to extract from the page
 - This tool is read-only and does not modify any files
-- Results may be summarized if the content is very large
-- When a URL redirects to a different host, the tool will inform you and provide the redirect URL
+- Content is truncated at 100,000 characters. JavaScript is not executed; use browser_tool for dynamic pages.
+- Redirects are followed and the final URL is reported.
 - For GitHub URLs, prefer using the gh CLI via bash_tool instead (e.g., gh pr view, gh issue view, gh api)"""
 
     async def execute(self, url: str, prompt: str = "", **kwargs) -> str:
@@ -81,7 +85,7 @@ Usage notes:
             if len(text) > 100000:
                 text = text[:100000] + "\n\n...[Content truncated due to size]..."
 
-            result = f"Content from {url}:\n\n{text}"
+            result = f"Content from {resp.url}:\n\n{text}"
             if prompt:
                 result += f"\n\n---\nExtraction prompt: {prompt}"
             return result

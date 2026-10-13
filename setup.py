@@ -27,4 +27,5 @@ setup(
             "codeclaw=codeclaw.main:main",
         ],
     },
+    extras_require={"mcp": ["mcp>=1.30,<2; python_version >= '3.10'"]},
 )

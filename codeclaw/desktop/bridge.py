@@ -11,6 +11,9 @@ from pathlib import Path
 from codeclaw.core.config import load_config, load_config_into_env, save_config
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
+from codeclaw.protocols.mcp_config import MCPConfigStore
+from codeclaw.protocols.mcp_market import MCPMarket, materialize
+from codeclaw.protocols.mcp_bridge import MCPBridge, runtime_info
 
 
 def pipe_reader(fd):
@@ -52,6 +55,41 @@ class DesktopBridge:
         self.protocol_task = None
         self.protocol_ready = None
         self.protocol_shutdown = asyncio.Event()
+        self.mcp_store = MCPConfigStore(self.cwd / "mcp_servers.json")
+        self.mcp_market = MCPMarket()
+        self.mcp_requests = asyncio.Queue()
+        self.mcp_names = set()
+        self.mcp_stamp = None
+        self.mcp_testing = False
+
+    def config_stamp(self):
+        try:
+            stat = self.mcp_store.path.stat()
+            return (stat.st_mtime_ns, stat.st_size)
+        except FileNotFoundError:
+            return None
+
+    def mcp_snapshot(self):
+        statuses = getattr(getattr(self.engine, "mcp_bridge", None), "statuses", {})
+        changed = self.engine is not None and self.config_stamp() != self.mcp_stamp
+        servers = []
+        for server in self.mcp_store.snapshot():
+            state = statuses.get(server["name"], {}) if not changed else {}
+            servers.append({**server, "connection": state, "status": "disabled" if server.get("enabled") is False else state.get("status", "pending")})
+        return {"servers": servers, "runtime": runtime_info(), "needsReload": changed, "builtinSearch": "DuckDuckGo", "project": str(self.cwd)}
+
+    async def reload_mcp(self):
+        if self.protocol_task is None:
+            return
+        if self.protocol_task.done():
+            raise ValueError("MCP owner stopped; reopen this session")
+        ready = asyncio.get_running_loop().create_future()
+        self.mcp_testing = True
+        try:
+            await self.mcp_requests.put(ready)
+            await asyncio.shield(ready)
+        finally:
+            self.mcp_testing = False
 
     def busy(self):
         return self.turn_task is not None and not self.turn_task.done()
@@ -121,6 +159,8 @@ class DesktopBridge:
         if self.engine is not None:
             if self.protocol_ready is not None:
                 await asyncio.shield(self.protocol_ready)
+            if self.config_stamp() != self.mcp_stamp:
+                await self.reload_mcp()
             return self.engine
         load_config_into_env()
         from codeclaw.core.engine import QueryEngine
@@ -151,23 +191,40 @@ class DesktopBridge:
 
     async def protocol_lifetime(self, engine):
         # MCP's context managers must be entered and exited by the same task.
-        from codeclaw.protocols.mcp_bridge import MCPBridge
-        engine.mcp_bridge = MCPBridge(str(self.cwd / "mcp_servers.json"))
+        ready = self.protocol_ready
         try:
-            try:
-                tools = await engine.mcp_bridge.load_and_connect()
-                for name, tool in tools.items():
-                    tool.context = engine.tool_context
-                    engine.available_tools[name] = tool
-                self.emit({"type": "log", "text": "MCP tools connected: " + str(len(tools))})
-            except Exception as exc:
-                self.emit({"type": "log", "text": "MCP connection failed: " + str(exc)})
-            finally:
-                if not self.protocol_ready.done():
-                    self.protocol_ready.set_result(True)
-            await self.protocol_shutdown.wait()
+            while True:
+                try:
+                    for name in self.mcp_names:
+                        engine.available_tools.pop(name, None)
+                    self.mcp_names.clear()
+                    if getattr(engine, "mcp_bridge", None):
+                        await engine.mcp_bridge.cleanup()
+                    engine.mcp_bridge = MCPBridge(str(self.mcp_store.path))
+                    self.mcp_stamp = self.config_stamp()
+                    tools = await engine.mcp_bridge.load_and_connect()
+                    for name, tool in tools.items():
+                        if name in engine.available_tools:
+                            raise ValueError("MCP tool conflicts with an existing tool")
+                        tool.context = engine.tool_context
+                        engine.available_tools[name] = tool
+                        self.mcp_names.add(name)
+                    self.emit({"type": "mcp_changed", "snapshot": self.mcp_snapshot()})
+                    if not ready.done():
+                        ready.set_result(True)
+                except Exception:
+                    self.emit({"type": "log", "text": "MCP configuration or connection failed; check the MCP panel"})
+                    if not ready.done():
+                        if ready is self.protocol_ready:
+                            ready.set_result(True)
+                        else:
+                            ready.set_exception(ValueError("MCP configuration or connection failed; check the MCP panel"))
+                ready = await self.mcp_requests.get()
+                if ready is None:
+                    break
         finally:
-            await engine.mcp_bridge.cleanup()
+            if getattr(engine, "mcp_bridge", None):
+                await engine.mcp_bridge.cleanup()
 
     async def turn(self, text, selected_skills, mode):
         try:
@@ -193,6 +250,40 @@ class DesktopBridge:
             self.emit({"type": "turn_finished"})
 
     async def dispatch(self, method, params):
+        if method == "mcp.list":
+            return self.mcp_snapshot()
+        if method == "mcp.market":
+            return await self.mcp_market.search(params.get("query", ""), params.get("source", "builtin"), params.get("cursor", ""))
+        if method in {"mcp.install", "mcp.save", "mcp.toggle", "mcp.remove", "mcp.reload", "mcp.test"}:
+            self.require_idle()
+            if self.mcp_testing:
+                raise ValueError("Wait for the MCP connection test to finish")
+            name = params.get("name", "")
+            if method == "mcp.install":
+                entry = self.mcp_market.entries.get(params.get("id"))
+                if not entry:
+                    raise ValueError("Refresh the market before installing this entry")
+                self.mcp_store.save(name or entry["id"], materialize(entry, params.get("values", {})))
+            elif method == "mcp.save":
+                self.mcp_store.save(name, params.get("config", {}), existing=params.get("existing") is True)
+            elif method == "mcp.toggle":
+                self.mcp_store.toggle(name, params.get("enabled") is True)
+            elif method == "mcp.remove":
+                self.mcp_store.remove(name)
+            elif method == "mcp.reload":
+                await self.reload_mcp()
+            elif method == "mcp.test":
+                if name not in self.mcp_store.read()["mcpServers"]:
+                    raise ValueError("Unknown MCP server")
+                self.mcp_testing = True
+                bridge = MCPBridge(str(self.mcp_store.path))
+                try:
+                    await bridge.load_and_connect(only=name, include_disabled=True)
+                    return {"runtime": runtime_info(), **bridge.statuses.get(name, {})}
+                finally:
+                    await bridge.cleanup()
+                    self.mcp_testing = False
+            return self.mcp_snapshot()
         if method == "initialize":
             sid = params.get("sessionId")
             if sid and not re.fullmatch(r"[a-zA-Z0-9_-]+", sid):
@@ -234,8 +325,8 @@ class DesktopBridge:
         if method == "skills.read":
             return self.skills.read(params["name"])
         if method == "prompt":
-            if self.busy():
-                raise ValueError("A turn is already running")
+            if self.busy() or self.mcp_testing:
+                raise ValueError("A turn or MCP connection operation is already running")
             text = str(params.get("text", "")).strip()
             if not text:
                 raise ValueError("Message is empty")
@@ -311,6 +402,7 @@ class DesktopBridge:
         await self.dispatch("stop", {})
         self.protocol_shutdown.set()
         if self.protocol_task:
+            await self.mcp_requests.put(None)
             if self.protocol_ready is not None and not self.protocol_ready.done():
                 self.protocol_task.cancel()
             await asyncio.gather(self.protocol_task, return_exceptions=True)

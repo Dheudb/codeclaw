@@ -123,7 +123,8 @@ export function SettingsDialog({
             <button onClick={choosePython}>选择解释器</button>
           </div>
           <p className="fine-print">
-            解释器需安装 CodeClaw 依赖，修改后对新打开的会话生效。
+            解释器需安装 CodeClaw 依赖，修改后对新打开的会话生效。MCP 服务需要
+            Python 3.10+ 和 MCP 依赖。
           </p>
         </div>
         {error && (

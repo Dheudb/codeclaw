@@ -35,7 +35,7 @@
 
 **Desktop Preview:** an Electron + React workbench now wraps the existing Python
 engine, with project/session management, streaming chat, model settings, Skills,
-custom subagents, permission cards and Git changes. See the
+custom subagents, permission cards, an MCP marketplace and Git changes. See the
 [desktop guide](docs/desktop.md) for setup, supported formats and verification.
 
 ```bash

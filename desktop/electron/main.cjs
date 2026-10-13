@@ -18,6 +18,14 @@ const engineMethods = new Set([
   "skills.read",
   "agents.cancel",
   "config.save",
+  "mcp.list",
+  "mcp.market",
+  "mcp.install",
+  "mcp.save",
+  "mcp.toggle",
+  "mcp.remove",
+  "mcp.test",
+  "mcp.reload",
 ]);
 function settingsPath() {
   return path.join(app.getPath("userData"), "workbench.json");
@@ -73,6 +81,13 @@ async function createSession(project, resumeId) {
   }
 }
 async function invoke(method, params) {
+  if (method === "external.open") {
+    const url = new URL(params.url);
+    if (url.protocol !== "https:" || url.username || url.password)
+      throw new Error("只支持 HTTPS 文档链接");
+    await shell.openExternal(url.href);
+    return true;
+  }
   if (method === "app.initialize")
     return { ...settings(), version: app.getVersion() };
   if (method === "project.open") {

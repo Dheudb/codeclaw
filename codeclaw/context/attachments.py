@@ -114,7 +114,7 @@ class AttachmentCollector:
                 relative = os.path.relpath(abs_path, cwd)
             except ValueError:
                 relative = abs_path
-            if relative.replace("\\", "/").split("/")[0].lower() in {".codeclaw", ".git"}:
+            if relative.replace("\\", "/").split("/")[0].lower() in {".codeclaw", ".git", "mcp_servers.json"}:
                 continue
             if inspected >= 10:
                 break
