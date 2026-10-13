@@ -13,10 +13,6 @@ try:
     import tiktoken
 except Exception:
     tiktoken = None
-try:
-    from transformers import AutoTokenizer
-except Exception:
-    AutoTokenizer = None
 
 class MemoryCompactor:
     """
@@ -81,9 +77,10 @@ class MemoryCompactor:
         return AsyncAnthropic()
 
     def _resolve_local_tokenizer(self):
-        if AutoTokenizer is None or not self.local_tokenizer_path:
+        if not self.local_tokenizer_path:
             return None
         try:
+            from transformers import AutoTokenizer
             return AutoTokenizer.from_pretrained(
                 self.local_tokenizer_path,
                 local_files_only=True,

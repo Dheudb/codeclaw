@@ -10,7 +10,7 @@ import json
 import os
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".codeclaw"
+CONFIG_DIR = Path(os.environ.get("CODECLAW_CONFIG_DIR", str(Path.home() / ".codeclaw"))).expanduser()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # Keys we persist — maps config key → environment variable name

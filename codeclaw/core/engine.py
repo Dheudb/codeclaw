@@ -75,6 +75,9 @@ from codeclaw.agents.agent_tool import AgentTool
 from codeclaw.tools.browser_tool import BrowserTool
 from codeclaw.tools.repl_tool import ReplTool
 from codeclaw.skills.skill_tool import SkillTool
+from codeclaw.skills.registry import SkillRegistry
+from codeclaw.agents.registry import AgentRegistry
+from codeclaw.agents.tasks import SubagentTasks
 from codeclaw.tools.tool_search_tool import ToolSearchTool
 from codeclaw.tools.team_tools import TeamCreateTool, TeamDeleteTool
 from codeclaw.tools.send_message_tool import SendMessageTool
@@ -267,6 +270,9 @@ class QueryEngine:
         
         # Share state across instances for locks and cross-tool persistence
         self.tool_context = {
+            "skill_registry": SkillRegistry(self.session_cwd),
+            "agent_registry": AgentRegistry(self.session_cwd),
+            "subagent_tasks": SubagentTasks(),
             "session_cwd": self.session_cwd,
             "read_file_state": {},
             "file_state_cache": self.file_state_cache,
@@ -352,6 +358,7 @@ class QueryEngine:
         if model:
             self.primary_model = model
             self.model = model
+        self.fallback_model = self._resolve_fallback_model(None)
         if api_base_url is not None:
             self.api_base_url = api_base_url
         if api_key:
@@ -1149,6 +1156,8 @@ class QueryEngine:
 
     def _build_tool_prompt_summary(self) -> str:
         sections = []
+        if self.tool_context.get("agent_system_prompt"):
+            sections.append("# Assigned agent role\n" + self.tool_context["agent_system_prompt"])
         for name, tool in self.available_tools.items():
             prompt_builder = getattr(tool, "prompt", None)
             if not callable(prompt_builder):
@@ -1753,6 +1762,10 @@ class QueryEngine:
 
         self._sync_message_context()
         self.persist_session_state()
+
+        callback = self.tool_context.get("capability_event")
+        if callback:
+            callback({"type": "subagent_status", "agent": dict(record)})
 
     def _build_message_statistics(self) -> dict:
         stats = {
@@ -3898,6 +3911,14 @@ class QueryEngine:
         loop_state = self._build_loop_state()
 
         while loop_state["turn_count"] < loop_state["max_turns"]:
+            if self.team_manager.is_active:
+                while True:
+                    team_message = await self.team_manager.receive_message(self.agent_id)
+                    if team_message is None:
+                        break
+                    self.messages.append(create_user_message("Team message from {}: {}".format(team_message.from_name, team_message.text), origin="team"))
+            for report in self.tool_context["subagent_tasks"].completed():
+                self.messages.append(create_user_message("Background subagent completed: " + str(report), origin="subagent"))
             loop_state["turn_count"] += 1
             turn_count = loop_state["turn_count"]
             assistant_message = None

@@ -1,0 +1,477 @@
+import { useState } from "react";
+import {
+  Plus,
+  RefreshCw,
+  Puzzle,
+  Bot,
+  CircleCheck,
+  CircleAlert,
+  ChevronDown,
+  Square,
+  FileDiff,
+  Activity,
+  X,
+} from "lucide-react";
+import type { SessionView, Skill } from "./types";
+import Markdown from "./Markdown";
+
+export default function CapabilityPanel({
+  session,
+  tab,
+  setTab,
+  invoke,
+  refresh,
+  update,
+  onError,
+}: {
+  session?: SessionView;
+  tab: string;
+  setTab: (tab: string) => void;
+  invoke: (method: string, params?: Record<string, unknown>) => Promise<any>;
+  refresh: () => Promise<void>;
+  update: (patch: Partial<SessionView>) => void;
+  onError: (e: unknown) => void;
+}) {
+  const [preview, setPreview] = useState<{ name: string; text: string } | null>(
+    null,
+  );
+  const [changes, setChanges] = useState<{
+    status: string;
+    diff: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  async function importDirectory(kind: string) {
+    try {
+      const capabilities = await invoke("capabilities.import", { kind });
+      if (capabilities) update({ capabilities });
+    } catch (e) {
+      onError(e);
+    }
+  }
+  async function toggle(skill: Skill) {
+    try {
+      const capabilities = await invoke("capabilities.toggle", {
+        id: skill.id,
+        enabled: !skill.enabled,
+      });
+      update({
+        capabilities,
+        selected: session?.selected.filter((name) => name !== skill.name) || [],
+      });
+    } catch (e) {
+      onError(e);
+    }
+  }
+  async function read(skill: Skill) {
+    try {
+      setPreview({
+        name: skill.name,
+        text: await invoke("skills.read", { name: skill.name }),
+      });
+    } catch (e) {
+      onError(e);
+    }
+  }
+  async function loadChanges() {
+    setLoading(true);
+    try {
+      setChanges(await invoke("changes"));
+    } catch (e) {
+      onError(e);
+    } finally {
+      setLoading(false);
+    }
+  }
+  const active =
+    session?.capabilities.skills.filter(
+      (skill) => skill.valid && skill.enabled && !skill.shadowed,
+    ) || [];
+  return (
+    <aside className="inspector">
+      <div className="panel-tabs">
+        {[
+          { id: "skills", label: "Skills", icon: Puzzle },
+          { id: "agents", label: "代理", icon: Bot },
+          { id: "activity", label: "活动", icon: Activity },
+          { id: "changes", label: "变更", icon: FileDiff },
+        ].map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            className={tab === id ? "active" : ""}
+            onClick={() => setTab(id)}
+          >
+            <Icon size={14} />
+            {label}
+          </button>
+        ))}
+      </div>
+      {!session ? (
+        <div className="panel-empty">
+          <Puzzle size={28} />
+          <p>项目能力会显示在这里</p>
+          <small>打开项目后，管理技能、子代理与代码变更。</small>
+        </div>
+      ) : (
+        <>
+          {tab === "skills" && (
+            <>
+              <div className="panel-title">
+                <div>
+                  <h3>
+                    技能库 <span>{active.length}</span>
+                  </h3>
+                  <p>按需加载，让代理掌握你的工作流</p>
+                </div>
+                <button
+                  className="icon-button"
+                  aria-label="刷新技能"
+                  onClick={() => refresh().catch(onError)}
+                >
+                  <RefreshCw size={15} />
+                </button>
+              </div>
+              <button
+                className="import-button"
+                onClick={() => importDirectory("skills")}
+              >
+                <Plus size={15} />
+                导入技能目录
+              </button>
+              <div className="panel-scroll">
+                {!session.capabilities.skills.length && (
+                  <div className="instruction-empty">
+                    <Puzzle size={26} />
+                    <h4>添加第一个 Skill</h4>
+                    <p>
+                      选择包含 SKILL.md 的目录，也可以将技能放入项目的
+                      .codeclaw/skills。
+                    </p>
+                  </div>
+                )}
+                {session.capabilities.skills.map((skill) => (
+                  <article
+                    className={
+                      "capability-card " +
+                      (!skill.valid || skill.shadowed ? "invalid" : "")
+                    }
+                    key={skill.id}
+                  >
+                    <div className="card-heading">
+                      <Puzzle size={15} />
+                      <strong>{skill.name}</strong>
+                      <button
+                        role="switch"
+                        aria-checked={skill.enabled}
+                        aria-label={"启用技能 " + skill.name}
+                        className={"switch " + (skill.enabled ? "on" : "")}
+                        disabled={!skill.valid || session.busy}
+                        onClick={() => toggle(skill)}
+                      >
+                        <span />
+                      </button>
+                    </div>
+                    <p>{skill.description || skill.error}</p>
+                    <div className="card-meta">
+                      <span>
+                        {skill.scope === "project"
+                          ? "项目"
+                          : skill.scope === "global"
+                            ? "全局"
+                            : "导入"}
+                      </span>
+                      <span className={!skill.valid ? "bad" : ""}>
+                        {!skill.valid
+                          ? "格式错误"
+                          : skill.shadowed
+                            ? "被同名技能覆盖"
+                            : !skill.enabled
+                              ? "已停用"
+                              : session.loaded.includes(skill.name)
+                                ? "本会话已加载"
+                                : "可用"}
+                      </span>
+                    </div>
+                    {skill.compatibility && (
+                      <small className="compatibility">
+                        环境要求：{skill.compatibility}
+                      </small>
+                    )}
+                    {skill.valid && skill.enabled && !skill.shadowed && (
+                      <div className="card-actions">
+                        <button onClick={() => read(skill)}>查看指令</button>
+                        <button
+                          className={
+                            session.selected.includes(skill.name)
+                              ? "selected-link"
+                              : ""
+                          }
+                          onClick={() =>
+                            update({
+                              selected: session.selected.includes(skill.name)
+                                ? session.selected.filter(
+                                    (name) => name !== skill.name,
+                                  )
+                                : [...session.selected, skill.name],
+                            })
+                          }
+                        >
+                          {session.selected.includes(skill.name)
+                            ? "已选择"
+                            : "用于下次任务"}
+                        </button>
+                      </div>
+                    )}
+                    {skill.error && skill.description && (
+                      <small className="bad">{skill.error}</small>
+                    )}
+                  </article>
+                ))}
+                <details className="root-details">
+                  <summary>
+                    扫描目录与优先级 <ChevronDown size={13} />
+                  </summary>
+                  <p>
+                    项目 .codeclaw → .agents → .claude → 导入目录 → 环境目录 →
+                    全局目录。首个有效且启用的同名技能优先。
+                  </p>
+                </details>
+              </div>
+              <div className="panel-footnote">
+                <CircleCheck size={13} />
+                名称和描述常驻，完整指令按需加载
+              </div>
+            </>
+          )}
+          {tab === "agents" && (
+            <>
+              <div className="panel-title">
+                <div>
+                  <h3>子代理</h3>
+                  <p>分配独立任务，查看执行结果</p>
+                </div>
+                <Bot size={17} />
+              </div>
+              <button
+                className="import-button"
+                onClick={() => importDirectory("agents")}
+              >
+                <Plus size={15} />
+                导入代理定义目录
+              </button>
+              <div className="panel-scroll">
+                {session.workers.length > 0 && (
+                  <>
+                    <span className="section-label">会话任务</span>
+                    {session.workers.map((worker) => (
+                      <article
+                        className="capability-card"
+                        key={worker.agent_id}
+                      >
+                        <div className="card-heading">
+                          <Bot size={15} />
+                          <strong>{worker.agent_type || "子代理"}</strong>
+                          <span className={"status-dot " + worker.status} />
+                        </div>
+                        <p>{worker.task}</p>
+                        <div className="card-meta">
+                          <span>{worker.model || "继承主模型"}</span>
+                          <span>
+                            {worker.status === "running"
+                              ? "执行中"
+                              : worker.status === "completed"
+                                ? "已完成"
+                                : worker.status === "cancelled"
+                                  ? "已取消"
+                                  : "异常"}
+                          </span>
+                        </div>
+                        {worker.status === "running" && worker.background && (
+                          <button
+                            className="text-button"
+                            onClick={() =>
+                              invoke("agents.cancel", {
+                                agentId: worker.agent_id,
+                              }).catch(onError)
+                            }
+                          >
+                            <Square size={12} />
+                            停止代理
+                          </button>
+                        )}
+                        {worker.result && (
+                          <details>
+                            <summary>查看结果</summary>
+                            <div className="worker-result">
+                              <Markdown text={worker.result} />
+                            </div>
+                          </details>
+                        )}
+                      </article>
+                    ))}
+                  </>
+                )}
+                <span className="section-label">可用角色</span>
+                {session.capabilities.agents.map((agent, index) => (
+                  <article
+                    className={
+                      "capability-card " + (!agent.valid ? "invalid" : "")
+                    }
+                    key={agent.name + index}
+                  >
+                    <div className="card-heading">
+                      <Bot size={15} />
+                      <strong>{agent.name}</strong>
+                      {!agent.valid && <CircleAlert size={14} />}
+                    </div>
+                    <p>{agent.description || agent.error}</p>
+                    <div className="card-meta">
+                      <span>
+                        {agent.scope === "builtin"
+                          ? "内置"
+                          : agent.scope === "project"
+                            ? "项目"
+                            : "自定义"}
+                      </span>
+                      <span>
+                        {!agent.valid
+                          ? "不可用"
+                          : agent.shadowed
+                            ? "被覆盖"
+                            : agent.model || "继承模型"}
+                      </span>
+                    </div>
+                    {agent.allowed_tools && (
+                      <small className="compatibility">
+                        工具：{agent.allowed_tools.join(", ") || "无"}
+                      </small>
+                    )}
+                    {agent.valid && !agent.shadowed && (
+                      <button
+                        className="text-button"
+                        onClick={() =>
+                          update({
+                            draft:
+                              "请使用 " +
+                              agent.name +
+                              " 子代理完成以下任务：\n",
+                          })
+                        }
+                      >
+                        分配任务 →
+                      </button>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
+          {tab === "activity" && (
+            <>
+              <div className="panel-title">
+                <div>
+                  <h3>执行活动</h3>
+                  <p>工具调用与引擎日志</p>
+                </div>
+                <Activity size={17} />
+              </div>
+              <div className="panel-scroll">
+                {!session.tools.length && !session.logs.length && (
+                  <div className="instruction-empty">
+                    <Activity size={26} />
+                    <p>开始任务后，执行过程会显示在这里。</p>
+                  </div>
+                )}
+                {session.tools.map((tool, i) => (
+                  <details className="tool-row" key={tool.id + i}>
+                    <summary>
+                      <span className={"status-dot " + tool.status} />
+                      <code>{tool.name}</code>
+                      <ChevronDown size={12} />
+                    </summary>
+                    {tool.result && <pre>{tool.result}</pre>}
+                  </details>
+                ))}
+                {session.logs.length > 0 && (
+                  <details className="engine-logs">
+                    <summary>引擎日志 · {session.logs.length}</summary>
+                    <pre>{session.logs.join("\n")}</pre>
+                  </details>
+                )}
+              </div>
+            </>
+          )}
+          {tab === "changes" && (
+            <>
+              <div className="panel-title">
+                <div>
+                  <h3>工作区变更</h3>
+                  <p>Git 状态与当前差异</p>
+                </div>
+                <button
+                  aria-label="刷新变更"
+                  className="icon-button"
+                  disabled={loading}
+                  onClick={loadChanges}
+                >
+                  <RefreshCw size={15} />
+                </button>
+              </div>
+              <button
+                className="import-button"
+                disabled={loading}
+                onClick={loadChanges}
+              >
+                {loading ? "读取中…" : "读取 Git 变更"}
+              </button>
+              <div className="panel-scroll">
+                {changes ? (
+                  <>
+                    <pre className="git-status">
+                      {changes.status || "没有变更，或当前目录不是 Git 仓库。"}
+                    </pre>
+                    <pre className="diff-view">{changes.diff}</pre>
+                    <p className="fine-print">
+                      Diff 展示已跟踪文件；新文件列在状态中。
+                    </p>
+                  </>
+                ) : (
+                  <div className="instruction-empty">
+                    <FileDiff size={26} />
+                    <p>读取项目当前变更，审阅代理修改。</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </>
+      )}
+      {preview && (
+        <div className="overlay" onClick={() => setPreview(null)}>
+          <section
+            className="dialog skill-preview"
+            role="dialog"
+            aria-label="技能指令"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">SKILL INSTRUCTIONS</span>
+                <h2>{preview.name}</h2>
+              </div>
+              <button
+                aria-label="关闭技能预览"
+                className="icon-button"
+                onClick={() => setPreview(null)}
+              >
+                <X size={18} />
+              </button>
+            </header>
+            <div className="preview-body">
+              <Markdown text={preview.text} />
+            </div>
+          </section>
+        </div>
+      )}
+    </aside>
+  );
+}

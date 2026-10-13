@@ -12,7 +12,7 @@
 <h1 align="center">CodeClaw</h1>
 
 <p align="center">
-  <b>Open-source agentic coding engine for the terminal.</b>
+  <b>Local AI coding workbench — Desktop + Python Agent Engine.</b>
 </p>
 
 <p align="center">
@@ -32,6 +32,18 @@
 ## English
 
 ### What is CodeClaw?
+
+**Desktop Preview:** an Electron + React workbench now wraps the existing Python
+engine, with project/session management, streaming chat, model settings, Skills,
+custom subagents, permission cards and Git changes. See the
+[desktop guide](docs/desktop.md) for setup, supported formats and verification.
+
+```bash
+python -m pip install -e .
+cd desktop
+npm ci
+npm run dev
+```
 
 CodeClaw is a **fully open-source, Python-native agentic coding CLI** — a ground-up rewrite inspired by Claude Code's architecture. It connects to any LLM provider (Anthropic, OpenAI, or local models) and gives you an AI coding agent right in your terminal.
 
@@ -182,6 +194,17 @@ MIT
 ## 中文
 
 ### CodeClaw 是什么？
+
+**桌面预览版：** 保留 Python 引擎，新增 Electron + React 工作台，支持本地项目与会话、
+流式聊天、模型配置、Skills 导入与启停、自定义子代理、权限审批和 Git 变更查看。
+详见[桌面使用说明](docs/desktop.md)。
+
+```bash
+python -m pip install -e .
+cd desktop
+npm ci
+npm run dev
+```
 
 CodeClaw 是一个**完全开源的、纯 Python 实现的 AI 编程智能体 CLI 引擎**——参考 Claude Code 架构从零重写。它可以连接任何 LLM 供应商（Anthropic、OpenAI 或本地模型），在终端里为你提供一个 AI 编程代理。
 

@@ -126,6 +126,15 @@ Ensure your plan is complete and unambiguous:
                 f"Please write your plan to this file before calling exit_plan_mode."
             )
 
+        approval = self.context.get("plan_approval_callback")
+        if approval:
+            import inspect
+            answer = approval(plan_content)
+            if inspect.isawaitable(answer):
+                answer = await answer
+            if answer != "allow":
+                return "Plan was not approved. Stay in plan mode and revise it according to user feedback."
+
         plan_manager.set_mode("normal")
 
         return (

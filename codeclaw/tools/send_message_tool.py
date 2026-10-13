@@ -63,7 +63,7 @@ class SendMessageTool(BaseAgenticTool):
         if not team_mgr.is_active:
             return "Error: No active team. Create one with team_create_tool first."
 
-        from_name = "team-lead"
+        from_name = self.context.get("team_member_name", "team-lead")
 
         result = team_mgr.send_message(
             from_name=from_name,

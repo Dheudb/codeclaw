@@ -20,6 +20,7 @@ setup(
         "lark-oapi",
         "loguru",
         "python-dotenv",
+        "PyYAML>=6.0",
     ],
     entry_points={
         "console_scripts": [

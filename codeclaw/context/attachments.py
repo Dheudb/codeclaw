@@ -107,8 +107,18 @@ class AttachmentCollector:
             return None
 
         diffs = []
-        for fpath in changed_files[:10]:
+        inspected = 0
+        for fpath in changed_files:
             abs_path = fpath if os.path.isabs(fpath) else os.path.join(cwd, fpath)
+            try:
+                relative = os.path.relpath(abs_path, cwd)
+            except ValueError:
+                relative = abs_path
+            if relative.replace("\\", "/").split("/")[0].lower() in {".codeclaw", ".git"}:
+                continue
+            if inspected >= 10:
+                break
+            inspected += 1
             if not os.path.isfile(abs_path):
                 diffs.append(f"--- {fpath}\n(file deleted or moved)")
                 if fpath in self._last_file_snapshots:
@@ -333,8 +343,7 @@ class AttachmentCollector:
         if not user_query or turn_count - self._skill_recommended_at_turn < 8:
             return None
 
-        if self._skill_cache is None:
-            self._skill_cache = self._discover_available_skills(cwd, skill_roots)
+        self._skill_cache = self._discover_available_skills(cwd, skill_roots)
 
         if not self._skill_cache:
             return None
@@ -369,51 +378,8 @@ class AttachmentCollector:
         self, cwd: str, extra_roots: Optional[List[str]] = None
     ) -> List[dict]:
         """Scan filesystem for SKILL.md files and extract keywords."""
-        from pathlib import Path
-
-        roots = []
-        if extra_roots:
-            for r in extra_roots:
-                p = Path(r)
-                if p.is_dir():
-                    roots.append(p)
-
-        cwd_path = Path(cwd)
-        roots.extend([
-            cwd_path / ".codeclaw" / "skills",
-            cwd_path / ".claude" / "skills",
-            Path.home() / ".codeclaw" / "skills",
-            Path.home() / ".claude" / "skills",
-        ])
-
-        env_paths = os.environ.get("CODECLAW_SKILLS_PATHS", "")
-        for item in env_paths.split(os.pathsep):
-            item = item.strip()
-            if item:
-                roots.append(Path(item))
-
-        discovered = []
-        seen = set()
-        for root in roots:
-            if not root.exists() or not root.is_dir():
-                continue
-            for current_root, _dirs, filenames in os.walk(root):
-                if "SKILL.md" not in filenames:
-                    continue
-                skill_path = os.path.join(current_root, "SKILL.md")
-                abs_path = os.path.abspath(skill_path)
-                if abs_path in seen:
-                    continue
-                seen.add(abs_path)
-                skill_name = os.path.basename(current_root)
-                keywords = self._extract_skill_keywords(abs_path, skill_name)
-                discovered.append({
-                    "name": skill_name,
-                    "path": abs_path,
-                    "keywords": keywords,
-                })
-
-        return discovered
+        from codeclaw.skills.registry import SkillRegistry
+        return [{**skill, "keywords": self._extract_skill_keywords(skill["path"], skill["name"])} for skill in SkillRegistry(cwd).active()]
 
     @staticmethod
     def _extract_skill_keywords(skill_path: str, skill_name: str) -> List[str]:
