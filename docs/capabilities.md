@@ -1,0 +1,58 @@
+# Skills 与子代理
+
+## Skills
+
+发现顺序为项目 `.codeclaw/skills`、`.agents/skills`、`.claude/skills`、导入目录、
+`CODECLAW_SKILLS_PATHS`，最后是用户目录下对应的三个位置。同名的第一个有效且启用的 Skill 生效。
+界面显示无效、禁用和被覆盖的条目。
+
+```text
+my-skill/
+  SKILL.md
+  references/
+  scripts/
+  assets/
+```
+
+```markdown
+---
+name: my-skill
+description: Describe when and how to use this skill.
+---
+
+Instructions go here.
+```
+
+名称应与目录名一致，使用小写 ASCII 字母、数字和单个连字符。导入会挂载已有目录，
+不会复制文件；移动或删除原目录会影响使用。修改外部文件后点击刷新。
+名称和描述进入模型上下文，完整指令与资源按需读取。选择“用于下次任务”会显式加载指令。
+资源访问限制在 Skill 根目录；`allowed-tools` 等声明目前不构成权限授予。
+
+可以导入 `examples/skills/project-review` 体验示例。
+
+## 自定义子代理
+
+定义放在项目/用户的 `.codeclaw/agents`、`.agents/agents`、`.claude/agents`，
+也可以在代理面板导入目录。每个代理使用一个 Markdown 文件：
+
+```markdown
+---
+name: reviewer
+description: Review code independently.
+model: inherit
+tools: Read, Grep, Glob, Skill
+skills: [project-review]
+---
+
+Inspect the task and report concrete findings. Do not modify files.
+```
+
+工具别名支持 Read、Write、Edit、Bash、Grep、Glob、Skill，以及实际工具名。
+省略 `tools` 会继承可用工具集合；空列表表示不提供工具。
+引用的 Skills 必须有效且启用。自定义定义不能覆盖内置角色。
+
+子代理有独立消息上下文，使用共享项目文件系统，仍受工具权限控制。
+后台任务最多同时运行四个；代理面板可以查看结果和取消任务。
+`model` 可以是 `inherit` 或同一连接提供的模型 ID。
+
+先导入示例 Skill，再导入 `examples/agents`，即可使用示例 reviewer。

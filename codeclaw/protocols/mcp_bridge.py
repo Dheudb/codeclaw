@@ -23,7 +23,7 @@ except ImportError:
 
 def runtime_info():
     return {"available": MCP_AVAILABLE, "python": sys.version.split()[0], "executable": sys.executable,
-            "message": "" if MCP_AVAILABLE else "MCP 需要 Python 3.10+ 及 mcp 依赖。选择相应解释器并安装 codeclaw[mcp]。"}
+            "message": "" if MCP_AVAILABLE else "MCP 依赖不可用。桌面用户请重新解压完整程序包；源码环境需 Python 3.10+ 并安装 codeclaw[mcp]。"}
 
 
 def connection_error(exc):

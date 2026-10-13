@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { EngineTransport } = require("./transport.cjs");
+const { resolveEnginePython } = require("./runtime.cjs");
 if (process.env.CODECLAW_USER_DATA)
   app.setPath("userData", process.env.CODECLAW_USER_DATA);
 const sessions = new Map();
@@ -34,7 +35,7 @@ function settings() {
   try {
     return JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
   } catch {
-    return { projects: [], python: process.env.CODECLAW_PYTHON || "python" };
+    return { projects: [] };
   }
 }
 function saveSettings(value) {
@@ -63,7 +64,12 @@ async function createSession(project, resumeId) {
   if (sessions.size >= 8) throw new Error("已打开 8 个会话，请先关闭一个会话");
   const id = crypto.randomUUID();
   const transport = new EngineTransport({
-    python: settings().python || "python",
+    python: resolveEnginePython({
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      projectRoot: path.resolve(__dirname, "../.."),
+    }),
+    isolated: app.isPackaged,
     engineRoot: engineRoot(),
     project,
     onEvent: (event) => send(id, event),
@@ -123,21 +129,6 @@ async function invoke(method, params) {
       await source.transport.close();
     }
     return true;
-  }
-  if (method === "python.choose") {
-    const result = await dialog.showOpenDialog(window, {
-      title: "选择 Python 解释器",
-      properties: ["openFile"],
-      filters:
-        process.platform === "win32"
-          ? [{ name: "Python", extensions: ["exe"] }]
-          : [],
-    });
-    if (result.canceled) return null;
-    const config = settings();
-    config.python = result.filePaths[0];
-    saveSettings(config);
-    return config.python;
   }
   const source = sessions.get(params.session);
   if (!source) throw new Error("请先打开项目");

@@ -1,7 +1,10 @@
 name: Desktop workbench
+permissions:
+  contents: read
 on:
   push:
   pull_request:
+  workflow_dispatch:
 jobs:
   engine:
     runs-on: ${{ matrix.os }}
@@ -14,7 +17,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install -e .
+      - if: matrix.python == '3.9'
+        run: python -m pip install -e .
+      - if: matrix.python != '3.9'
+        run: python -m pip install -e ".[mcp]"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - run: python -m unittest discover -s tests -v
   desktop:
     runs-on: windows-latest
@@ -31,11 +40,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -e ..
+      - run: python -m pip install -e "..[mcp]"
       - run: npm ci
       - run: npm run build
       - run: npm test
       - run: npm run test:e2e
+      - run: npm run test:mcp
+        env:
+          CODECLAW_PYTHON: python
+      - run: npm run pack
+        env:
+          CODECLAW_BUILD_PYTHON: python
+      - run: npm run test:mcp
+        env:
+          CODECLAW_TEST_EXECUTABLE: ${{ github.workspace }}\desktop\release\CodeClaw-win32-x64\CodeClaw.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CodeClaw-Windows-x64
+          path: desktop/release/CodeClaw-win32-x64/
       - uses: actions/upload-artifact@v4
         if: always()
         with:

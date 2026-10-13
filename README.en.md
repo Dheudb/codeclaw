@@ -1,0 +1,69 @@
+# CodeClaw
+
+A local AI coding workbench with **Desktop + CLI on one Python agent engine**.
+
+[中文](README.md) · [Documentation](docs/README.md) · [Development](docs/development.md)
+
+CodeClaw works with local projects and provides model conversations, file and shell
+tools, Skills, custom subagents, MCP connections, permissions and session history.
+The desktop uses Electron and React. It is currently a preview.
+
+## Desktop
+
+The Windows portable package includes Python and the MCP dependencies. Extract the
+entire package and run `CodeClaw.exe`; users do not install Python or select an
+interpreter. Open a project and configure the model endpoint in Settings.
+Some third-party local MCP servers still require their own Node.js, uv or other runtime.
+
+This repository contains source. Run `npm run pack` in `desktop/` to build a
+Windows package, or use the artifact from the desktop GitHub Actions workflow.
+
+## Source setup
+
+Use Python 3.12+, Node.js 24+, Git and ripgrep for development. The base CLI supports
+Python 3.9+; the MCP extra needs Python 3.10+.
+
+```bash
+git clone https://github.com/Dheudb/codeclaw.git
+cd codeclaw
+python -m venv .venv
+# Activate .venv using your shell's command
+python -m pip install -e ".[mcp]"
+cd desktop
+npm ci
+npm run dev
+```
+
+Source builds discover the repository's `.venv`; developers can override it with
+`CODECLAW_PYTHON`. Portable packages always use their bundled runtime.
+Run `codeclaw` from the project you want to work on to use the CLI.
+
+## Capabilities
+
+- Project sessions and streaming conversations, shared with the CLI after saving.
+- Skills discovery, import, enable/disable, validation and resource loading.
+- Built-in and custom subagents with foreground/background tasks and cancellation.
+- MCP curated catalog, official registry browsing, stdio/Streamable HTTP configuration and connection tests.
+- Built-in DuckDuckGo search, static page extraction and external search MCP tools.
+- File/shell tools, permission prompts, planning and Git changes.
+
+Anthropic Messages and OpenAI-compatible Chat Completions are implemented; this is
+not a guarantee that every model or gateway supports every agent feature.
+Concurrent edits to one saved session, MCP OAuth, legacy SSE, automatic updates,
+signed installers and macOS/Linux desktop distributions are not implemented.
+The Feishu integration has been removed.
+
+## Repository
+
+| Path | Purpose |
+|---|---|
+| `codeclaw/` | Python engine, CLI, desktop bridge, Skills, subagents and protocols |
+| `desktop/` | Electron, React, build scripts and UI tests |
+| `tests/` | Python tests and offline MCP protocol fixtures |
+| `examples/` | Importable Skills and agent definitions |
+| `docs/` | Usage, configuration, architecture and development guides |
+
+Credentials, sessions, virtual environments and generated packages are ignored by
+Git. See [development](docs/development.md) for test and packaging commands.
+
+[MIT License](LICENSE)

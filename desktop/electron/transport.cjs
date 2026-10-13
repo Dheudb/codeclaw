@@ -3,24 +3,28 @@ const readline = require("node:readline");
 const path = require("node:path");
 
 class EngineTransport {
-  constructor({ python, engineRoot, project, onEvent }) {
+  constructor({ python, engineRoot, project, onEvent, isolated = false }) {
     this.pending = new Map();
     this.sequence = 0;
     this.closed = false;
     this.stderr = "";
-    this.child = spawn(python, ["-u", "-m", "codeclaw.desktop.bridge"], {
-      cwd: project,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        PYTHONPATH: [engineRoot, process.env.PYTHONPATH]
-          .filter(Boolean)
-          .join(path.delimiter),
-        PYTHONIOENCODING: "utf-8",
-        PYTHONUNBUFFERED: "1",
+    this.child = spawn(
+      python,
+      [...(isolated ? ["-I"] : []), "-u", "-m", "codeclaw.desktop.bridge"],
+      {
+        cwd: project,
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          PYTHONPATH: [engineRoot, process.env.PYTHONPATH]
+            .filter(Boolean)
+            .join(path.delimiter),
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUNBUFFERED: "1",
+        },
       },
-    });
+    );
     this.lines = readline.createInterface({ input: this.child.stdout });
     this.lines.on("line", (line) => {
       let message;

@@ -1,20 +1,16 @@
 import { useState } from "react";
-import { X, KeyRound, Check, MonitorCog } from "lucide-react";
+import { X, KeyRound, Check } from "lucide-react";
 import type { EngineEvent, ModelConfig } from "./types";
 import Markdown from "./Markdown";
 
 export function SettingsDialog({
   config,
-  python,
   close,
   save,
-  choosePython,
 }: {
   config?: ModelConfig;
-  python: string;
   close: () => void;
   save: (value: ModelConfig & { apiKey: string }) => Promise<void>;
-  choosePython: () => Promise<void>;
 }) {
   const [form, setForm] = useState({
     provider: config?.provider || "openai",
@@ -112,19 +108,6 @@ export function SettingsDialog({
           </label>
           <p className="fine-print">
             沿用 CodeClaw 本机配置；密钥不会返回聊天界面。
-          </p>
-        </div>
-        <div className="form-section">
-          <h3>
-            <MonitorCog size={16} /> Python 运行环境
-          </h3>
-          <div className="python-row">
-            <code>{python}</code>
-            <button onClick={choosePython}>选择解释器</button>
-          </div>
-          <p className="fine-print">
-            解释器需安装 CodeClaw 依赖，修改后对新打开的会话生效。MCP 服务需要
-            Python 3.10+ 和 MCP 依赖。
           </p>
         </div>
         {error && (

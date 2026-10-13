@@ -6,9 +6,12 @@ const http = require("node:http");
 const assert = require("node:assert/strict");
 const { spawn, execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
-const python =
-  process.env.CODECLAW_PYTHON ||
-  path.join(root, "../.venv-mcp/Scripts/python.exe");
+const python = process.env.CODECLAW_TEST_EXECUTABLE
+  ? path.join(
+      path.dirname(process.env.CODECLAW_TEST_EXECUTABLE),
+      "resources/python/python.exe",
+    )
+  : process.env.CODECLAW_PYTHON || "python";
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-mcp-e2e-"));
 const project = path.join(fixture, "mcp-project");
 const data = path.join(fixture, "app-data");
@@ -117,6 +120,11 @@ async function main() {
     OPENAI_BASE_URL: `http://127.0.0.1:${api.address().port}/v1`,
     NO_PROXY: "127.0.0.1,localhost",
   };
+  if (process.env.CODECLAW_TEST_EXECUTABLE) {
+    env.CODECLAW_PYTHON = "Z:\\missing-system-python\\python.exe";
+    env.PYTHONHOME = "Z:\\missing-system-python";
+    env.PYTHONPATH = "Z:\\missing-site-packages";
+  }
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.CODECLAW_DEV_URL;
   const app = await electron.launch({
@@ -153,6 +161,12 @@ async function main() {
   try {
     await page.locator(".project-item").click();
     await page.getByRole("heading", { name: "今天想构建什么？" }).waitFor();
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    assert.equal(
+      await page.getByText("选择解释器", { exact: true }).count(),
+      0,
+    );
+    await page.getByRole("button", { name: "关闭设置", exact: true }).click();
     await page.getByRole("button", { name: "MCP 市场", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "MCP 市场" });
     await dialog.getByText("Exa Search", { exact: true }).waitFor();
@@ -206,6 +220,7 @@ async function main() {
     const shared = execFileSync(
       python,
       [
+        ...(process.env.CODECLAW_TEST_EXECUTABLE ? ["-I"] : []),
         "-c",
         "import sys,json; from codeclaw.protocols.mcp_config import MCPConfigStore; print(json.dumps(MCPConfigStore(sys.argv[1]).snapshot()))",
         path.join(project, "mcp_servers.json"),

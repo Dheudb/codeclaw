@@ -35,7 +35,6 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [activeId, setActiveId] = useState("");
   const [recent, setRecent] = useState<string[]>([]);
-  const [python, setPython] = useState("python");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -55,7 +54,6 @@ export default function App() {
       .invoke("app.initialize")
       .then((value) => {
         setRecent(value.projects || []);
-        setPython(value.python || "python");
       })
       .catch((error) => setNotice(String(error)));
     return window.codeclaw.onEvent((event) =>
@@ -205,10 +203,6 @@ export default function App() {
   }
   async function saveModel(value: ModelConfig & { apiKey: string }) {
     update({ config: await invoke("config.save", value) });
-  }
-  async function choosePython() {
-    const executable = await window.codeclaw.invoke("python.choose");
-    if (executable) setPython(executable);
   }
   const title =
     active?.messages
@@ -698,10 +692,8 @@ export default function App() {
         <SettingsDialog
           key={activeId}
           config={active?.config}
-          python={python}
           close={() => setSettingsOpen(false)}
           save={saveModel}
-          choosePython={choosePython}
         />
       )}
       {mcpOpen && active && (
