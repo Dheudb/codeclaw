@@ -18,7 +18,11 @@ execFileSync(python, [path.join(__dirname, "prepare-runtime.py")], {
   windowsHide: true,
 });
 const release = path.join(root, "release");
-const output = path.join(release, "CodeClaw-win32-" + process.arch);
+const packageName =
+  process.env.CODECLAW_PACKAGE_NAME || "CodeClaw-win32-" + process.arch;
+if (!/^[A-Za-z0-9_-]+$/.test(packageName))
+  throw new Error("Invalid package name");
+const output = path.join(release, packageName);
 fs.mkdirSync(release, { recursive: true });
 if (
   path.dirname(output) !== release ||

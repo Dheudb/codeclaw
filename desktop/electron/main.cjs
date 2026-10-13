@@ -9,6 +9,7 @@ if (process.env.CODECLAW_USER_DATA)
 const sessions = new Map();
 let window;
 let quitting = false;
+let configTransport;
 const engineMethods = new Set([
   "prompt",
   "respond",
@@ -58,6 +59,24 @@ function projectKey(value) {
     ? path.resolve(value).toLowerCase()
     : path.resolve(value);
 }
+function globalConfig() {
+  if (!configTransport || configTransport.closed) {
+    const directory = app.getPath("userData");
+    fs.mkdirSync(directory, { recursive: true });
+    configTransport = new EngineTransport({
+      python: resolveEnginePython({
+        packaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        projectRoot: path.resolve(__dirname, "../.."),
+      }),
+      isolated: app.isPackaged,
+      engineRoot: engineRoot(),
+      project: directory,
+      onEvent: () => {},
+    });
+  }
+  return configTransport;
+}
 async function createSession(project, resumeId) {
   project = fs.realpathSync(project);
   if (!fs.statSync(project).isDirectory()) throw new Error("项目目录不存在");
@@ -95,7 +114,14 @@ async function invoke(method, params) {
     return true;
   }
   if (method === "app.initialize")
-    return { ...settings(), version: app.getVersion() };
+    return {
+      ...settings(),
+      version: app.getVersion(),
+      config: await globalConfig().request("config.get"),
+    };
+  if (method === "config.get") return globalConfig().request("config.get");
+  if (method === "config.save" && !params.session)
+    return globalConfig().request("config.save", params);
   if (method === "project.open") {
     let project = params.path;
     if (!project) {
@@ -196,11 +222,13 @@ app.whenReady().then(() => {
 });
 app.on("window-all-closed", () => app.quit());
 app.on("before-quit", (event) => {
-  if (quitting || !sessions.size) return;
+  if (quitting || (!sessions.size && !configTransport)) return;
   event.preventDefault();
   quitting = true;
   Promise.allSettled(
-    [...sessions.values()].map(({ transport }) => transport.close()),
+    [...sessions.values()]
+      .map(({ transport }) => transport.close())
+      .concat(configTransport ? [configTransport.close()] : []),
   ).finally(() => {
     sessions.clear();
     app.quit();

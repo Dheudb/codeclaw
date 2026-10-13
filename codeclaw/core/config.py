@@ -9,9 +9,23 @@ written back when /model changes them.
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 CONFIG_DIR = Path(os.environ.get("CODECLAW_CONFIG_DIR", str(Path.home() / ".codeclaw"))).expanduser()
 CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+def normalize_api_base_url(provider: str, value: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.fragment:
+        raise ValueError("API URL must be a valid HTTP(S) address without a fragment")
+    path = parsed.path.rstrip("/")
+    if provider == "openai" and path.endswith("/chat/completions"):
+        path = path[:-len("/chat/completions")]
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
 
 # Keys we persist — maps config key → environment variable name
 _PERSISTED_KEYS = {

@@ -55,12 +55,11 @@ export function SettingsDialog({
           <h3>
             <KeyRound size={16} /> 模型连接
           </h3>
-          {!config && (
-            <p className="notice">先打开项目，再为编程代理配置模型。</p>
-          )}
+          <p className="notice">模型连接可先保存，打开项目后即可使用。</p>
           <label>
             API 协议
             <select
+              aria-label="API 协议"
               value={form.provider}
               onChange={(e) =>
                 setForm({
@@ -69,6 +68,7 @@ export function SettingsDialog({
                   model: "",
                   baseUrl: "",
                   hasKey: false,
+                  apiKey: "",
                 })
               }
             >
@@ -79,6 +79,7 @@ export function SettingsDialog({
           <label>
             模型 ID
             <input
+              aria-label="模型 ID"
               placeholder="输入供应商提供的完整模型 ID"
               value={form.model}
               onChange={(e) => setForm({ ...form, model: e.target.value })}
@@ -87,7 +88,8 @@ export function SettingsDialog({
           <label>
             API 地址
             <input
-              placeholder="留空使用协议默认地址"
+              aria-label="API 地址"
+              placeholder="API 根地址或完整的 /chat/completions 地址"
               value={form.baseUrl}
               onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
             />
@@ -100,6 +102,7 @@ export function SettingsDialog({
                 : "本地无鉴权服务可填 not-needed"}
             </span>
             <input
+              aria-label="API Key"
               type="password"
               autoComplete="off"
               value={form.apiKey}
@@ -119,7 +122,7 @@ export function SettingsDialog({
           <button onClick={close}>取消</button>
           <button
             className="primary"
-            disabled={!config || saving || !form.model.trim()}
+            disabled={saving || !form.model.trim()}
             onClick={submit}
           >
             <Check size={15} />

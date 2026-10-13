@@ -36,6 +36,7 @@ export default function App() {
   const [activeId, setActiveId] = useState("");
   const [recent, setRecent] = useState<string[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [globalModel, setGlobalModel] = useState<ModelConfig>();
   const [mcpOpen, setMcpOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelTab, setPanelTab] = useState("skills");
@@ -54,6 +55,7 @@ export default function App() {
       .invoke("app.initialize")
       .then((value) => {
         setRecent(value.projects || []);
+        setGlobalModel(value.config);
       })
       .catch((error) => setNotice(String(error)));
     return window.codeclaw.onEvent((event) =>
@@ -202,7 +204,17 @@ export default function App() {
     }
   }
   async function saveModel(value: ModelConfig & { apiKey: string }) {
-    update({ config: await invoke("config.save", value) });
+    const config = await invoke("config.save", value);
+    setGlobalModel(config);
+    if (active) update({ config });
+  }
+  async function openSettings() {
+    try {
+      setGlobalModel(await window.codeclaw.invoke("config.get"));
+      setSettingsOpen(true);
+    } catch (error) {
+      onError(error);
+    }
   }
   const title =
     active?.messages
@@ -349,10 +361,7 @@ export default function App() {
             <span />
             本地工作区<span className="version">v0.1.0</span>
           </div>
-          <button
-            className="sidebar-action"
-            onClick={() => setSettingsOpen(true)}
-          >
+          <button className="sidebar-action" onClick={openSettings}>
             <Settings2 size={16} />
             设置与模型
           </button>
@@ -614,10 +623,7 @@ export default function App() {
                   <option value="plan">Plan</option>
                 </select>
                 <span className="toolbar-divider" />
-                <button
-                  className="model-button"
-                  onClick={() => setSettingsOpen(true)}
-                >
+                <button className="model-button" onClick={openSettings}>
                   <span
                     className={
                       active?.config.model ? "model-dot connected" : "model-dot"
@@ -691,7 +697,7 @@ export default function App() {
       {settingsOpen && (
         <SettingsDialog
           key={activeId}
-          config={active?.config}
+          config={active?.config || globalModel}
           close={() => setSettingsOpen(false)}
           save={saveModel}
         />

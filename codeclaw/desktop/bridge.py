@@ -8,7 +8,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from codeclaw.core.config import load_config, load_config_into_env, save_config
+from codeclaw.core.config import load_config, load_config_into_env, save_config, normalize_api_base_url
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.protocols.mcp_config import MCPConfigStore
@@ -250,6 +250,8 @@ class DesktopBridge:
             self.emit({"type": "turn_finished"})
 
     async def dispatch(self, method, params):
+        if method == "config.get":
+            return self.config()
         if method == "mcp.list":
             return self.mcp_snapshot()
         if method == "mcp.market":
@@ -362,9 +364,7 @@ class DesktopBridge:
             model = str(params.get("model", "")).strip()
             if not model:
                 raise ValueError("Model ID is required")
-            base_url = str(params.get("baseUrl", "")).strip()
-            if base_url and not base_url.startswith(("https://", "http://")):
-                raise ValueError("API URL must use http or https")
+            base_url = normalize_api_base_url(provider, params.get("baseUrl", ""))
             cfg = load_config()
             cfg.update(model_provider=provider, **{provider + "_model": model, provider + "_base_url": base_url})
             if params.get("apiKey"):

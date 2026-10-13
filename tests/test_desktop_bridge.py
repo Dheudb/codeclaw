@@ -1,6 +1,8 @@
 import asyncio
 import tempfile
 import unittest
+import os
+import json
 from pathlib import Path
 
 from codeclaw.desktop.bridge import DesktopBridge
@@ -11,6 +13,31 @@ from unittest.mock import patch
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_model_can_save_without_project_engine_and_normalizes_full_endpoint(self):
+        existing = {"openai_api_key": "fixture-existing-key", "other_setting": "keep"}
+        with patch("codeclaw.desktop.bridge.load_config", return_value=existing), patch("codeclaw.desktop.bridge.save_config") as saved, patch.dict(os.environ, {}, clear=True):
+            result = await self.bridge.dispatch("config.save", {"provider": "openai", "model": " model-id ", "baseUrl": "https://example.invalid/v1/chat/completions/", "apiKey": ""})
+            self.assertEqual(result["baseUrl"], "https://example.invalid/v1")
+            self.assertEqual(result["model"], "model-id")
+            self.assertTrue(result["hasKey"])
+            self.assertNotIn("fixture-existing-key", json.dumps(result))
+            self.assertEqual(saved.call_args.args[0]["other_setting"], "keep")
+            self.assertEqual(saved.call_args.args[0]["openai_api_key"], "fixture-existing-key")
+            self.assertIsNone(self.bridge.engine)
+
+    async def test_global_config_read_redacts_key(self):
+        with patch("codeclaw.desktop.bridge.load_config", return_value={"model_provider": "openai", "openai_model": "test-model", "openai_api_key": "fixture-private-key"}):
+            result = await self.bridge.dispatch("config.get", {})
+        self.assertEqual(result["model"], "test-model")
+        self.assertTrue(result["hasKey"])
+        self.assertNotIn("fixture-private-key", json.dumps(result))
+
+    async def test_invalid_model_url_does_not_write_config(self):
+        with patch("codeclaw.desktop.bridge.save_config") as saved:
+            with self.assertRaises(ValueError):
+                await self.bridge.dispatch("config.save", {"provider": "openai", "model": "model", "baseUrl": "not-an-api-url"})
+        saved.assert_not_called()
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

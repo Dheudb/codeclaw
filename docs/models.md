@@ -13,8 +13,8 @@
 | 仅提供 Responses 的接口 | 尚未实现 |
 | 其他厂商原生接口 | 需要适配，或使用其兼容端点 |
 
-选择 OpenAI 协议时，Base URL 通常是服务给出的 API 根地址，例如 `http://localhost:8000/v1`，
-而不是完整的 `/chat/completions` 地址。填写服务实际提供的模型 ID。
+模型连接可以在打开项目前保存。选择 OpenAI 协议时，推荐填写 API 根地址，例如 `http://localhost:8000/v1`；
+也接受完整的 `/chat/completions` 地址，保存时会自动转换为根地址。填写服务实际提供的模型 ID。
 如果本地服务不校验 Key，可填写占位值；SDK 初始化仍可能要求非空 Key。
 
 ## 环境变量

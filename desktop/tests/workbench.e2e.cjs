@@ -53,6 +53,7 @@ fs.writeFileSync(
   }),
 );
 const received = [];
+const requestedPaths = [];
 const messageText = (message) =>
   typeof message.content === "string"
     ? message.content
@@ -66,6 +67,7 @@ const isChildRequest = (body) =>
       ),
   );
 const server = http.createServer((request, response) => {
+  requestedPaths.push(request.url);
   let raw = "";
   request.on("data", (chunk) => {
     raw += chunk;
@@ -261,6 +263,44 @@ async function main() {
     await page
       .getByRole("heading", { name: "把想法变成可运行的代码。" })
       .waitFor();
+    // Global model setup works before any project is opened.
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    const settingsDialog = page.getByRole("dialog", { name: "工作台设置" });
+    await settingsDialog
+      .getByLabel("API 协议", { exact: true })
+      .selectOption("openai");
+    await settingsDialog
+      .getByLabel("模型 ID", { exact: true })
+      .fill("desktop-test");
+    await settingsDialog
+      .getByLabel("API 地址", { exact: true })
+      .fill(baseUrl + "/chat/completions");
+    await settingsDialog
+      .locator('input[type="password"]')
+      .fill("local-test-key");
+    assert(
+      await settingsDialog
+        .getByRole("button", { name: "保存配置" })
+        .isEnabled(),
+    );
+    await settingsDialog.getByRole("button", { name: "保存配置" }).click();
+    await settingsDialog.waitFor({ state: "hidden" });
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(config, "config.json"), "utf8"))
+        .openai_base_url,
+      baseUrl,
+    );
+    assert.equal(received.length, 0, "Saving settings must not call the model");
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    assert.equal(
+      await settingsDialog.getByLabel("API 地址", { exact: true }).inputValue(),
+      baseUrl,
+    );
+    assert.equal(
+      await settingsDialog.locator('input[type="password"]').inputValue(),
+      "",
+    );
+    await page.getByRole("button", { name: "关闭设置", exact: true }).click();
     await page
       .locator(".project-item")
       .filter({ hasText: "sample-project" })
@@ -413,6 +453,10 @@ async function main() {
         .count()) > 0,
     );
     assert.deepEqual(errors, []);
+    assert(
+      requestedPaths.length > 0 &&
+        requestedPaths.every((url) => url === "/v1/chat/completions"),
+    );
     console.log(
       "PASS: desktop launch, real Python RPC, skill activation, permission-gated write, two background agents, project isolation, session resume",
     );
