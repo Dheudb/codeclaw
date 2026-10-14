@@ -42,7 +42,7 @@ class RegistryTests(unittest.TestCase):
         root = self.skill(self.project / ".codeclaw" / "skills")
         (root / "SKILL.md").write_text("---\nname: wrong-name\ndescription: test\n---\nInstructions", encoding="utf-8")
         self.assertFalse(self.registry.discover()[0]["valid"])
-        self.assertEqual(self.registry.active(), [])
+        self.assertFalse(any(s["scope"] == "project" for s in self.registry.active()))
         with self.assertRaises(ValueError):
             self.registry.read("review")
 
@@ -71,9 +71,29 @@ class RegistryTests(unittest.TestCase):
             registry.resolve("reviewer")
 
     def test_refresh_sees_new_skills(self):
-        self.assertFalse(self.registry.active())
+        initial = len(self.registry.active())
         self.skill(self.project / ".agents" / "skills")
-        self.assertEqual(len(self.registry.active()), 1)
+        self.assertEqual(len(self.registry.active()), initial + 1)
+
+    def test_bundled_skills_load_without_user_configuration(self):
+        builtins = [s for s in self.registry.active() if s["scope"] == "builtin"]
+        self.assertEqual({s["name"] for s in builtins}, {"code-review", "debug-issue", "web-research"})
+        for skill in builtins:
+            self.assertTrue(Path(skill["path"]).is_file())
+            self.assertIn("Project directory: " + str(self.project.resolve()), self.registry.read(skill["name"]))
+        self.assertFalse(any(scope == "builtin" for _, scope in self.registry.roots("agents")))
+
+    def test_custom_skill_overrides_builtin_and_disable_restores_fallback(self):
+        self.skill(self.project / ".codeclaw" / "skills", name="code-review", body="CUSTOM_REVIEW_INSTRUCTIONS")
+        custom = self.registry.resolve("code-review")
+        self.assertEqual(custom["scope"], "project")
+        self.assertIn("CUSTOM_REVIEW_INSTRUCTIONS", self.registry.read("code-review"))
+        self.registry.update(disabled_skills=[custom["id"]])
+        builtin = self.registry.resolve("code-review")
+        self.assertEqual(builtin["scope"], "builtin")
+        self.registry.update(disabled_skills=[custom["id"], builtin["id"]])
+        with self.assertRaises(ValueError):
+            self.registry.read("code-review")
 
 
 class TaskTests(unittest.IsolatedAsyncioTestCase):

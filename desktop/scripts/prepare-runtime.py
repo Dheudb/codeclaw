@@ -33,6 +33,7 @@ def main():
     if not (base / "python.exe").is_file() or not (base / "Lib" / "os.py").is_file():
         raise SystemExit("Use a standard Windows CPython installation to build the bundled runtime.")
     inputs = [ROOT / "setup.py", ROOT / "pyproject.toml"] + sorted((ROOT / "codeclaw").rglob("*.py"))
+    inputs += sorted((ROOT / "codeclaw" / "skills" / "builtin").rglob("SKILL.md"))
     fingerprint = hashlib.sha256(sys.version.encode() + b"".join(path.relative_to(ROOT).as_posix().encode() + path.read_bytes() for path in inputs)).hexdigest()
     manifest = RUNTIME / "codeclaw-runtime.json"
     if manifest.exists() and json.loads(manifest.read_text())["fingerprint"] == fingerprint:

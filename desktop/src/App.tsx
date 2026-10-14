@@ -30,6 +30,7 @@ import SessionSidebar from "./SessionSidebar";
 import { CatalogPreferences } from "./catalog-preferences";
 import PanelResizer from "./PanelResizer";
 import TurnProcess from "./TurnProcess";
+import SkillInput from "./SkillInput";
 import { clampPanelWidth, DEFAULT_PANEL_WIDTH } from "./panel-width";
 
 const basename = (value: string) =>
@@ -551,28 +552,9 @@ export default function App() {
                 ))}
               </div>
             )}
-            <textarea
-              ref={input}
-              aria-label="任务输入"
-              placeholder={
-                active
-                  ? "描述你的任务，或选择一个 Skill 开始…"
-                  : "点击新建会话即可开始，也可以打开项目…"
-              }
-              disabled={opening || !active || active.busy}
-              value={active?.draft || ""}
-              onChange={(e) => update({ draft: e.target.value })}
-              onKeyDown={(e) => {
-                if (
-                  e.key === "Enter" &&
-                  !e.shiftKey &&
-                  !e.nativeEvent.isComposing
-                ) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-            />
+            <SkillInput key={activeId} sessionId={activeId} draft={active?.draft || ""}
+              selected={active?.selected || []} capabilities={active?.capabilities}
+              disabled={opening || !active || active.busy} inputRef={input} update={update} send={send} />
             <div className="composer-toolbar">
               <div className="composer-options">
                 <select

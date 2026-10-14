@@ -50,6 +50,9 @@ class SkillRegistry:
         if kind == "skills":
             roots += [(Path(p).expanduser().resolve(), "environment") for p in os.environ.get("CODECLAW_SKILLS_PATHS", "").split(os.pathsep) if p]
         roots += [(self.home / name / kind, "global") for name in (".codeclaw", ".agents", ".claude")]
+        if kind == "skills":
+            # Ship actual SKILL.md resources; user/project skills take precedence.
+            roots.append((Path(__file__).with_name("builtin"), "builtin"))
         seen = set()
         for root, scope in roots:
             key = os.path.normcase(str(root.resolve()))

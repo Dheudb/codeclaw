@@ -675,6 +675,7 @@ a,
   background: linear-gradient(0deg, #fcfcfb 85%, #fcfcfb00);
 }
 .composer {
+  position: relative;
   background: #fff;
   border: 1px solid #dfe2d7;
   box-shadow: 0 3px 16px #31382006;
@@ -802,6 +803,29 @@ a,
   padding: 3px 6px;
   border-radius: 4px;
 }
+.skill-picker {
+  position: absolute;
+  z-index: 25;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  padding: 7px;
+  border: 1px solid #e3e6df;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 30px #27321e15;
+}
+.skill-picker-heading { display: flex; justify-content: space-between; gap: 8px; padding: 6px 9px 10px; color: #727b67; font-size: 11px; }
+.skill-picker-heading small { color: #9a9f94; font-size: 10px; }
+.skill-picker-list { max-height: min(300px, 40vh); overflow-y: auto; overscroll-behavior: contain; }
+.skill-picker-list button { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; border-radius: 6px; padding: 10px 9px; background: transparent; text-align: left; font-size: 12px; color: #495140; }
+.skill-picker-list button[aria-selected="true"] { background: #f0f2ed; }
+.skill-picker-list button:disabled { opacity: .6; }
+.skill-picker-list svg { flex-shrink: 0; color: #859177; }
+.skill-picker-name { flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-picker-description { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #92998b; font-size: 11px; }
+.skill-picker-scope { flex-shrink: 0; color: #949e89; font-size: 10px; }
+.skill-picker-empty, .skill-picker-status { margin: 0; padding: 12px 9px; font-size: 11px; line-height: 1.8; color: #92998b; overflow-wrap: anywhere; }
 .composer-caption {
   max-width: 780px;
   margin: 11px auto 0;

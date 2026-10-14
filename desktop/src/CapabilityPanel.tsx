@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { skillScope } from "./skill-mention";
 import {
   Plus,
   RefreshCw,
@@ -177,11 +178,7 @@ export default function CapabilityPanel({
                     <p>{skill.description || skill.error}</p>
                     <div className="card-meta">
                       <span>
-                        {skill.scope === "project"
-                          ? "项目"
-                          : skill.scope === "global"
-                            ? "全局"
-                            : "导入"}
+                        {skillScope(skill.scope)}
                       </span>
                       <span className={!skill.valid ? "bad" : ""}>
                         {!skill.valid
@@ -236,7 +233,7 @@ export default function CapabilityPanel({
                   </summary>
                   <p>
                     项目 .codeclaw → .agents → .claude → 导入目录 → 环境目录 →
-                    全局目录。首个有效且启用的同名技能优先。
+                    全局目录 → 内置目录。首个有效且启用的同名技能优先。
                   </p>
                 </details>
               </div>

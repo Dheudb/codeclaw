@@ -10,6 +10,7 @@ setup(
     url="https://github.com/Dheudb/codeclaw",
     license="MIT",
     packages=find_packages(include=["codeclaw", "codeclaw.*"]),
+    package_data={"codeclaw.skills": ["builtin/*/SKILL.md"]},
     python_requires=">=3.9",
     install_requires=[
         "anthropic>=0.40.0",
