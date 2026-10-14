@@ -125,7 +125,8 @@ class DesktopBridge:
 
     def require_idle(self):
         workers = self.engine and self.engine.tool_context["subagent_tasks"].tasks.values()
-        if self.busy() or (workers and any(not task.done() for task in workers)):
+        commands = self.engine and self.engine.tool_context["command_sessions"].records.values()
+        if self.busy() or (workers and any(not task.done() for task in workers)) or (commands and any(row["status"] == "running" for row in commands)):
             raise ValueError("Wait for running tasks or stop them before changing this session")
 
     def config(self):
@@ -442,6 +443,7 @@ class DesktopBridge:
                 future.cancel()
             if self.engine:
                 await self.engine.tool_context["subagent_tasks"].close()
+                await self.engine.tool_context["command_sessions"].close()
                 await self.engine.request_abort()
             if self.busy():
                 self.turn_task.cancel()
@@ -450,7 +452,10 @@ class DesktopBridge:
         if method == "agents.cancel":
             if not self.engine:
                 raise ValueError("No active engine")
-            return await self.engine.tool_context["subagent_tasks"].cancel(params["agentId"])
+            return json.loads(await self.engine.available_tools["agent_tool"].execute(action="cancel", agent_id=params["agentId"]))
+        if method in {"agents.list", "agents.capacity"}:
+            await self.ensure_engine()
+            return json.loads(await self.engine.available_tools["agent_tool"].execute(action=method.split(".")[1]))
         if method in {"config.save", "config.select"}:
             self.require_idle()
             cfg = save_connection(load_config(), params) if method == "config.save" else select_model(load_config(), params.get("connectionId"), params.get("model"))

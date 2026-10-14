@@ -1,0 +1,188 @@
+"""Owned command processes with UTF-8 stdin and lossless, paged disk output."""
+import asyncio
+import codecs
+import json
+import os
+import signal
+import subprocess
+import time
+import uuid
+from pathlib import Path
+
+
+class CommandSessions:
+    OUTPUT_LIMIT = 50 * 1024 * 1024
+
+    def __init__(self, root, on_status=None):
+        self.root = Path(root).resolve()
+        self.records = {}
+        self.on_status = on_status
+
+    def _get(self, identity, owner):
+        row = self.records.get(identity)
+        if not row or row["owner"] != owner:
+            raise ValueError("Unknown command in this agent session")
+        return row
+
+    async def start(self, *, argv=None, command=None, cwd, owner, stdin=None, keep_stdin_open=False, timeout_ms=120000):
+        if bool(argv) == bool(command):
+            raise ValueError("Provide either argv or command")
+        if argv and (not all(isinstance(v, str) and "\x00" not in v for v in argv)):
+            raise ValueError("argv must contain strings without NUL")
+        self.root.mkdir(parents=True, exist_ok=True)
+        identity = "cmd-" + uuid.uuid4().hex
+        options = {"cwd": cwd, "stdin": asyncio.subprocess.PIPE, "stdout": asyncio.subprocess.PIPE,
+                   "stderr": asyncio.subprocess.PIPE, "env": {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}}
+        if os.name == "nt":
+            options["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            options["start_new_session"] = True
+        process = await (asyncio.create_subprocess_exec(*argv, **options) if argv else asyncio.create_subprocess_shell(command, **options))
+        row = {"id": identity, "owner": owner, "cwd": str(Path(cwd).resolve()), "argv": argv,
+               "command": command, "status": "running", "exit_code": None, "started_at": int(time.time() * 1000),
+               "stdin_open": True, "process": process, "input_lock": asyncio.Lock()}
+        self.records[identity] = row
+        async def pump(stream, name):
+            size = 0
+            with (self.root / (identity + "." + name)).open("wb") as output:
+                while True:
+                    chunk = await stream.read(65536)
+                    if not chunk:
+                        break
+                    if size + len(chunk) > self.OUTPUT_LIMIT:
+                        row["status"] = "output_limit"
+                        await self._kill(row)
+                        break
+                    output.write(chunk)
+                    output.flush()
+                    size += len(chunk)
+        pumps = [asyncio.create_task(pump(process.stdout, "stdout")), asyncio.create_task(pump(process.stderr, "stderr"))]
+        async def monitor():
+            try:
+                await asyncio.wait_for(process.wait(), timeout_ms / 1000)
+            except asyncio.TimeoutError:
+                row["status"] = "timed_out"
+                await self._kill(row)
+            except asyncio.CancelledError:
+                row["status"] = "interrupted"
+                await self._kill(row)
+                raise
+            finally:
+                await asyncio.gather(*pumps)
+                row["exit_code"] = process.returncode
+                row["stdin_open"] = False
+                if row["status"] == "running":
+                    row["status"] = "completed" if process.returncode == 0 else "failed"
+                row["finished_at"] = int(time.time() * 1000)
+                self._save(row)
+        row["monitor"] = asyncio.create_task(monitor())
+        try:
+            await self.write(identity, owner, stdin or "", eof=not keep_stdin_open)
+        except BaseException:
+            await self.cancel(identity, owner)
+            raise
+        self._save(row)
+        return identity
+
+    async def _kill(self, row):
+        process = row["process"]
+        if process.returncode is not None:
+            return
+        if os.name == "nt":
+            killer = await asyncio.create_subprocess_exec("taskkill", "/PID", str(process.pid), "/T", "/F",
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW)
+            await killer.wait()
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        await process.wait()
+
+    async def write(self, identity, owner, text="", eof=False):
+        row = self._get(identity, owner)
+        async with row["input_lock"]:
+            if row["status"] != "running" or not row["stdin_open"]:
+                raise ValueError("Command stdin is closed")
+            stream = row["process"].stdin
+            try:
+                if text:
+                    stream.write(text.encode("utf-8"))
+                    await asyncio.wait_for(stream.drain(), 30)
+                if eof:
+                    stream.close()
+                    row["stdin_open"] = False
+            except (BrokenPipeError, ConnectionResetError):
+                row["stdin_open"] = False
+                if text:
+                    raise ValueError("Command exited before accepting stdin")
+
+    async def poll(self, identity, owner, wait_ms=0):
+        row = self._get(identity, owner)
+        task = row.get("monitor")
+        if task and not task.done() and wait_ms:
+            await asyncio.wait([task], timeout=wait_ms / 1000)
+        return self.snapshot(row)
+
+    def read(self, identity, owner, stream="stdout", offset=0, max_bytes=4000):
+        row = self._get(identity, owner)
+        path = self.root / (identity + "." + stream)
+        size = path.stat().st_size if path.exists() else 0
+        if offset > size:
+            raise ValueError("Output offset exceeds current output size")
+        data = b""
+        if path.exists():
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                data = handle.read(max_bytes)
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        terminal = row["status"] != "running" and offset + len(data) == size
+        text = decoder.decode(data, final=terminal)
+        consumed = len(data) - len(decoder.getstate()[0])
+        return {"stream": stream, "text": text, "offset": offset, "next_offset": offset + consumed,
+                "total_bytes": size, "eof": row["status"] != "running" and offset + consumed == size,
+                "has_more": offset + consumed < size}
+
+    async def cancel(self, identity, owner):
+        row = self._get(identity, owner)
+        if row["status"] == "running":
+            row["status"] = "cancelled"
+            await self._kill(row)
+        if row.get("monitor"):
+            await asyncio.shield(row["monitor"])
+        return self.snapshot(row)
+
+    @staticmethod
+    def snapshot(row):
+        return {k: v for k, v in row.items() if k not in {"process", "monitor", "input_lock"}}
+
+    def _save(self, row):
+        from codeclaw.core.storage import atomic_json
+        atomic_json(self.root / (row["id"] + ".json"), self.snapshot(row))
+        if self.on_status:
+            self.on_status({k: row[k] for k in ("id", "owner", "status", "exit_code")})
+
+    def restore(self):
+        if not self.root.exists():
+            return
+        for path in self.root.glob("cmd-*.json"):
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+                if row.get("id") != path.stem or not path.stem.startswith("cmd-") or len(path.stem) != 36:
+                    continue
+                if row.get("status") == "running":
+                    row["status"] = "interrupted"
+                row["stdin_open"] = False
+                self.records[row["id"]] = row
+            except (ValueError, OSError):
+                continue
+
+    async def close(self, owner=None):
+        await asyncio.gather(*(self.cancel(row["id"], row["owner"]) for row in list(self.records.values())
+                               if row["status"] == "running" and (owner is None or row["owner"] == owner)))

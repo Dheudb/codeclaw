@@ -43,12 +43,16 @@ def validate_server(config):
     if not isinstance(values, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in values.items()):
         raise ValueError(mapping + " must be a JSON object of strings")
     for key, value in values.items():
-        if mapping == "env" and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+        if mapping == "env" and (not key or "=" in key or "\x00" in key):
             raise ValueError("Invalid environment variable name")
         if mapping == "headers" and (not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", key) or "\r" in value or "\n" in value):
             raise ValueError("Invalid HTTP header")
         if "\x00" in value:
             raise ValueError("MCP values cannot contain NUL")
+    timeout = config.get("tool_timeout_sec", 20)
+    if type(timeout) not in {int, float} or not 1 <= timeout <= 600:
+        raise ValueError("tool_timeout_sec must be between 1 and 600")
+    result["tool_timeout_sec"] = timeout
     result[mapping] = dict(values)
     return result
 
@@ -121,6 +125,8 @@ class MCPConfigStore:
             raise ValueError("MCP server no longer exists")
         config = copy.deepcopy(config)
         if isinstance(previous, dict) and existing:
+            if "tool_timeout_sec" not in config and "tool_timeout_sec" in previous:
+                config["tool_timeout_sec"] = previous["tool_timeout_sec"]
             for key in ("env", "headers"):
                 for field, value in config.get(key, {}).items():
                     if value == "" and field in previous.get(key, {}):

@@ -141,6 +141,7 @@ export type SessionView = InitialSession & {
   streamIndex: number | null;
   tools: ToolActivity[];
   workers: Worker[];
+  commands: Record<string, { id: string; status: string; owner: string }>;
   interactions: EngineEvent[];
   loaded: string[];
   logs: string[];

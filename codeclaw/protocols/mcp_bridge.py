@@ -39,6 +39,7 @@ class MCPToolWrapper:
     def __init__(self, server_name, session, mcp_tool):
         safe = re.sub(r"[^A-Za-z0-9_-]", "_", server_name + "_" + mcp_tool.name)
         self.name = safe[:64]
+        self.server_name = server_name
         self.description = mcp_tool.description or "MCP tool from " + server_name
         self.mcp_tool_name = mcp_tool.name
         self.session = session
@@ -127,7 +128,7 @@ class MCPBridge:
                         local = hostname == "localhost"
                     client = await stack.enter_async_context(httpx.AsyncClient(headers=config.get("headers", {}), timeout=httpx.Timeout(30, connect=15), trust_env=not local, follow_redirects=False))
                     channels = await stack.enter_async_context(streamable_http_client(config["url"], http_client=client))
-                session = await stack.enter_async_context(ClientSession(channels[0], channels[1], read_timeout_seconds=timedelta(seconds=20)))
+                session = await stack.enter_async_context(ClientSession(channels[0], channels[1], read_timeout_seconds=timedelta(seconds=config["tool_timeout_sec"])))
                 # AnyIO cancel scopes must stay on their owning task. The session owns deadlines.
                 await session.initialize()
                 tools = []

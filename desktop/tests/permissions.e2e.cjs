@@ -45,7 +45,7 @@ const server = http.createServer((req, res) => {
     res.end("data: [DONE]\n\n");
   });
 });
-let app, page;
+let app, page, workingDirectory;
 const errors = [];
 async function launch() {
   const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
@@ -66,7 +66,7 @@ async function verifyWrite(filename, task = "WRITE", outside = false) {
   const before = await permissions(); await send("PERM_" + task + ":" + filename);
   await page.getByText("权限任务完成：PERM_" + task + ":" + filename, { exact: true }).last().waitFor(); await finished();
   assert.equal(await permissions(), before, "Full access must not emit approval requests");
-  assert(fs.existsSync(path.join(outside ? fixture : project, filename)));
+  assert(fs.existsSync(path.join(outside ? fixture : task === "SHELL" ? workingDirectory : project, filename)));
 }
 async function main() {
   try {
@@ -74,6 +74,7 @@ async function main() {
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "permission-fixture", openai_api_key: "fixture-key", openai_base_url: `http://127.0.0.1:${server.address().port}/v1` });
     await launch(); await page.locator(".new-task").click(); await page.locator(".session-item.active").waitFor();
     const firstId = await activeId();
+    workingDirectory = await page.locator(".breadcrumbs button").first().getAttribute("title");
     assert.equal(await mode().inputValue(), "ask");
     assert.equal(await mode().locator("option").count(), 2);
     await send("PERM_WRITE:pending.txt"); await page.getByRole("button", { name: "允许一次", exact: true }).waitFor();

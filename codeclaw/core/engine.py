@@ -49,6 +49,8 @@ from codeclaw.utils.vcr import VCRManager
 from codeclaw.features.ultraplan import UltraplanManager
 from codeclaw.agents.team import TeamManager
 from codeclaw.tools.bash_tool import BashTool
+from codeclaw.tools.command_tool import CommandTool
+from codeclaw.utils.command_sessions import CommandSessions
 from codeclaw.tools.file_read_tool import FileReadTool
 from codeclaw.tools.file_edit_tool import FileEditTool
 from codeclaw.tools.file_write_tool import FileWriteTool
@@ -127,9 +129,15 @@ class QueryEngine:
         local_tokenizer_path: str = None,
         cwd: Optional[str] = None,
         approval_policy=None,
+        reasoning_effort=None,
     ):
         self.session_cwd = cwd or os.getcwd()
+        if reasoning_effort not in {None, "low", "medium", "high", "xhigh"}:
+            raise ValueError("Unsupported reasoning_effort")
+        self.reasoning_effort = reasoning_effort
         self.model_provider = self._resolve_model_provider(model_provider, model)
+        if reasoning_effort and self.model_provider != "openai":
+            raise ValueError("Explicit reasoning_effort currently requires an OpenAI-compatible provider")
         self.api_base_url = api_base_url or os.environ.get("OPENAI_BASE_URL", "")
         self.local_tokenizer_path = (
             local_tokenizer_path
@@ -232,6 +240,7 @@ class QueryEngine:
 
         all_tools = {
             "bash_tool": BashTool(),
+            "command_tool": CommandTool(),
             "file_read_tool": FileReadTool(),
             "file_edit_tool": FileEditTool(),
             "file_write_tool": FileWriteTool(),
@@ -305,6 +314,7 @@ class QueryEngine:
             "ultraplan_manager": self.ultraplan_manager,
             "browser_manager": self.browser_manager,
             "shell_task_manager": self.shell_task_manager,
+            "command_sessions": self._new_command_sessions(self.session_id),
             "in_progress_tools": self.in_progress_tools,
             "recent_tool_activity": self.recent_tool_activity,
             "loop_transition_history": self.loop_transition_history,
@@ -312,6 +322,7 @@ class QueryEngine:
             "post_sampling_history": self.post_sampling_history,
             "session_token_usage": self.session_token_usage,
             "thinking_config": self.default_thinking_config,
+            "reasoning_effort": self.reasoning_effort,
             "mode_thinking_overrides": self.mode_thinking_overrides,
             "model_provider": self.model_provider,
             "primary_model": self.primary_model,
@@ -1804,7 +1815,7 @@ class QueryEngine:
 
         callback = self.tool_context.get("capability_event")
         if callback:
-            callback({"type": "subagent_status", "agent": dict(record)})
+            callback({"type": "subagent_status", "agent": {k: v for k, v in record.items() if k not in {"role_definition", "pending_messages"}}})
 
     def _build_message_statistics(self) -> dict:
         stats = {
@@ -2775,16 +2786,27 @@ class QueryEngine:
         if changed:
             self._sync_message_context()
 
+    def _new_command_sessions(self, sid):
+        def notify(row):
+            callback = self.tool_context.get("capability_event")
+            if callback:
+                callback({"type": "command_status", "command": row})
+        return CommandSessions(artifact_directory(self.session_cwd) / sid / "commands", notify)
+
     def load_session(self, sid: str) -> bool:
         state = self.session_manager.load_session_state(sid)
         msgs = state.get("messages", [])
         if msgs or state.get("_valid"):
             self.session_id = sid
+            self.tool_context["command_sessions"] = self._new_command_sessions(sid)
+            self.tool_context["command_sessions"].restore()
             self.last_persist_ok = self.session_manager.last_save_ok
             self.last_persist_error = self.session_manager.last_save_error
             self.messages = msgs
             self._sync_message_context()
             metadata = state.get("metadata", {})
+            self.agent_id = metadata.get("agent", {}).get("agent_id") or self.agent_id
+            self.tool_context["agent_id"] = self.agent_id
             self.tool_context["file_changes"] = metadata.get("file_changes", [])
             self.tool_context["workspace_moves"] = metadata.get("workspace_moves", [])
             self.turn_traces = metadata.get("turn_traces", [])
@@ -2836,6 +2858,8 @@ class QueryEngine:
             self.security_classifier.load_state(metadata.get("security_classifier", {}))
             self.vcr_manager.load_state(metadata.get("vcr", {}))
             thinking_state = metadata.get("thinking", {})
+            self.reasoning_effort = thinking_state.get("reasoning_effort")
+            self.tool_context["reasoning_effort"] = self.reasoning_effort
             self.default_thinking_config = self._normalize_thinking_config(
                 thinking_state.get("default", self.default_thinking_config)
             ) or {"type": "disabled"}
@@ -2847,6 +2871,9 @@ class QueryEngine:
             if loaded_mode_overrides:
                 self.mode_thinking_overrides = loaded_mode_overrides
             self.subagent_registry = metadata.get("subagents", [])
+            for worker in self.subagent_registry:
+                if worker.get("status") == "running":
+                    worker["status"] = "interrupted"
             self.team_manager.load_state(metadata.get("team", {}))
             self.ultraplan_manager.load_state(metadata.get("ultraplan", {}))
             self.coordinator_mode = metadata.get("coordinator_mode", False)
@@ -2895,8 +2922,10 @@ class QueryEngine:
             "thinking": {
                 "default": self.default_thinking_config,
                 "mode_overrides": self.mode_thinking_overrides,
+                "reasoning_effort": self.reasoning_effort,
             },
             "subagents": self.subagent_registry,
+            "delegation": self.tool_context.get("delegation", {}),
             "turn_traces": self.turn_traces,
             "team": self.team_manager.export_state(),
             "ultraplan": self.ultraplan_manager.export_state(),
@@ -2928,11 +2957,13 @@ class QueryEngine:
 
     def persist_session_state(self):
         if self.agent_depth > 0:
-            self.session_manager.save_subagent_transcript(
+            ok = self.session_manager.save_subagent_transcript(
                 self.agent_id or self.session_id,
-                {"messages": self.messages, "metadata": self._build_session_metadata()},
+                {"messages": self.messages, "metadata": self._build_session_metadata(),
+                 "session_id": self.tool_context.get("delegation", {}).get("owner_session_id")},
             )
-            return
+            self.last_persist_ok = ok
+            return ok
 
         ok = self.session_manager.save_session_state(
             self.session_id,
@@ -3573,6 +3604,8 @@ class QueryEngine:
                 }
                 if tools_schema:
                     create_kwargs["tools"] = tools_schema
+                if self.reasoning_effort:
+                    create_kwargs["reasoning_effort"] = self.reasoning_effort
 
                 text_fragments = []
                 text_filter = ToolTextFilter()
@@ -3979,6 +4012,16 @@ class QueryEngine:
         loop_state = self._build_loop_state()
 
         while loop_state["turn_count"] < loop_state["max_turns"]:
+            mailbox = self.tool_context.get("delegated_mailbox")
+            if mailbox:
+                incoming = mailbox()
+                if incoming:
+                    for message in incoming:
+                        self.messages.append(create_user_message("Parent message: " + message["text"], origin="subagent"))
+                    self._sync_message_context()
+                    self.persist_session_state()
+                    if self.session_manager.last_save_ok:
+                        self.tool_context["ack_delegated_mailbox"]({m["id"] for m in incoming})
             if self.team_manager.is_active:
                 while True:
                     team_message = await self.team_manager.receive_message(self.agent_id)

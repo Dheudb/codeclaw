@@ -11,7 +11,7 @@ class SubagentTasks:
 
     def check_capacity(self, count):
         if sum(not task.done() for task in self.tasks.values()) + count > self.limit:
-            raise ValueError("At most {} background subagents may run at once".format(self.limit))
+            raise ValueError("At most {} subagents may run at once".format(self.limit))
 
     def launch_batch(self, coroutines, on_cancelled_before_start=None):
         try:
@@ -25,12 +25,17 @@ class SubagentTasks:
             self.launch(agent_id, coroutine, on_cancelled_before_start)
 
     def launch(self, agent_id, coroutine, on_cancelled_before_start=None):
+        if agent_id in self.tasks and not self.tasks[agent_id].done():
+            coroutine.close()
+            raise ValueError("Subagent is already running")
         try:
             self.check_capacity(1)
         except ValueError:
             coroutine.close()
             raise
 
+        self.results.pop(agent_id, None)
+        self.delivered.discard(agent_id)
         started = False
         async def run():
             nonlocal started

@@ -3,7 +3,7 @@ import yaml
 from codeclaw.agents.builtin_agents import BUILTIN_AGENTS
 from codeclaw.skills.registry import SkillRegistry, read_frontmatter
 
-TOOL_ALIASES = {"Read": "file_read_tool", "Write": "file_write_tool", "Edit": "file_edit_tool", "Bash": "bash_tool", "Grep": "grep_tool", "Glob": "glob_tool", "Skill": "skill_tool"}
+TOOL_ALIASES = {"Read": "file_read_tool", "Write": "file_write_tool", "Edit": "file_edit_tool", "Bash": "bash_tool", "Grep": "grep_tool", "Glob": "glob_tool", "Skill": "skill_tool", "Exec": "command_tool"}
 
 
 def tool_list(value, aliases=True):
@@ -36,7 +36,22 @@ class AgentRegistry:
                         raise ValueError("model must be a string")
                     if metadata.get("model") == "inherit":
                         metadata["model"] = None
+                    effort = metadata.get("reasoning_effort")
+                    if effort not in {None, "low", "medium", "high", "xhigh"}:
+                        raise ValueError("Unsupported reasoning_effort")
+                    web = metadata.get("web_search", "inherit")
+                    if web not in {"inherit", "disabled", "enabled"}:
+                        raise ValueError("web_search must be inherit, disabled or enabled")
+                    servers = metadata.get("mcp_servers")
+                    if servers is not None and (not isinstance(servers, list) or not all(isinstance(v, str) for v in servers)):
+                        raise ValueError("mcp_servers must be a list of server names; [] disables MCP")
+                    readonly = metadata.get("read_only", False)
+                    if type(readonly) is not bool:
+                        raise ValueError("read_only must be a boolean")
+                    if "sandbox_mode" in metadata:
+                        raise ValueError("sandbox_mode is not supported; use explicit tools and read_only (not an OS sandbox)")
                     entry.update(name=name, description=description, system_prompt=body, model=metadata.get("model"), allowed_tools=tool_list(metadata.get("tools")), skills=tool_list(metadata.get("skills", []), aliases=False), agent_type=name, agent_role="custom", disallowed_tools=set())
+                    entry.update(reasoning_effort=effort, web_search=web, mcp_servers=servers, read_only=readonly)
                     if name in BUILTIN_AGENTS:
                         raise ValueError("Custom agent name conflicts with a built-in agent")
                     if any("(" in tool for tool in entry["allowed_tools"]):

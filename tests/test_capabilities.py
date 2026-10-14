@@ -212,7 +212,11 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
             self.assertEqual(len(entered), 10)
             gate.set()
-            await asyncio.gather(*batches)
+            outcomes = await asyncio.gather(*batches, return_exceptions=True)
+            self.assertEqual(sum(isinstance(outcome, ValueError) for outcome in outcomes), 1,
+                             "Foreground launches must also respect host capacity")
+            self.assertEqual(len(set(entered)), 10)
+            await tool.execute(prompt="你好", count=10)
             self.assertEqual(len(set(entered)), 20)
             await tool.execute(prompt="你好", count=10, run_in_background=True)
             manager = tool.context["subagent_tasks"]

@@ -10,6 +10,7 @@ export function createSession(initial: InitialSession): SessionView {
     streamIndex: null,
     tools: initial.activity || [],
     workers: initial.workers || [],
+    commands: {},
     interactions: [],
     loaded: [],
     logs: [],
@@ -40,6 +41,8 @@ export function applyEvent(
 ): SessionView {
   if (event.session !== session.id) return session;
   switch (event.type) {
+    case "command_status":
+      return { ...session, commands: { ...session.commands, [event.command.id]: event.command } };
     case "file_changed":
       return { ...session, fileChanges: [event.change, ...(session.fileChanges || []).filter((file) => file.path !== event.change.path)].slice(0, 100) };
     case "permission_mode_changed":
@@ -84,6 +87,7 @@ export function applyEvent(
     case "engine_exit":
       return {
         ...session,
+        commands: event.type === "engine_exit" ? Object.fromEntries(Object.entries(session.commands || {}).map(([id, command]) => [id, { ...command, status: command.status === "running" ? "interrupted" : command.status }])) : session.commands,
         busy: false,
         streamIndex: null,
         messages: finishTrace(session, event.type === "engine_exit" ? "interrupted" : "error").filter((message, index) =>

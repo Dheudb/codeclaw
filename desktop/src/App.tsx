@@ -288,6 +288,7 @@ export default function App() {
     ) || [];
   const runningWorkers =
     active?.workers.filter((worker) => worker.status === "running").length || 0;
+  const runningCommands = Object.values(active?.commands || {}).filter((command) => command.status === "running").length;
 
   return (
     <div className={"workbench " + (!panelOpen ? "panel-hidden" : "")} style={{ "--inspector-width": clampPanelWidth(panelWidth, viewport) + "px" } as React.CSSProperties}>
@@ -544,6 +545,7 @@ export default function App() {
               <ChevronRight size={13} />
             </button>
           )}
+          {!!runningCommands && !active?.busy && <button className="worker-strip" onClick={() => invoke("stop").catch(onError)}><Square size={13} />{runningCommands} 个后台命令正在运行 · 停止所有后台任务</button>}
           <div className={"composer " + (!active ? "disabled" : "")}>
             {active && active.selected.length > 0 && (
               <div className="selected-skills">
@@ -588,7 +590,7 @@ export default function App() {
                 <span className="toolbar-divider" />
                 {globalModel?.connections?.some((connection) => connection.models.length) ? <select
                   className="model-picker" aria-label="选择模型" title="切换 API 与模型"
-                  disabled={opening || modelChanging || active?.busy || !!runningWorkers}
+                  disabled={opening || modelChanging || active?.busy || !!runningWorkers || !!runningCommands}
                   value={JSON.stringify([globalModel.connectionId, globalModel.model])}
                   onChange={(event) => void selectModel(event.target.value)}>
                   {globalModel.connections.filter((connection) => connection.models.length).map((connection) =>
@@ -690,6 +692,7 @@ export default function App() {
           sessionId={active.id}
           busy={
             active.busy ||
+            !!runningCommands ||
             active.workers.some((worker) => worker.status === "running")
           }
           invoke={invoke}

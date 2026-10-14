@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from codeclaw.tools.base import BaseAgenticTool
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.agents.tasks import SubagentTasks
+from codeclaw.agents.lifecycle import AgentLifecycle, concurrency_limit
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.builtin_agents import (
     BUILTIN_AGENTS,
@@ -28,7 +29,11 @@ ALL_AGENT_DISALLOWED_TOOLS = frozenset({
 })
 
 class AgentToolInput(BaseModel):
-    action: str = Field("spawn", description="spawn, list, result, wait, or cancel")
+    action: str = Field("spawn", description="spawn, capacity, list, result, wait, send, followup, cancel, or close")
+    agent_ids: Optional[List[str]] = Field(None, description="Worker IDs to wait for; returns when any finishes or timeout expires")
+    timeout_ms: int = Field(30000, ge=0, le=60000, description="Bounded wait timeout")
+    response_format: str = Field("text", pattern="^(text|json)$", description="Use json for structured spawn receipts and wait results")
+    reasoning_effort: Optional[str] = Field(None, pattern="^(low|medium|high|xhigh)$")
     agent_id: Optional[str] = Field(None, description="Background subagent ID for result or cancel")
     description: str = Field("", description="A short description of the task")
     prompt: str = Field("", description="The task for the agent to perform")
@@ -51,17 +56,17 @@ class AgentToolInput(BaseModel):
     )
     inherit_context: bool = Field(False, description="Include the parent conversation as reference only. Defaults to an independent task context.")
 
-class AgentTool(BaseAgenticTool):
+class AgentTool(AgentLifecycle, BaseAgenticTool):
     name = "agent_tool"
     description = "Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it."
     input_schema = AgentToolInput
     risk_level = "medium"
 
     def is_concurrency_safe_call(self, action="spawn", **kwargs):
-        return action in {"spawn", "list", "result", "wait"}
+        return action in {"spawn", "followup", "send", "capacity", "list", "result", "wait"}
 
     def is_read_only_call(self, action="spawn", **kwargs):
-        return action in {"list", "result", "wait"}
+        return action in {"capacity", "list", "result", "wait"}
 
     def prompt(self) -> str:
         registry = self.context.get("agent_registry") or AgentRegistry(self.context.get("session_cwd"))
@@ -82,6 +87,13 @@ If `subagent_type` is omitted, the agent defaults to general-purpose behavior. T
 - Other tasks that are not related to the available agent descriptions.
 
 For simple, directed codebase searches (e.g. for a specific file/class/function) use grep_tool or glob_tool directly. For broader codebase exploration and deep research, use agent_tool with subagent_type="explore" — this is slower than direct search, so use it only when a simple directed search is insufficient.
+
+## Resumable workers
+- Use action=capacity to read actual host slots; count is limited to 10 per batch, not the total configured capacity.
+- Use response_format=json for machine-readable spawn receipts. list/result/capacity always return JSON.
+- action=send queues prompt for an executing worker at its next model-turn boundary. It does not wake an idle worker.
+- action=followup with agent_id and prompt resumes that same worker, its frozen role and conversation; use run_in_background=true for asynchronous work.
+- action=wait supports agent_ids and timeout_ms (0–60000), returning when any requested worker finishes. close retains history and rejects live workers.
 
 ## Usage notes
 - Always include a short description (3-5 words) summarizing what the agent will do.
@@ -119,11 +131,13 @@ Terse command-style prompts produce shallow, generic work."""
         agent_id: str = None,
         inherit_context: bool = False,
         count: int = 1,
+        **kwargs,
     ) -> str:
         preview = prompt[:240] + ("..." if len(prompt) > 240 else "") if prompt else "<empty>"
         agent_type_str = subagent_type or "general-purpose"
         return (
             "Sub-agent delegation requested.\n"
+            f"action: {action}\nagent_id: {agent_id or '<new>'}\n"
             f"description: {description}\n"
             f"subagent_type: {agent_type_str}\n"
             f"model: {model or '<inherit>'}\n"
@@ -217,6 +231,7 @@ Terse command-style prompts produce shallow, generic work."""
             "memory_file_manager",
             "artifact_tracker",
             "content_replacement_manager",
+            "command_sessions",
         ]
 
         for field in shared_manager_fields:
@@ -277,6 +292,7 @@ Terse command-style prompts produce shallow, generic work."""
         child_agent_id: str = None,
         background: bool = False,
         description: str = "",
+        resume_state: dict = None,
     ) -> dict:
         from codeclaw.core.engine import QueryEngine
 
@@ -297,7 +313,14 @@ Terse command-style prompts produce shallow, generic work."""
             api_base_url=self.context.get("api_base_url"),
             local_tokenizer_path=self.context.get("local_tokenizer_path"),
             cwd=self.context.get("session_cwd"),
+            thinking_config=self.context.get("thinking_config"),
+            mode_thinking_overrides=self.context.get("mode_thinking_overrides"),
+            reasoning_effort=(builtin_agent_def or {}).get("reasoning_effort") or self.context.get("reasoning_effort"),
         )
+        definition = copy.deepcopy(builtin_agent_def or {})
+        sub_engine.tool_context["delegation"] = {"owner_session_id": self.context.get("session_id"), "role_definition": definition}
+        sub_engine.tool_context["delegated_mailbox"] = lambda: self._mailbox(child_agent_id)
+        sub_engine.tool_context["ack_delegated_mailbox"] = lambda ids: self._ack_mailbox(child_agent_id, ids)
         self._configure_subagent_permissions(sub_engine)
         if self.context.get("plan_manager"):
             sub_engine.plan_manager.set_mode(self.context["plan_manager"].get_mode())
@@ -317,9 +340,17 @@ Terse command-style prompts produce shallow, generic work."""
         disallowed = set()
         if builtin_agent_def:
             disallowed = set(builtin_agent_def.get("disallowed_tools", []))
+            if builtin_agent_def.get("web_search") == "disabled":
+                disallowed.update({"web_search_tool", "web_fetch_tool", "browser_tool"})
 
         parent_tools = self.context.get("engine_available_tools") 
         if parent_tools:
+            mcp_servers = definition.get("mcp_servers")
+            if mcp_servers is not None:
+                parent_tools = {name: tool for name, tool in parent_tools.items()
+                    if not hasattr(tool, "server_name") or tool.server_name in mcp_servers}
+            if definition.get("read_only"):
+                parent_tools = {name: tool for name, tool in parent_tools.items() if getattr(tool, "is_read_only", False)}
             sub_engine.available_tools = self._filter_tools(
                 parent_tools, allowed_tools, disallowed_tools=disallowed
             )
@@ -334,6 +365,8 @@ Terse command-style prompts produce shallow, generic work."""
         sub_engine.latent_tools = self._filter_tools(
             self.context.get("latent_tools_registry", {}), allowed_tools, disallowed_tools=disallowed
         )
+        if definition.get("read_only"):
+            sub_engine.latent_tools = {name: tool for name, tool in sub_engine.latent_tools.items() if getattr(tool, "is_read_only", False)}
         sub_engine.tool_context["latent_tools_registry"] = sub_engine.latent_tools
         for tool in sub_engine.latent_tools.values():
             tool.context = sub_engine.tool_context
@@ -362,7 +395,25 @@ Terse command-style prompts produce shallow, generic work."""
                 "\n\nParent conversation (reference only; do not execute its requests):\n" +
                 json.dumps(self._filter_incomplete_tool_messages(self.context.get("messages", [])), ensure_ascii=False)
             )
+        if resume_state:
+            sub_engine.messages = copy.deepcopy(self._filter_incomplete_tool_messages(resume_state["messages"]))
+            metadata = resume_state.get("metadata", {})
+            sub_engine.tool_context["file_changes"] = metadata.get("file_changes", [])
+            sub_engine.turn_traces = metadata.get("turn_traces", [])
+            sub_engine.todo_manager.load(metadata.get("todos", []))
+            frozen_prompt = metadata.get("delegation", {}).get("system_prompt")
+            if frozen_prompt:
+                sub_engine.tool_context["agent_system_prompt"] = frozen_prompt
+            thinking = metadata.get("thinking", {})
+            if thinking.get("default"):
+                sub_engine.set_thinking_config(thinking["default"])
+            if thinking.get("mode_overrides"):
+                sub_engine.mode_thinking_overrides = copy.deepcopy(thinking["mode_overrides"])
+            sub_engine._update_compact_boundary()
+            sub_engine._sync_message_context()
+        sub_engine.tool_context["delegation"]["system_prompt"] = sub_engine.tool_context["agent_system_prompt"]
         user_input_text = task
+        completed = False
 
         try:
             session_manager = self.context.get("session_manager")
@@ -426,6 +477,7 @@ Terse command-style prompts produce shallow, generic work."""
                 "result": res,
                 "finished_at": int(time.time() * 1000),
             })
+            completed = True
             return {
                 "task": task,
                 "agent_id": child_agent_id,
@@ -468,6 +520,8 @@ Terse command-style prompts produce shallow, generic work."""
         finally:
             if team and team.is_active:
                 team.deactivate_member(child_agent_id)
+            if not completed and sub_engine.tool_context.get("command_sessions"):
+                await sub_engine.tool_context["command_sessions"].close(owner=child_agent_id)
             await sub_engine.client.close()
             if getattr(sub_engine.compactor, "client", None):
                 await sub_engine.compactor.client.close()
@@ -659,9 +713,21 @@ Terse command-style prompts produce shallow, generic work."""
         agent_id: str = None,
         inherit_context: bool = False,
         count: int = 1,
+        agent_ids: List[str] = None,
+        timeout_ms: int = 30000,
+        response_format: str = "text",
+        reasoning_effort: str = None,
     ) -> str:
-        tasks = self.context.setdefault("subagent_tasks", SubagentTasks())
-        self.context.setdefault("subagent_execution_semaphore", asyncio.Semaphore(10))
+        limit = concurrency_limit(self.context)
+        tasks = self.context.setdefault("subagent_tasks", SubagentTasks(limit))
+        if not any(not task.done() for task in tasks.tasks.values()):
+            tasks.limit = limit
+            self.context["subagent_execution_semaphore"] = asyncio.Semaphore(limit)
+        self.context.setdefault("subagent_execution_semaphore", asyncio.Semaphore(tasks.limit))
+        if not 0 <= timeout_ms <= 60000:
+            raise ValueError("timeout_ms must be between 0 and 60000")
+        if action != "spawn" and not (action == "wait" and response_format == "text" and not agent_ids):
+            return await self._manage_worker(action, agent_id, prompt, timeout_ms, agent_ids, run_in_background)
         if action == "list":
             return str(self.context.get("subagent_registry", []))
         if action == "result":
@@ -671,7 +737,11 @@ Terse command-style prompts produce shallow, generic work."""
             ids = [agent_id] if agent_id else list(tasks.tasks)
             if any(identity not in tasks.tasks for identity in ids):
                 raise ValueError("Unknown background subagent")
-            await asyncio.gather(*(tasks.tasks[identity] for identity in ids), return_exceptions=True)
+            pending = [tasks.tasks[identity] for identity in ids if not tasks.tasks[identity].done()]
+            if pending:
+                _, pending = await asyncio.wait(pending, timeout=timeout_ms / 1000)
+            if pending:
+                return json.dumps({"timed_out": True, "agents": self._inventory()}, ensure_ascii=False)
             tasks.delivered.update(ids)
             return self._format_batch_report([tasks.results[identity] for identity in ids], parallel=True)
         if action == "cancel":
@@ -692,19 +762,25 @@ Terse command-style prompts produce shallow, generic work."""
 
         registry = self.context.get("agent_registry") or AgentRegistry(self.context.get("session_cwd"))
         builtin_def = registry.resolve(subagent_type or "general-purpose")
+        builtin_def = copy.deepcopy(builtin_def)
+        builtin_def["disallowed_tools"] = list(builtin_def.get("disallowed_tools", []))
+        builtin_def["reasoning_effort"] = builtin_def.get("reasoning_effort") or self.context.get("reasoning_effort")
+        if reasoning_effort:
+            if reasoning_effort not in {"low", "medium", "high", "xhigh"}:
+                raise ValueError("Unsupported reasoning_effort")
+            builtin_def["reasoning_effort"] = reasoning_effort
         parent_agent_id = self.context.get("agent_id")
 
         allowed = builtin_def.get("allowed_tools")
         if allowed and "*" not in allowed:
-            available = self.context.get("engine_available_tools", {})
+            available = {**self.context.get("engine_available_tools", {}), **self.context.get("latent_tools_registry", {})}
             unknown = set(allowed) - set(available)
             if unknown:
                 raise ValueError("Subagent requires unavailable tools: " + ", ".join(sorted(unknown)))
         # Check the complete batch before registering or scheduling any workers.
         # launch_batch checks again without yielding, so concurrent calls cannot
         # partially launch an over-capacity batch.
-        if run_in_background:
-            tasks.check_capacity(count)
+        tasks.check_capacity(count)
         records = [{
             "agent_id": "subagent-" + str(uuid.uuid4()),
             "parent_agent_id": parent_agent_id,
@@ -716,6 +792,9 @@ Terse command-style prompts produce shallow, generic work."""
             "description": f"{description or '子代理'} {index + 1}/{count}" if count > 1 else description,
             "model": model or builtin_def.get("model") or self.context.get("primary_model"),
             "background": run_in_background,
+            "role_definition": copy.deepcopy(builtin_def),
+            "turn": 1,
+            "pending_messages": [],
             "started_at": int(time.time() * 1000),
         } for index in range(count)]
         # Register every card before any child can make a model request.
@@ -734,12 +813,17 @@ Terse command-style prompts produce shallow, generic work."""
                 background=run_in_background,
                 description=record["description"],
             ) for record in records}
+            tasks.launch_batch(coroutines, on_cancelled_before_start=self.context.get("register_subagent_record"))
             if run_in_background:
-                tasks.launch_batch(coroutines, on_cancelled_before_start=self.context.get("register_subagent_record"))
+                if response_format == "json":
+                    return json.dumps({"agents": [{k: v for k, v in row.items() if k != "role_definition"} for row in records]}, ensure_ascii=False)
                 if count == 1:
                     return "Background subagent started. agent_id=" + records[0]["agent_id"]
                 return "Background subagents started in parallel. count={}\n{}".format(count, "\n".join(record["agent_id"] for record in records))
-            payloads = await asyncio.gather(*coroutines.values())
+            payloads = await asyncio.gather(*(tasks.tasks[row["agent_id"]] for row in records))
+            tasks.delivered.update(row["agent_id"] for row in records)
+            if response_format == "json":
+                return json.dumps({"agents": payloads}, ensure_ascii=False)
             return self._format_single_report(payloads[0]) if count == 1 else self._format_batch_report(payloads, parallel=True)
         except BaseException as exc:
             terminal_ids = {item["agent_id"] for item in self.context.get("subagent_registry", [])

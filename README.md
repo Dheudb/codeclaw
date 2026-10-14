@@ -15,6 +15,7 @@ CodeClaw 围绕本地项目提供模型对话、文件与命令工具、Skills�
 | 在终端使用 CodeClaw | [CLI 使用说明](docs/cli.md) |
 | 接入模型或本地推理服务 | [模型配置与兼容范围](docs/models.md) |
 | 添加 Skills 或子代理 | [Skills 与子代理](docs/capabilities.md) |
+| 子代理续接、容量查询和命令输入输出 | [通用执行接口](docs/framework.md) |
 | 安装搜索等外部工具 | [MCP 市场与搜索](docs/mcp.md) |
 | 修改代码、运行测试或打包 | [开发说明](docs/development.md) · [项目结构](docs/architecture.md) |
 
@@ -61,7 +62,7 @@ C:\path\to\codeclaw\.venv\Scripts\codeclaw.exe
 |---|---|
 | 桌面与 CLI | 共用引擎、模型配置和同一项目的会话格式 |
 | Skills | 项目/用户/导入目录发现，启停、校验和按需加载资源 |
-| 子代理 | 内置角色、自定义 Markdown 定义、前台/后台任务及取消 |
+| 子代理 | 内置/自定义角色、并行批次、容量查询、消息投递、按 ID 续接及取消 |
 | MCP | 精选目录、官方注册表浏览、自定义 stdio / Streamable HTTP、连接测试和启停 |
 | 联网 | 内置 DuckDuckGo 搜索、静态网页读取，以及外部搜索 MCP |
 | 工具与审批 | 文件读写、命令执行、规划、权限卡片和 Git 变更查看 |

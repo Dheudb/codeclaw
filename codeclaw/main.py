@@ -842,6 +842,11 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
             break
 
 
+    await engine.tool_context["subagent_tasks"].close()
+    await engine.tool_context["command_sessions"].close()
+    engine.persist_session_state()
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="CodeClaw Agentic CLI Engine")

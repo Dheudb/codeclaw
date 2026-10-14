@@ -36,6 +36,8 @@ const engineMethods = new Set([
   "skills.read",
   "agents.read",
   "agents.cancel",
+  "agents.list",
+  "agents.capacity",
   "config.save",
   "config.select",
   "mcp.list",
@@ -87,6 +89,10 @@ function send(id, payload) {
   const source = sessions.get(id);
   if (source && payload.type === "turn_finished") source.busy = false;
   if (source && payload.type === "subagent_status") source.workers.set(payload.agent.agent_id, payload.agent.status);
+  if (source && payload.type === "command_status") {
+    source.commands ||= new Map();
+    source.commands.set(payload.command.id, payload.command.status);
+  }
   if (payload.type === "session_started" && sessions.has(id)) {
     sessions.get(id).resumeId = payload.sessionId;
     saveWorkspace();
@@ -209,7 +215,7 @@ async function createSession(project, resumeId) {
   }
 }
 function running(source) {
-  return source.busy || [...source.workers.values()].includes("running");
+  return source.busy || [...source.workers.values()].includes("running") || [...(source.commands?.values() || [])].includes("running");
 }
 async function disposeSession(id) {
   const source = sessions.get(id);
