@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, protocol } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { SessionCatalog, projectKey, sessionKey, atomicJSON } = require("./catalog.cjs");
@@ -6,6 +6,9 @@ const { EngineTransport } = require("./transport.cjs");
 const { resolveEnginePython } = require("./runtime.cjs");
 const { defaultWorkspace } = require("./workspace.cjs");
 const { prepareMove, moveSession } = require("./session-move.cjs");
+const { HtmlPreviews, SCHEME: PREVIEW_SCHEME } = require("./html-preview.cjs");
+protocol.registerSchemesAsPrivileged([{ scheme: PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
+const htmlPreviews = new HtmlPreviews();
 if (process.env.CODECLAW_USER_DATA)
   app.setPath("userData", process.env.CODECLAW_USER_DATA);
 const sessions = new Map();
@@ -200,6 +203,7 @@ async function disposeSession(id) {
   const source = sessions.get(id);
   if (!source) return;
   await source.transport.close();
+  htmlPreviews.revokeSession(id);
   sessions.delete(id);
   if (window && !window.isDestroyed()) window.webContents.send("workbench:event", { type: "session_unloaded", session: id });
 }
@@ -343,6 +347,7 @@ async function invoke(method, params) {
     if (source) {
       source.moving = true;
       await source.transport.close();
+      htmlPreviews.revokeSession(row.id);
       sessions.delete(row.id);
     }
     let moved;
@@ -403,9 +408,17 @@ async function invoke(method, params) {
     }
     return true;
   }
+  if (method === "preview.close") {
+    htmlPreviews.revoke(params.token, params.session);
+    return true;
+  }
   const source = sessions.get(params.session);
   if (!source) throw new Error("请先打开项目");
   if (source.moving) throw new Error("会话正在移动，请稍候");
+  if (method === "preview.open") {
+    const file = await source.transport.request("files.read", { path: params.path });
+    return htmlPreviews.create(params.session, source.project, file.path);
+  }
   if (method === "permissions.set") {
     if (!["ask", "full"].includes(params.mode)) throw new Error("请选择请求批准或完全访问");
     const row = catalog.find(params.session), previous = row.permissionMode;
@@ -461,6 +474,7 @@ async function invoke(method, params) {
   return source.transport.request(method, payload);
 }
 app.whenReady().then(() => {
+  protocol.handle(PREVIEW_SCHEME, (request) => htmlPreviews.respond(request));
   window = new BrowserWindow({
     show: process.env.CODECLAW_TEST_HEADLESS !== "1",
     width: 1440,
@@ -475,10 +489,14 @@ app.whenReady().then(() => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      nodeIntegrationInSubFrames: false,
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
+  window.webContents.on("will-frame-navigate", (event) => {
+    if (!event.isMainFrame && !event.url.startsWith(PREVIEW_SCHEME + "://")) event.preventDefault();
+  });
   window.webContents.session.setPermissionRequestHandler(
     (_webContents, _permission, callback) => callback(false),
   );

@@ -727,6 +727,11 @@ a,
 .file-preview-tabs button[aria-selected="true"] { color: #b56a4b; border-bottom-color: #c97454; }.file-preview-tabs small { font-size: 10px; color: #9ba18f; margin-left: auto; }
 .file-preview-body { overflow: auto; flex: 1; min-height: 0; padding: 12px 0; }.file-preview-body .markdown { font-size: 13px; padding: 0 18px; }
 .file-preview-body > p { padding: 0 16px; font-size: 12px; }
+.file-preview-body.web-preview-body { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+.web-preview-body > .preview-limitation { flex-shrink: 0; margin-bottom: 10px; }
+.html-preview { position: relative; display: flex; flex-direction: column; min-height: 0; flex: 1; background: white; }
+.html-preview > p { padding: 8px 16px; font-size: 12px; }
+.html-preview > iframe { width: 100%; height: 100%; flex: 1; min-height: 0; border: 0; background: white; }
 .file-source, .file-diff { font: 12px/1.8 Consolas, monospace; white-space: pre; margin: 0; tab-size: 4; color: #4b5344; }
 .file-diff > div, .source-line { min-width: max-content; display: flex; padding-right: 12px; }
 .line-number { display: inline-block; flex: 0 0 38px; width: 38px; text-align: right; padding-right: 8px; color: #9a9f96; user-select: none; font-size: 11px; }

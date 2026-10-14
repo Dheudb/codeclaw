@@ -5,6 +5,7 @@ import Markdown from "./Markdown";
 import FileChanges, { ChangeCounts, relativeFile } from "./FileChanges";
 import DiffView from "./DiffView";
 import WorkspaceTree from "./WorkspaceTree";
+import HtmlPreview from "./HtmlPreview";
 
 export default function FilePreview({ sessionId, project, path, change, version, close, onOpen, initialView, changes }: {
   sessionId: string; project: string; path: string; change?: FileChange; version?: number;
@@ -17,7 +18,8 @@ export default function FilePreview({ sessionId, project, path, change, version,
   const [gitFiles, setGitFiles] = useState<FileChange[]>([]);
   const [diffLoading, setDiffLoading] = useState(false), [tree, setTree] = useState(true), [scope, setScope] = useState("workspace");
   const markdown = /\.md(?:own)?$/i.test(path);
-  const [tab, setTab] = useState(initialView === "diff" ? "diff" : markdown ? "preview" : "source");
+  const html = /\.html?$/i.test(path), previewable = markdown || html;
+  const [tab, setTab] = useState(initialView === "diff" ? "diff" : previewable ? "preview" : "source");
   useEffect(() => {
     if (change?.source !== "git") return;
     let cancelled = false;
@@ -25,7 +27,7 @@ export default function FilePreview({ sessionId, project, path, change, version,
     return () => { cancelled = true; };
   }, [sessionId, change?.source, refresh]);
   useEffect(() => {
-    setTab(initialView === "diff" ? "diff" : markdown ? "preview" : "source");
+    setTab(initialView === "diff" ? "diff" : previewable ? "preview" : "source");
   }, [path, initialView, change?.updatedAt]);
   useEffect(() => {
     let cancelled = false; setLoading(true); setError(""); setFile(undefined);
@@ -54,11 +56,11 @@ export default function FilePreview({ sessionId, project, path, change, version,
     <div className="review-layout">
       <div className="review-editor">
         <nav className="file-preview-tabs" role="tablist" aria-label="文件视图">
-          {[["diff", "差异"], ["source", "源码"], ["preview", "预览"]].filter(([id]) => id !== "preview" || markdown).map(([id, label]) =>
+          {[["diff", "差异"], ["source", "源码"], ["preview", "预览"]].filter(([id]) => id !== "preview" || previewable).map(([id, label]) =>
             <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>)}
           {shownChange && <ChangeCounts added={shownChange.added} removed={shownChange.removed} />}
         </nav>
-        <div className="file-preview-body" role="tabpanel">
+        <div className={"file-preview-body " + (tab === "preview" && html ? "web-preview-body" : "")} role="tabpanel">
           {tab === "diff" ? <>
             {diffLoading && <p role="status">正在读取 Git 差异…</p>}
             {diffError && <p role="alert" className="error">{diffError}</p>}
@@ -70,8 +72,8 @@ export default function FilePreview({ sessionId, project, path, change, version,
             {loading && <p role="status">正在读取文件…</p>}
             {error && <p role="alert" className="error">{error}</p>}
             {file && !loading && <>
-              <p className="preview-limitation">最新文件 · {file.size.toLocaleString()} 字节{file.truncated ? " · 仅展示前 500 KB" : ""}</p>
-              {tab === "preview" && <div className="markdown"><Markdown text={file.content} onOpenFile={onOpen} /></div>}
+              <p className="preview-limitation">最新文件 · {file.size.toLocaleString()} 字节{file.truncated && !(tab === "preview" && html) ? " · 仅展示前 500 KB" : ""}</p>
+              {tab === "preview" && (html ? <HtmlPreview sessionId={sessionId} path={file.path} revision={`${version || 0}:${refresh}`} /> : <div className="markdown"><Markdown text={file.content} onOpenFile={onOpen} /></div>)}
               {tab === "source" && <div className="file-source">{file.content.split(/\r?\n/).map((line, index) => <div className="source-line" key={index}><span className="line-number">{index + 1}</span><code>{line || " "}</code></div>)}</div>}
             </>}
           </>}
