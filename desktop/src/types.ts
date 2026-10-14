@@ -92,6 +92,7 @@ export type EngineEvent = { session: string; type: string; [key: string]: any };
 export type Worker = {
   agent_id: string;
   agent_type?: string;
+  description?: string;
   status: string;
   task?: string;
   result?: string;

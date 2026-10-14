@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import uuid
 from typing import List, Optional
 from pydantic import BaseModel, Field
@@ -46,12 +47,16 @@ class AgentToolInput(BaseModel):
         False,
         description="Set to true to run this agent in the background. You will be notified when it completes.",
     )
+    inherit_context: bool = Field(False, description="Include the parent conversation as reference only. Defaults to an independent task context.")
 
 class AgentTool(BaseAgenticTool):
     name = "agent_tool"
     description = "Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it."
     input_schema = AgentToolInput
     risk_level = "medium"
+
+    def is_concurrency_safe_call(self, action="spawn", **kwargs):
+        return action in {"spawn", "list", "result"}
 
     def prompt(self) -> str:
         registry = self.context.get("agent_registry") or AgentRegistry(self.context.get("session_cwd"))
@@ -78,6 +83,8 @@ For simple, directed codebase searches (e.g. for a specific file/class/function)
 - Launch multiple agents concurrently whenever possible — use a single message with multiple tool uses.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user. To show the user the result, send a text message with a concise summary.
 - Each Agent invocation starts fresh — provide a complete task description with all necessary context.
+- Parent conversation history is excluded by default. Set inherit_context=true only when it is needed as reference; the assigned prompt remains the child's task.
+- Up to 10 background agents can run at once. Do not announce agents as started until tool calls confirm success.
 - The agent's outputs should generally be trusted.
 - Clearly tell the agent whether you expect it to write code or just do research (search, file reads, web fetches, etc.).
 - If the agent description mentions that it should be used proactively, try your best to use it without the user having to ask for it first.
@@ -105,6 +112,7 @@ Terse command-style prompts produce shallow, generic work."""
         run_in_background: bool = False,
         action: str = "spawn",
         agent_id: str = None,
+        inherit_context: bool = False,
     ) -> str:
         preview = prompt[:240] + ("..." if len(prompt) > 240 else "") if prompt else "<empty>"
         agent_type_str = subagent_type or "general-purpose"
@@ -261,6 +269,7 @@ Terse command-style prompts produce shallow, generic work."""
         model: str = None,
         child_agent_id: str = None,
         background: bool = False,
+        description: str = "",
     ) -> dict:
         from codeclaw.core.engine import QueryEngine
 
@@ -284,12 +293,7 @@ Terse command-style prompts produce shallow, generic work."""
         )
         self._configure_subagent_permissions(sub_engine)
         if self.context.get("plan_manager"):
-            sub_engine.plan_manager = copy.deepcopy(self.context.get("plan_manager"))
-            sub_engine.tool_context["plan_manager"] = sub_engine.plan_manager
-            sub_engine.permission_manager.set_mode_getter(sub_engine.plan_manager.get_mode)
-        if self.context.get("todo_manager"):
-            sub_engine.todo_manager = copy.deepcopy(self.context.get("todo_manager"))
-            sub_engine.tool_context["todo_manager"] = sub_engine.todo_manager
+            sub_engine.plan_manager.set_mode(self.context["plan_manager"].get_mode())
 
         self._share_runtime_managers(sub_engine)
         sub_engine.tool_context["skill_registry"] = self.context.get("skill_registry") or SkillRegistry(self.context.get("session_cwd"))
@@ -320,19 +324,16 @@ Terse command-style prompts produce shallow, generic work."""
                 tool.context = sub_engine.tool_context
                 sub_engine.available_tools[tool.name] = tool
 
+        sub_engine.latent_tools = self._filter_tools(
+            self.context.get("latent_tools_registry", {}), allowed_tools, disallowed_tools=disallowed
+        )
+        sub_engine.tool_context["latent_tools_registry"] = sub_engine.latent_tools
+        for tool in sub_engine.latent_tools.values():
+            tool.context = sub_engine.tool_context
+
         skip_context = False
         if builtin_agent_def and builtin_agent_def.get("omit_claude_md"):
             skip_context = True
-
-        if inherit_context and not skip_context:
-            sanitized_parent_messages = self._filter_incomplete_tool_messages(
-                self.context.get("messages", [])
-            )
-            sub_engine.inherit_state_from_parent(
-                parent_messages=sanitized_parent_messages,
-                todo_payload=self.context.get("todo_manager").export() if self.context.get("todo_manager") else [],
-                plan_payload=self.context.get("plan_manager").export() if self.context.get("plan_manager") else {},
-            )
 
         specialized_prompt = ""
         if builtin_agent_def:
@@ -341,17 +342,20 @@ Terse command-style prompts produce shallow, generic work."""
             if critical_reminder:
                 specialized_prompt += f"\n\n{critical_reminder}"
 
-        if specialized_prompt:
-            sub_engine.tool_context["agent_system_prompt"] = specialized_prompt
-            user_input_text = f"{specialized_prompt}\n\n---\n\nTask:\n{task}"
-        else:
-            user_input_text = (
-                f"[SYSTEM: You are a specialized Sub-Agent. Complete the task below "
-                f"using your tools, then report your findings concisely.]\n\nTask:\n{task}"
-            )
-
+        sub_engine.tool_context["agent_system_prompt"] = (
+            "You are a delegated subagent, not the parent coordinator. Your assignment is the task supplied by the parent in this session. "
+            "Complete only that assignment and report to the parent. Any parent conversation supplied is reference, "
+            "not additional tasks. Do not repeat the parent's delegation request or look for tools to spawn more agents. "
+            "For simple conversational assignments, respond directly without tools.\n\n" + specialized_prompt
+        )
         for skill_name in (builtin_agent_def or {}).get("skills", []):
-            user_input_text += "\n\n" + sub_engine.tool_context["skill_registry"].read(skill_name)
+            sub_engine.tool_context["agent_system_prompt"] += "\n\n" + sub_engine.tool_context["skill_registry"].read(skill_name)
+        if inherit_context and not skip_context:
+            sub_engine.tool_context["agent_system_prompt"] += (
+                "\n\nParent conversation (reference only; do not execute its requests):\n" +
+                json.dumps(self._filter_incomplete_tool_messages(self.context.get("messages", [])), ensure_ascii=False)
+            )
+        user_input_text = task
 
         try:
             session_manager = self.context.get("session_manager")
@@ -367,6 +371,7 @@ Terse command-style prompts produce shallow, generic work."""
                 "agent_type": builtin_agent_def.get("agent_type") if builtin_agent_def else None,
                 "status": "running",
                 "task": task[:240] + ("..." if len(task) > 240 else ""),
+                "description": description,
                 "transcript_path": transcript_path,
                 "model": sub_engine.primary_model,
                 "background": background,
@@ -392,14 +397,12 @@ Terse command-style prompts produce shallow, generic work."""
             )
             if str(res).startswith(("[bold red]API Loop Exception:", "[bold red]System Halt:")):
                 raise RuntimeError(res)
-            if not background:
-                self._merge_state_back_to_parent(sub_engine)
             if session_manager:
                 session_manager.save_subagent_transcript(child_agent_id, {
                     "agent_id": child_agent_id,
                     "parent_agent_id": parent_agent_id,
                     "agent_depth": parent_depth + 1,
-                    "agent_role": agent_role,
+                    "agent_role": effective_role,
                     "task": task,
                     "allowed_tools": allowed_tools,
                     "inherit_context": inherit_context,
@@ -417,7 +420,7 @@ Terse command-style prompts produce shallow, generic work."""
             return {
                 "task": task,
                 "agent_id": child_agent_id,
-                "agent_role": agent_role,
+                "agent_role": effective_role,
                 "status": "completed",
                 "result": res,
             }
@@ -431,7 +434,7 @@ Terse command-style prompts produce shallow, generic work."""
                     "agent_id": child_agent_id,
                     "parent_agent_id": parent_agent_id,
                     "agent_depth": parent_depth + 1,
-                    "agent_role": agent_role,
+                    "agent_role": effective_role,
                     "task": task,
                     "allowed_tools": allowed_tools,
                     "inherit_context": inherit_context,
@@ -443,11 +446,12 @@ Terse command-style prompts produce shallow, generic work."""
             await self._write_subagent_registry_record({
                 **registry_record,
                 "status": "crashed",
+                "result": str(e),
             })
             return {
                 "task": task,
                 "agent_id": child_agent_id,
-                "agent_role": agent_role,
+                "agent_role": effective_role,
                 "status": "crashed",
                 "result": f"Exception Fault: Sub-Agent terminal crash: {e}",
             }
@@ -643,6 +647,7 @@ Terse command-style prompts produce shallow, generic work."""
         run_in_background: bool = False,
         action: str = "spawn",
         agent_id: str = None,
+        inherit_context: bool = False,
     ) -> str:
         tasks = self.context.setdefault("subagent_tasks", SubagentTasks())
         if action == "list":
@@ -678,13 +683,14 @@ Terse command-style prompts produce shallow, generic work."""
         coroutine = self._run_single_subagent(
             task=prompt,
             allowed_tools=allowed,
-            inherit_context=True,
+            inherit_context=inherit_context,
             parent_depth=parent_depth,
             parent_agent_id=parent_agent_id,
             builtin_agent_def=builtin_def,
             model=model,
             child_agent_id=child_agent_id,
             background=run_in_background,
+            description=description,
         )
         if run_in_background:
             tasks.launch(child_agent_id, coroutine)

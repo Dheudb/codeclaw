@@ -273,12 +273,12 @@ export default function CapabilityPanel({
                       >
                         <div className="card-heading">
                           <Bot size={15} />
-                          <strong>{worker.agent_type || "子代理"}</strong>
+                          <strong>{worker.description || worker.agent_type || "子代理"}</strong>
                           <span className={"status-dot " + worker.status} />
                         </div>
                         <p>{worker.task}</p>
                         <div className="card-meta">
-                          <span>{worker.model || "继承主模型"}</span>
+                          <span>{worker.agent_type || "子代理"} · {worker.model || "继承主模型"}</span>
                           <span>
                             {worker.status === "running"
                               ? "执行中"

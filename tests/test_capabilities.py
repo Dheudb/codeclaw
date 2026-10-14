@@ -129,10 +129,15 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                 await previous_compactor.client.close()
                 engine.team_manager.create_team("test", engine.agent_id)
                 tool = engine.available_tools["agent_tool"]
+                engine.messages.append({"role": "user", "content": "PARENT_ONLY: launch ten subagents"})
+                engine._sync_message_context()
                 child_models, child_tools, child_teams = [], [], []
                 gate = asyncio.Event()
                 async def child_run(child, user_input, sys_print_callback):
                     self.assertIs(child.permission_manager.approval_policy, engine.permission_manager.approval_policy)
+                    self.assertEqual(child.messages, [])
+                    self.assertEqual(user_input, "Review")
+                    self.assertIn("not the parent coordinator", child.tool_context["agent_system_prompt"])
                     child_models.append(child.primary_model)
                     child_tools.append(set(child.available_tools))
                     child_teams.append(child.team_manager)
@@ -152,6 +157,24 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(engine.subagent_registry[-1]["status"], "completed")
                     self.assertEqual(engine.subagent_registry[-1]["result"], "review complete")
                     self.assertFalse(engine.team_manager.get_non_lead_members()[0].is_active)
+                engine.todo_manager.write([{"id": "parent", "content": "Parent task", "status": "pending"}])
+                parent_todos = engine.todo_manager.export()
+                async def independent_run(child, user_input, sys_print_callback):
+                    self.assertEqual(child.messages, [])
+                    self.assertEqual(user_input, "你好")
+                    self.assertEqual(child.todo_manager.export(), [])
+                    self.assertNotEqual(child.plan_manager.plan_file_path, engine.plan_manager.plan_file_path)
+                    child.todo_manager.write([{"id": "child", "content": "Child task", "status": "completed"}])
+                    child.plan_manager.set_mode("plan")
+                    role = child.tool_context["agent_system_prompt"]
+                    self.assertEqual("PARENT_ONLY" in role, expected_reference)
+                    self.assertNotIn("agent_tool", child.available_tools)
+                    return "你好"
+                with patch.object(QueryEngine, "run", independent_run):
+                    for expected_reference in [False, True]:
+                        await tool.execute(prompt="你好", subagent_type="general-purpose", inherit_context=expected_reference)
+                        self.assertEqual(engine.todo_manager.export(), parent_todos)
+                        self.assertEqual(engine.get_mode(), "normal")
                 await engine.client.close()
                 await engine.compactor.client.close()
             finally:

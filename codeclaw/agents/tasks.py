@@ -3,7 +3,7 @@ import asyncio
 
 
 class SubagentTasks:
-    def __init__(self, limit=4):
+    def __init__(self, limit=10):
         self.limit = limit
         self.tasks = {}
         self.results = {}
