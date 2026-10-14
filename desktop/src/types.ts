@@ -150,6 +150,7 @@ export type SessionView = InitialSession & {
 };
 export type PermissionMode = "ask" | "full";
 export type FileChange = {
+  source?: "git";
   path: string; operation: string; updatedAt: number;
   added: number | null; removed: number | null; diff: string;
   statsAvailable: boolean; truncated?: boolean; legacy?: boolean;

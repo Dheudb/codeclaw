@@ -1,54 +1,87 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, X } from "lucide-react";
+import { RefreshCw, X, FolderTree } from "lucide-react";
 import type { FileChange } from "./types";
 import Markdown from "./Markdown";
-import { ChangeCounts, relativeFile } from "./FileChanges";
+import FileChanges, { ChangeCounts, relativeFile } from "./FileChanges";
+import DiffView from "./DiffView";
+import WorkspaceTree from "./WorkspaceTree";
 
-export default function FilePreview({ sessionId, project, path, change, version, close, onOpen }: {
+export default function FilePreview({ sessionId, project, path, change, version, close, onOpen, initialView, changes }: {
   sessionId: string; project: string; path: string; change?: FileChange; version?: number;
-  close: () => void; onOpen: (path: string) => void;
+  initialView: "diff" | "content"; changes: FileChange[];
+  close: () => void; onOpen: (path: string, change?: FileChange) => void;
 }) {
   const [file, setFile] = useState<{ content: string; path: string; size: number; truncated: boolean }>();
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [refresh, setRefresh] = useState(0);
+  const [error, setError] = useState(""), [loading, setLoading] = useState(true), [refresh, setRefresh] = useState(0);
+  const [gitChange, setGitChange] = useState<FileChange>(), [diffError, setDiffError] = useState("");
+  const [gitFiles, setGitFiles] = useState<FileChange[]>([]);
+  const [diffLoading, setDiffLoading] = useState(false), [tree, setTree] = useState(true), [scope, setScope] = useState("workspace");
   const markdown = /\.md(?:own)?$/i.test(path);
-  const [tab, setTab] = useState(markdown ? "preview" : "source");
+  const [tab, setTab] = useState(initialView === "diff" ? "diff" : markdown ? "preview" : "source");
   useEffect(() => {
-    let cancelled = false; setLoading(true); setError("");
+    if (change?.source !== "git") return;
+    let cancelled = false;
+    window.codeclaw.invoke("changes", { session: sessionId }).then((value) => { if (!cancelled) setGitFiles(value.files || []); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [sessionId, change?.source, refresh]);
+  useEffect(() => {
+    setTab(initialView === "diff" ? "diff" : markdown ? "preview" : "source");
+  }, [path, initialView, change?.updatedAt]);
+  useEffect(() => {
+    let cancelled = false; setLoading(true); setError(""); setFile(undefined);
     window.codeclaw.invoke("files.read", { session: sessionId, path }).then((value) => { if (!cancelled) setFile(value); })
-      .catch((reason) => { if (!cancelled) { setFile(undefined); setError(String(reason)); } })
+      .catch((reason) => { if (!cancelled) setError(String(reason)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [sessionId, path, refresh, version]);
   useEffect(() => {
+    let cancelled = false; setGitChange(undefined); setDiffError(""); setDiffLoading(change?.source === "git");
+    if (change?.source === "git") window.codeclaw.invoke("files.gitDiff", { session: sessionId, path }).then((value) => { if (!cancelled) setGitChange(value); })
+      .catch((reason) => { if (!cancelled) setDiffError(String(reason)); }).finally(() => { if (!cancelled) setDiffLoading(false); });
+    return () => { cancelled = true; };
+  }, [sessionId, path, change, refresh]);
+  useEffect(() => {
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); close(); } };
     document.addEventListener("keydown", escape); return () => document.removeEventListener("keydown", escape);
   }, [close]);
-  return <div className="overlay file-preview-overlay" onClick={close}>
-    <section className="dialog file-preview" role="dialog" aria-modal="true" aria-label="文件预览" onClick={(event) => event.stopPropagation()}>
-      <header><div><h2>{relativeFile(path, project)}</h2><small title={path}>{path}</small></div>
-        <button className="icon-button" aria-label="刷新文件内容" disabled={loading} onClick={() => setRefresh(refresh + 1)}><RefreshCw size={16} /></button>
-        <button className="icon-button" aria-label="关闭文件预览" autoFocus onClick={close}><X size={19} /></button></header>
-      <nav className="file-preview-tabs" role="tablist" aria-label="文件视图">
-        {[["preview", "预览"], ["source", "源码"], ["diff", "差异"]].filter(([id]) => id !== "preview" || markdown).map(([id, label]) =>
-          <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>)}
-        {change && <ChangeCounts added={change.added} removed={change.removed} />}
-        <small>文件内容读取自磁盘最新版本{file ? ` · ${file.size.toLocaleString()} 字节` : ""}</small>
-      </nav>
-      <div className="file-preview-body" role="tabpanel">
-        {loading && <p role="status">正在读取文件…</p>}
-        {error && <p role="alert" className="error">{error}</p>}
-        {file && !loading && <>
-          {file.truncated && <p className="preview-limitation">文件较大，仅展示前 500 KB。</p>}
-          {tab === "preview" && <div className="markdown"><Markdown text={file.content} onOpenFile={onOpen} /></div>}
-          {tab === "source" && <pre className="file-source">{file.content}</pre>}
-          {tab === "diff" && (change?.statsAvailable ? <><p className="preview-limitation">这次工具修改时记录的差异。</p>
-            {change.truncated && <p className="preview-limitation">差异较大，已截断显示。</p>}
-            <pre className="file-diff">{change.diff ? change.diff.split("\n").map((line, index) => <div key={index} className={line.startsWith("+") ? "diff-added" : line.startsWith("-") ? "diff-removed" : line.startsWith("@@") ? "diff-hunk" : ""}>{line || " "}</div>) : "内容没有行级变化。"}</pre>
-          </> : <p className="muted">这条历史没有保存修改前的内容，无法还原准确差异。可以查看最新文件内容。</p>)}
-        </>}
+  const shownChange = change?.source === "git" ? gitChange : change;
+  const listedChanges = change?.source === "git" ? gitFiles : changes;
+  return <section className="file-preview docked-review" role="region" aria-label="文件预览">
+    <header><div><h2 title={path}>{relativeFile(path, project)}</h2><small>{tab === "diff" ? (change?.source === "git" ? "Git 工作区 · HEAD 与当前文件" : "会话变更 · 任务修改前后") : "文件内容 · 磁盘最新版本"}</small></div>
+      <button className="icon-button" aria-label="显示工作区文件树" aria-pressed={tree} onClick={() => setTree(!tree)}><FolderTree size={16} /></button>
+      <button className="icon-button" aria-label="刷新文件内容" disabled={loading || diffLoading} onClick={() => setRefresh(refresh + 1)}><RefreshCw size={16} /></button>
+      <button className="icon-button" aria-label="关闭文件预览" onClick={close}><X size={19} /></button></header>
+    <div className="review-layout">
+      <div className="review-editor">
+        <nav className="file-preview-tabs" role="tablist" aria-label="文件视图">
+          {[["diff", "差异"], ["source", "源码"], ["preview", "预览"]].filter(([id]) => id !== "preview" || markdown).map(([id, label]) =>
+            <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>)}
+          {shownChange && <ChangeCounts added={shownChange.added} removed={shownChange.removed} />}
+        </nav>
+        <div className="file-preview-body" role="tabpanel">
+          {tab === "diff" ? <>
+            {diffLoading && <p role="status">正在读取 Git 差异…</p>}
+            {diffError && <p role="alert" className="error">{diffError}</p>}
+            {!diffLoading && !diffError && (shownChange?.statsAvailable ? <>
+              {shownChange.truncated && <p className="preview-limitation">差异较大，已截断显示。</p>}
+              {shownChange.diff ? <DiffView diff={shownChange.diff} /> : <p className="muted">内容没有行级变化。</p>}
+            </> : <p className="muted">{shownChange ? "未保存可用的文本差异，可能是旧记录、二进制或大文件。" : "此文件没有已记录的差异。"}可以切换到源码查看最新内容。</p>)}
+          </> : <>
+            {loading && <p role="status">正在读取文件…</p>}
+            {error && <p role="alert" className="error">{error}</p>}
+            {file && !loading && <>
+              <p className="preview-limitation">最新文件 · {file.size.toLocaleString()} 字节{file.truncated ? " · 仅展示前 500 KB" : ""}</p>
+              {tab === "preview" && <div className="markdown"><Markdown text={file.content} onOpenFile={onOpen} /></div>}
+              {tab === "source" && <div className="file-source">{file.content.split(/\r?\n/).map((line, index) => <div className="source-line" key={index}><span className="line-number">{index + 1}</span><code>{line || " "}</code></div>)}</div>}
+            </>}
+          </>}
+        </div>
       </div>
-    </section>
-  </div>;
+      {tree && <aside className="review-files"><nav className="review-file-tabs" aria-label="文件列表范围">
+        <button aria-pressed={scope === "workspace"} onClick={() => setScope("workspace")}>工作区</button>
+        <button aria-pressed={scope === "changes"} onClick={() => setScope("changes")}>变更文件</button>
+      </nav>{scope === "workspace" ? <WorkspaceTree {...{ sessionId, project, onOpen }} changes={listedChanges} selected={file?.path || path} />
+        : <div className="review-change-list">{listedChanges.length ? <FileChanges files={listedChanges} project={project} onOpen={onOpen} compact /> : <p className="muted">没有文件变更。</p>}</div>}</aside>}
+    </div>
+  </section>;
 }

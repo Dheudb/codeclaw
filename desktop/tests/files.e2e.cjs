@@ -1,12 +1,21 @@
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), http = require("node:http"), assert = require("node:assert/strict");
 const { atomicJSON, sessionKey } = require("../electron/catalog.cjs");
+const { execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-files-e2e-"));
 const project = path.join(fixture, "project"), other = path.join(fixture, "other"), data = path.join(fixture, "profile"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const directory of [project, other, data, config, home]) fs.mkdirSync(directory);
 fs.writeFileSync(path.join(project, "legacy.md"), "legacy one\nlegacy two\n");
 fs.writeFileSync(path.join(fixture, "outside.md"), "must not expose");
+fs.mkdirSync(path.join(project, "nested")); fs.writeFileSync(path.join(project, "nested/tree.md"), "# Tree\nTREE_FILE_PROOF\n");
+const git = (...args) => execFileSync("git", args, { cwd: other, windowsHide: true });
+git("init", "-q");
+git("config", "core.autocrlf", "false"); fs.writeFileSync(path.join(other, ".gitignore"), ".codeclaw/\n");
+fs.writeFileSync(path.join(other, "tracked.txt"), "old\nkeep\n"); fs.writeFileSync(path.join(other, "deleted.txt"), "deleted proof\n");
+git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "baseline");
+fs.writeFileSync(path.join(other, "tracked.txt"), "new\nkeep\nextra\n"); fs.unlinkSync(path.join(other, "deleted.txt"));
+fs.writeFileSync(path.join(other, "untracked.md"), "# New\nUNTRACKED_PROOF\n");
 atomicJSON(path.join(project, ".codeclaw/sessions/legacy.json"), { messages: [
   { role: "user", content: "写一个旧文件" },
   { role: "assistant", content: [{ type: "tool_use", id: "old-write", name: "file_write_tool", input: { file_path: "legacy.md", content: "legacy one\nlegacy two\n" } }] },
@@ -60,7 +69,7 @@ async function launch() {
   page = await app.firstWindow(); page.setDefaultTimeout(45000); page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }
-const dialog = () => page.getByRole("dialog", { name: "文件预览", exact: true });
+const dialog = () => page.getByRole("region", { name: "文件预览", exact: true });
 async function finished(task) {
   await page.getByText(task + "_DONE", { exact: false }).last().waitFor();
   await page.waitForFunction(() => !document.querySelector(".send-button.stop"));
@@ -91,21 +100,36 @@ async function main() {
     assert.match(await first.innerText(), /已修改 4 个文件/); assert.match(await first.locator("header").innerText(), /\+8/);
     assert.equal(await first.locator(".changed-file-row").count(), 3); await first.getByRole("button", { name: "再显示 1 个文件", exact: true }).click(); assert.equal(await first.locator(".changed-file-row").count(), 4);
     const note = first.getByRole("button", { name: "打开文件 note.md", exact: true }); assert.match(await note.innerText(), /\+4/); assert.match(await note.innerText(), /-0/);
-    await note.focus(); await page.keyboard.press("Enter"); await dialog().getByRole("heading", { name: "Notes", exact: true }).waitFor();
-    await dialog().getByRole("tab", { name: "源码", exact: true }).click(); assert((await dialog().locator(".file-source").innerText()).replace(/\r\n/g, "\n").includes("ALPHA\ngamma\nextra"));
-    await dialog().getByRole("tab", { name: "差异", exact: true }).click(); assert((await dialog().locator(".file-diff").innerText()).includes("+extra"));
+    await note.focus(); await page.keyboard.press("Enter");
+    assert.equal(await dialog().getByRole("tab", { name: "差异", exact: true }).getAttribute("aria-selected"), "true");
+    assert.equal(await dialog().locator(".diff-added").count(), 4);
+    assert.equal(await dialog().getByLabel("新行 4", { exact: true }).innerText(), "4");
+    await dialog().getByRole("tab", { name: "源码", exact: true }).click(); await dialog().getByText("ALPHA", { exact: true }).waitFor(); assert((await dialog().locator(".file-source code").allTextContents()).join("\n").includes("ALPHA\ngamma\nextra"));
+    await dialog().getByRole("tab", { name: "差异", exact: true }).click(); assert((await dialog().locator(".diff-added code").allTextContents()).includes("extra"));
     await shot("file-diff.png"); await page.getByRole("button", { name: "关闭文件预览", exact: true }).click();
     await page.locator(".message-body > .markdown").getByRole("button", { name: "带空格文件", exact: true }).last().click(); await dialog().getByText("text", { exact: true }).waitFor(); await page.keyboard.press("Escape");
     await send("FILE_EDIT"); await finished("FILE_EDIT");
     const second = page.locator(".conversation .file-changes").nth(1); assert.match(await second.innerText(), /\+1/); assert.match(await second.innerText(), /-2/);
     assert.match(await note.innerText(), /\+4/, "Previous turn's counts remain unchanged");
-    await note.click(); await dialog().getByRole("heading", { name: "Notes", exact: true }).waitFor(); assert((await dialog().innerText()).includes("changed"));
+    await second.getByRole("button", { name: "打开文件 note.md", exact: true }).click();
+    assert.equal(await dialog().locator(".diff-removed").count(), 2); assert.equal(await dialog().locator(".diff-added").count(), 1);
+    await shot("file-red-green.png"); await page.keyboard.press("Escape");
+    await note.click(); assert((await dialog().locator(".file-diff").innerText()).includes("gamma"));
+    await dialog().getByRole("tab", { name: "预览", exact: true }).click(); await dialog().getByRole("heading", { name: "Notes", exact: true }).waitFor(); assert((await dialog().innerText()).includes("changed"));
     fs.writeFileSync(path.join(project, "note.md"), "# Latest\nDISK_REFRESH_PROOF\n");
     await page.getByRole("button", { name: "刷新文件内容", exact: true }).click(); await dialog().getByText("DISK_REFRESH_PROOF", { exact: true }).waitFor();
     await page.keyboard.press("Escape"); assert.equal(await dialog().count(), 0);
+    await page.getByRole("button", { name: "文件", exact: true }).click();
+    await page.getByRole("button", { name: "文件夹 nested", exact: true }).click();
+    await page.getByRole("button", { name: "查看文件 tree.md", exact: true }).click(); await dialog().getByText("TREE_FILE_PROOF", { exact: true }).waitFor();
+    await dialog().getByRole("button", { name: "文件夹 nested", exact: true }).click();
+    await dialog().getByRole("button", { name: "查看文件 tree.md", exact: true }).waitFor();
+    const separator = page.getByRole("separator", { name: "调整右侧面板宽度", exact: true });
+    const width = Number(await separator.getAttribute("aria-valuenow")); await separator.focus(); await page.keyboard.press("ArrowRight"); assert(Number(await separator.getAttribute("aria-valuenow")) < width);
+    await shot("workspace-tree.png"); await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "变更", exact: true }).click();
     assert.equal(await page.locator(".inspector .changed-file-row").count(), 4); await page.locator(".inspector").getByRole("button", { name: "打开文件 note.md", exact: true }).click();
-    await dialog().getByText("DISK_REFRESH_PROOF", { exact: true }).waitFor(); await shot("file-preview.png"); await page.keyboard.press("Escape");
+    await dialog().getByRole("tab", { name: "预览", exact: true }).click(); await dialog().getByText("DISK_REFRESH_PROOF", { exact: true }).waitFor(); await shot("file-preview.png"); await page.keyboard.press("Escape");
     await send("FILE_CHILD"); await finished("FILE_CHILD");
     assert(fs.existsSync(path.join(project, "child.txt"))); assert.equal(await page.locator(".conversation .file-changes").last().getByRole("button", { name: "打开文件 child.txt", exact: true }).count(), 1);
     await page.getByLabel("访问权限", { exact: true }).selectOption("ask"); await page.waitForFunction(() => !document.querySelector(".permission-picker").disabled);
@@ -117,8 +141,23 @@ async function main() {
     await page.locator(".message-body > .markdown .inline-file-link").filter({ hasText: "note.md" }).first().click(); await dialog().getByText("DISK_REFRESH_PROOF", { exact: true }).waitFor(); await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "在项目 other 中新建会话", exact: true }).click(); await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
     await page.getByRole("button", { name: "变更", exact: true }).click(); assert.equal(await page.locator(".inspector .changed-file-row").count(), 0);
+    await page.locator(".git-changes summary").waitFor(); await page.locator(".git-changes summary").click();
+    assert.equal(await page.locator(".git-changes .changed-file-row").count(), 3);
+    await page.locator(".git-changes").getByRole("button", { name: "打开文件 tracked.txt", exact: true }).click();
+    await dialog().locator(".diff-removed").waitFor(); assert.equal(await dialog().locator(".diff-added").count(), 2);
+    await dialog().getByRole("button", { name: "变更文件", exact: true }).click();
+    await dialog().getByRole("button", { name: "打开文件 deleted.txt", exact: true }).waitFor();
+    assert.equal(await dialog().locator(".changed-file-row").count(), 3);
+    await shot("git-review.png"); await page.keyboard.press("Escape");
+    await page.locator(".git-changes summary").waitFor(); await page.locator(".git-changes summary").click();
+    await page.locator(".git-changes").getByRole("button", { name: "打开文件 deleted.txt", exact: true }).click();
+    await dialog().locator(".diff-removed").waitFor(); assert.match(await dialog().locator(".diff-removed code").innerText(), /deleted proof/);
+    await page.keyboard.press("Escape"); await page.locator(".git-changes summary").waitFor(); await page.locator(".git-changes summary").click();
+    await page.locator(".git-changes").getByRole("button", { name: "打开文件 untracked.md", exact: true }).click();
+    await dialog().getByText("UNTRACKED_PROOF", { exact: true }).waitFor(); assert.equal(await dialog().locator(".diff-added").count(), 2);
+    await page.keyboard.press("Escape");
     assert.deepEqual(errors, []);
-    console.log("File E2E passed: no-Git writes, net +/− stats, collapsed list, keyboard/click preview, Markdown/source/diff, latest disk refresh, legacy history, child changes, denied writes, path bounds, per-turn/project isolation and restart persistence");
+    console.log("File E2E passed: no-Git writes, net +/− stats, docked red/green numbered diff, nested workspace tree, resizing, Markdown/source/latest disk refresh, legacy and deleted-file review, child changes, denied writes, path bounds, per-turn/project isolation, restart persistence and tracked/deleted/untracked Git review");
   } finally { if (app) await app.close().catch(() => {}); server.closeAllConnections(); server.close(); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

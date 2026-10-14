@@ -56,7 +56,7 @@ export default function App() {
   const [opening, setOpening] = useState(true);
   const [notice, setNotice] = useState("");
   const [buildId, setBuildId] = useState("");
-  const [filePreview, setFilePreview] = useState<{ path: string; change?: FileChange }>();
+  const [filePreview, setFilePreview] = useState<{ path: string; change?: FileChange; initialView: "diff" | "content" }>();
   const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const navigation = useRef(0);
@@ -122,11 +122,14 @@ export default function App() {
   useEffect(() => {
     input.current?.focus();
     setFilePreview(undefined);
-  }, [activeId]);
+  }, [activeId, active?.project]);
   function openFile(path: string, change?: FileChange) {
     if (!active) return;
+    const initialView = change ? "diff" : "content";
     change ||= active.fileChanges?.find((file) => file.path === path || relativeFile(file.path, active.project) === path.replace(/^\.[\\/]/, ""));
-    setFilePreview({ path, change });
+    setFilePreview({ path, change, initialView });
+    setPanelOpen(true);
+    setPanelWidth((width) => Math.max(width, 700));
   }
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -648,7 +651,9 @@ export default function App() {
         <div className="inspector-shell">
         <PanelResizer width={clampPanelWidth(panelWidth, viewport)} viewport={viewport} change={setPanelWidth}
           save={(inspectorWidth) => { void window.codeclaw.invoke("layout.save", { inspectorWidth }).catch(onError); }} />
-        <CapabilityPanel
+        {filePreview && active ? <FilePreview sessionId={activeId} project={active.project}
+          version={active.fileChanges?.find((file) => file.path === (filePreview.change?.path || filePreview.path) || relativeFile(file.path, active.project) === filePreview.path)?.updatedAt}
+          {...filePreview} changes={active.fileChanges || []} close={() => setFilePreview(undefined)} onOpen={openFile} /> : <CapabilityPanel
             onOpenFile={openFile}
           key={activeId || "empty"}
           session={active}
@@ -658,12 +663,9 @@ export default function App() {
           refresh={refresh}
           update={update}
           onError={onError}
-        />
+        />}
         </div>
       )}
-      {filePreview && active && <FilePreview key={activeId + filePreview.path} sessionId={activeId} project={active.project}
-        version={active.fileChanges?.find((file) => file.path === (filePreview.change?.path || filePreview.path) || relativeFile(file.path, active.project) === filePreview.path)?.updatedAt}
-        path={filePreview.path} change={filePreview.change} close={() => setFilePreview(undefined)} onOpen={openFile} />}
       {settingsOpen && (
         <SettingsDialog
           key={activeId}

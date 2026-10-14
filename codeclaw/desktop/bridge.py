@@ -15,6 +15,7 @@ from codeclaw.security.permissions import ApprovalPolicy
 from codeclaw.desktop.activity import restore_activity
 from codeclaw.desktop.turns import TurnRecorder, conversation_history
 from codeclaw.features.file_changes import legacy_changes, preview_file
+from codeclaw.features.workspace_files import list_directory, git_changes, git_file_diff
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.protocols.mcp_config import MCPConfigStore
@@ -365,6 +366,10 @@ class DesktopBridge:
             return {"project": str(self.cwd), "persistedId": sid, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages, traces), "activity": activity, "workers": workers, "fileChanges": self.file_changes}
         if method == "files.read":
             return preview_file(self.cwd, params.get("path"), self.file_changes)
+        if method == "files.list":
+            return list_directory(self.cwd, params.get("path", ""))
+        if method == "files.gitDiff":
+            return await git_file_diff(self.cwd, params.get("path"))
         if method == "capabilities.list":
             return self.capabilities()
         if method == "capabilities.directory":
@@ -462,16 +467,7 @@ class DesktopBridge:
                 await self.sync_model(self.engine)
             return public_config(cfg)
         if method == "changes":
-            async def git(*args):
-                process = await asyncio.create_subprocess_exec("git", "-c", "core.quotepath=false", *args, cwd=str(self.cwd), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                try:
-                    output, _ = await asyncio.wait_for(process.communicate(), timeout=10)
-                except asyncio.TimeoutError:
-                    process.kill()
-                    await process.communicate()
-                    raise ValueError("Git command timed out")
-                return output.decode("utf-8", errors="replace") if process.returncode == 0 else ""
-            return {"status": await git("status", "--short"), "diff": (await git("diff", "--no-ext-diff", "--no-color", "HEAD"))[:200000]}
+            return await git_changes(self.cwd)
         raise ValueError("Unknown method: " + method)
 
     async def close(self):

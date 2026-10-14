@@ -12,12 +12,14 @@ import {
   FileDiff,
   Activity,
   X,
+  FolderTree,
 } from "lucide-react";
 import type { SessionView, Skill, FileChange } from "./types";
 import ChangesPanel from "./ChangesPanel";
 import Markdown from "./Markdown";
 import CapabilityGuide from "./CapabilityGuide";
 import ActivityPanel from "./ActivityPanel";
+import WorkspaceTree from "./WorkspaceTree";
 
 export default function CapabilityPanel({
   session,
@@ -72,6 +74,7 @@ export default function CapabilityPanel({
           { id: "agents", label: "代理", icon: Bot },
           { id: "activity", label: "活动", icon: Activity },
           { id: "changes", label: "变更", icon: FileDiff },
+          { id: "files", label: "文件", icon: FolderTree },
         ].map(({ id, label, icon: Icon }) => (
           <button
             key={id}
@@ -339,6 +342,7 @@ export default function CapabilityPanel({
             <ActivityPanel session={session} />
           )}
           {tab === "changes" && <ChangesPanel key={session.id} session={session} invoke={invoke} onOpen={onOpenFile} />}
+          {tab === "files" && <WorkspaceTree sessionId={session.id} project={session.project} changes={session.fileChanges} onOpen={onOpenFile} />}
         </>
       )}
       {guide && session && <CapabilityGuide kind={guide} session={session} invoke={invoke} update={update} close={() => setGuide(null)} />}

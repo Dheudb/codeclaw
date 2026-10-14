@@ -18,9 +18,9 @@ export default function FileChanges({ files, project, onOpen, compact = false }:
   if (!files.length) return null;
   const known = files.filter((file) => file.statsAvailable);
   return <section className={"file-changes " + (compact ? "compact" : "")} aria-label="文件变更">
-    <header><FileDiff size={17} /><div><strong>{compact ? "会话修改的文件" : `已修改 ${files.length} 个文件`}</strong>
+    <header><FileDiff size={17} /><div><strong>{compact ? files[0]?.source === "git" ? "Git 未提交的文件" : "会话修改的文件" : `已修改 ${files.length} 个文件`}</strong>
       <ChangeCounts added={known.length ? known.reduce((sum, file) => sum + (file.added || 0), 0) : null} removed={known.length ? known.reduce((sum, file) => sum + (file.removed || 0), 0) : null} />
-      {known.length !== files.length && <small>部分历史未记录行数</small>}</div></header>
+      {known.length !== files.length && <small>部分文件未记录行数</small>}</div></header>
     {(expanded || compact ? files : files.slice(0, 3)).map((file) => <button key={file.path} className="changed-file-row" title={file.path}
       aria-label={"打开文件 " + relativeFile(file.path, project)} onClick={() => onOpen(file.path, file)}>
       <span>{relativeFile(file.path, project)}</span><ChangeCounts added={file.added} removed={file.removed} /></button>)}

@@ -23,6 +23,8 @@ const engineMethods = new Set([
   "stop",
   "changes",
   "files.read",
+  "files.list",
+  "files.gitDiff",
   "capabilities.list",
   "capabilities.toggle",
   "skills.read",
