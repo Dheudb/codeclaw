@@ -262,8 +262,6 @@ class QueryEngine:
         }
         latent_tool_names = {
             "browser_tool",
-            "web_search_tool",
-            "web_fetch_tool",
             "notebook_tool",
         }
         self.available_tools = {

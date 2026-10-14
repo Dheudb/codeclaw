@@ -92,7 +92,7 @@ class DesktopBridge:
         for server in self.mcp_store.snapshot():
             state = statuses.get(server["name"], {}) if not changed else {}
             servers.append({**server, "connection": state, "status": "disabled" if server.get("enabled") is False else state.get("status", "pending")})
-        return {"servers": servers, "runtime": runtime_info(), "needsReload": changed, "builtinSearch": "DuckDuckGo", "project": str(self.cwd)}
+        return {"servers": servers, "runtime": runtime_info(), "needsReload": changed, "builtinSearch": "DDGS 多搜索源", "project": str(self.cwd)}
 
     async def reload_mcp(self):
         if self.protocol_task is None:

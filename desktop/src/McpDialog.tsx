@@ -749,7 +749,7 @@ export default function McpDialog({
           )}
         </div>
         <footer className="mcp-footer">
-          <span>内置 DuckDuckGo 搜索仍可独立使用。</span>
+          <span>内置 DDGS 多搜索源搜索可独立使用。</span>
           <span>当前项目 · {snapshot?.project.split(/[\\/]/).pop()}</span>
         </footer>
       </section>

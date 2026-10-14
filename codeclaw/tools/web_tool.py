@@ -1,10 +1,15 @@
 import re
 import asyncio
+import sys
 import httpx
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
+if sys.version_info >= (3, 10):
+    from ddgs import DDGS
+else:
+    from duckduckgo_search import DDGS
 from pydantic import BaseModel, Field
 from codeclaw.tools.base import BaseAgenticTool
+from codeclaw.context.tool_results import build_tool_result
 
 class WebSearchInput(BaseModel):
     query: str = Field(..., description="The search query to look up on the web.")
@@ -22,33 +27,34 @@ class WebSearchTool(BaseAgenticTool):
         month_year = datetime.datetime.now().strftime("%B %Y")
         return f"""Search the web for real-time information about any topic. Returns search result information formatted as search result blocks, including links as markdown hyperlinks.
 
-Use this tool for accessing information beyond your knowledge cutoff.
+Use this tool directly when the user asks to search the public web, research papers/models, or verify current information. It is already active and needs no tool discovery or model-provider API feature. Keep public research scoped to online sources; inspect project files only for project-specific requests.
+If the search service fails, report the service error and try a revised query or a configured search MCP. A provider failure does not mean the tool is unavailable.
 
 CRITICAL REQUIREMENT:
 - After answering the user's question, you MUST include a "Sources:" section at the end of your response
 - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
 
 IMPORTANT - Use the correct year in search queries:
-- The current month is {month_year}. You MUST use this year when searching for recent information.
-- Example: search for "React documentation {datetime.datetime.now().year}", NOT older years"""
+- The current month is {month_year}. Include an appropriate year when recency matters without excluding relevant earlier research."""
 
-    async def execute(self, query: str, max_results: int = 5) -> str:
+    async def execute(self, query: str, max_results: int = 5) -> dict:
         try:
             limit = max(1, min(int(max_results), 10))
             # DDGS is synchronous; its network calls must not block streaming or Stop.
-            results = await asyncio.to_thread(lambda: list(DDGS(timeout=12).text(query, max_results=limit)))
+            results = await asyncio.wait_for(asyncio.to_thread(lambda: list(DDGS(timeout=8).text(query, max_results=limit))), timeout=35)
+            results = [r for r in results if isinstance(r, dict) and str(r.get('href', '')).startswith(('https://', 'http://'))][:limit]
             if not results:
-                return "No web search results were returned. Try another query or an available search MCP."
+                return build_tool_result(ok=False, is_error=True, content="The built-in web search service returned no usable results. Try a revised query or a configured search MCP. The web search tool exists; local project files are not a substitute for this public-web research.", metadata={"backend": "ddgs", "query": query, "reason": "no_results"})
             out = f"Web Search Results for: '{query}'\n" + "="*40 + "\n"
             for r in results:
-                out += f"Title: {r.get('title')}\nURL: {r.get('href')}\nSnippet: {r.get('body')}\n\n"
-            return out
+                out += f"Title: {str(r.get('title', ''))[:500]}\nURL: {r.get('href')}\nSnippet: {str(r.get('body', ''))[:2500]}\n\n"
+            return build_tool_result(ok=True, content=out, metadata={"backend": "ddgs", "query": query, "result_count": len(results)})
         except Exception as e:
-            return f"Error executing Web Search: {str(e)}"
+            return build_tool_result(ok=False, is_error=True, content=f"Built-in web search service failed ({type(e).__name__}). Check network access, retry, or use a configured search MCP. This is a search-provider failure, not a missing tool.", metadata={"backend": "ddgs", "query": query, "reason": type(e).__name__})
 
 class WebFetchInput(BaseModel):
     url: str = Field(..., description="The URL to fetch content from.")
-    prompt: str = Field(..., description="A prompt describing what information to extract from the page.")
+    prompt: str = Field("", description="Optional description of what information to extract from the page.")
 
 class WebFetchTool(BaseAgenticTool):
     name = "web_fetch_tool"
@@ -91,4 +97,4 @@ Usage notes:
             return result
 
         except Exception as e:
-            return f"Error fetching webpage: {str(e)}"
+            return build_tool_result(ok=False, is_error=True, content=f"Webpage request failed ({type(e).__name__}). Check the URL and network, or try another source.", metadata={"url": url, "reason": type(e).__name__})

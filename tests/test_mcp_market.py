@@ -96,8 +96,8 @@ class MCPMarketTests(unittest.IsolatedAsyncioTestCase):
         with patch("codeclaw.tools.web_tool.DDGS") as ddgs:
             ddgs.return_value.text.return_value = [{"title": "Fixture", "href": "https://example.invalid/source", "body": "Snippet"}]
             result = await WebSearchTool().execute("fixture", 50)
-        self.assertIn("\nURL: https://example.invalid/source\n", result)
-        self.assertNotIn("\\n", result)
+        self.assertIn("\nURL: https://example.invalid/source\n", result["content"])
+        self.assertNotIn("\\n", result["content"])
         ddgs.return_value.text.assert_called_once_with("fixture", max_results=10)
 
     async def test_market_no_network_for_curated_and_pagination_for_registry(self):

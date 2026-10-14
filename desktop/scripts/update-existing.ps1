@@ -34,6 +34,11 @@ try {
         @{ Source = (Join-Path $stageRoot 'codeclaw'); Target = (Join-Path $packageRoot 'resources\python\Lib\site-packages\codeclaw'); Backup = (Join-Path $stageRoot 'backup\codeclaw') },
         @{ Source = (Join-Path $stageRoot 'metadata'); Target = (Join-Path $packageRoot ('resources\python\Lib\site-packages\' + $manifest.metadataDirectory)); Backup = (Join-Path $stageRoot 'backup\metadata') }
     )
+    foreach ($dependency in $manifest.pythonPackages) {
+        if ($dependency -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$' -or $dependency -in @('codeclaw', $manifest.metadataDirectory)) { throw 'Invalid Python dependency directory.' }
+        if ($entries | Where-Object { (Split-Path -Leaf $_.Target) -eq $dependency }) { throw 'Duplicate Python dependency directory.' }
+        $entries += @{ Source = (Join-Path $stageRoot ('dependencies\' + $dependency)); Target = (Join-Path $packageRoot ('resources\python\Lib\site-packages\' + $dependency)); Backup = (Join-Path $stageRoot ('backup\dependencies\' + $dependency)) }
+    }
     foreach ($entry in $entries) {
         Assert-Child $entry.Source $stageRoot
         Assert-Child $entry.Target $packageRoot

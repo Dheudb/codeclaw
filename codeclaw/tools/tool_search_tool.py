@@ -1,3 +1,4 @@
+import re
 from pydantic import BaseModel, Field
 
 from codeclaw.context.tool_results import build_tool_result
@@ -26,6 +27,8 @@ class ToolSearchTool(BaseAgenticTool):
         return (
             "If you need a specialized capability that is not currently exposed as an active tool, "
             "use `tool_search_tool` to discover and activate matching tools first."
+            " Web search and URL reading are already active: use web_search_tool and web_fetch_tool directly. "
+            "This tool searches tool definitions, not the internet."
         )
 
     async def execute(self, query: str, activate: list[str] = None) -> dict:
@@ -52,16 +55,27 @@ class ToolSearchTool(BaseAgenticTool):
             }
 
         matches = []
+        terms = set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", query_lower))
+        terms -= {"the", "a", "an", "for", "to", "of", "and", "or", "with", "use", "tool", "tools", "access", "information", "request", "please"}
+        aliases = {"联网": {"web", "search"}, "搜索网页": {"web", "search"}, "网页": {"web", "fetch"},
+                   "浏览器": {"browser"}, "笔记本": {"notebook"}, "internet": {"web"}, "url": {"fetch"}, "browse": {"browser"}}
+        for alias, expanded in aliases.items():
+            if alias in query_lower:
+                terms.update(expanded)
         for item in catalog.values():
             haystack = " ".join([
                 item.get("name", ""),
                 item.get("description", ""),
                 item.get("prompt", ""),
             ]).lower()
-            if not query_lower or query_lower in haystack:
+            name = item["name"].lower()
+            description = item["description"].lower()
+            score = sum(5 if term in name else 3 if term in description else 1 if term in haystack else 0 for term in terms)
+            if not query_lower or query_lower in haystack or score:
+                item["score"] = score + (20 if query_lower and query_lower in haystack else 0)
                 matches.append(item)
 
-        matches = sorted(matches, key=lambda item: (item.get("active") is False, item.get("name")))
+        matches = sorted(matches, key=lambda item: (-item["score"], item.get("active") is False, item.get("name")))
 
         activated = []
         if activate and callable(activate_tools):
@@ -80,6 +94,8 @@ class ToolSearchTool(BaseAgenticTool):
             lines.append("Activated tools:")
             for name in activated:
                 lines.append(f"- {name}")
+        if any(not item["active"] for item in matches):
+            lines.append("To activate a latent tool, call tool_search_tool again with activate=[the exact tool name].")
 
         return build_tool_result(
             ok=True,
