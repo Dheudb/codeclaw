@@ -125,7 +125,7 @@ class DesktopBridge:
     def capabilities(self):
         definitions = self.agents.definitions()
         builtins = [{"name": name, "description": item.get("when_to_use", ""), "scope": "builtin", "valid": True, "shadowed": False} for name, item in definitions.items() if "path" not in item]
-        return {"skills": self.skills.discover(), "agents": builtins + [{k: v for k, v in item.items() if k != "disallowed_tools"} for item in self.agents.discover()], "settings": self.skills.settings()}
+        return {"skills": self.skills.discover(), "agents": builtins + [{k: v for k, v in item.items() if k != "disallowed_tools"} for item in self.agents.discover()], "settings": {**self.skills.settings(), "projectSkillsRoot": str(self.cwd / ".codeclaw" / "skills"), "projectAgentsRoot": str(self.cwd / ".codeclaw" / "agents"), "globalSkillsRoot": str(self.skills.home / ".codeclaw" / "skills"), "globalAgentsRoot": str(self.skills.home / ".codeclaw" / "agents")}}
 
     def sessions(self):
         root = self.cwd / ".codeclaw" / "sessions"
@@ -319,6 +319,28 @@ class DesktopBridge:
             return {"project": str(self.cwd), "persistedId": sid, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages)}
         if method == "capabilities.list":
             return self.capabilities()
+        if method == "capabilities.directory":
+            kind = params.get("kind")
+            if kind not in {"skills", "agents"}:
+                raise ValueError("Unknown capability kind")
+            root = self.skills.home if params.get("scope") == "global" else self.cwd
+            directory = root / ".codeclaw" / kind
+            directory.mkdir(parents=True, exist_ok=True)
+            return str(directory)
+        if method == "capabilities.example":
+            self.require_idle()
+            files = {
+                self.cwd / ".codeclaw/skills/project-review/SKILL.md": "---\nname: project-review\ndescription: Review project structure, implementation and tests.\n---\n\nRead references/checklist.md before reviewing. Inspect relevant source and report concrete findings with file paths. Do not modify code unless explicitly requested.\n",
+                self.cwd / ".codeclaw/skills/project-review/references/checklist.md": "# Review checklist\n\nCheck correctness, error handling, project boundaries and meaningful test coverage. Clearly distinguish verified findings from uncertainty.\n",
+                self.cwd / ".codeclaw/agents/reviewer.md": "---\nname: reviewer\ndescription: Review code independently and report concrete issues.\nmodel: inherit\ntools: Read, Grep, Glob, Skill\nskills: [project-review]\n---\n\nInspect the assigned code using the project-review skill. Report actionable issues with file paths and reasons. Do not modify files.\n",
+            }
+            if any(path.exists() for path in files):
+                raise ValueError("示例文件已存在；请导入或刷新现有定义，不会覆盖文件。")
+            for path, body in files.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("x", encoding="utf-8") as stream:
+                    stream.write(body)
+            return self.capabilities()
         if method == "capabilities.import":
             self.require_idle()
             kind = params.get("kind")
@@ -347,6 +369,11 @@ class DesktopBridge:
             return self.capabilities()
         if method == "skills.read":
             return self.skills.read(params["name"])
+        if method == "agents.read":
+            agent = self.agents.resolve(params["name"])
+            if agent.get("path"):
+                return Path(agent["path"]).read_text(encoding="utf-8-sig")
+            return str(agent.get("system_prompt", agent.get("description", "")))
         if method == "prompt":
             if self.busy() or self.mcp_testing:
                 raise ValueError("A turn or MCP connection operation is already running")

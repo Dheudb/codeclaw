@@ -412,7 +412,7 @@ async function main() {
     await screenshot("workbench.png");
     // A second project owns a distinct Python process and capability catalog.
     await page
-      .getByRole("button", { name: "another-project", exact: true })
+      .getByRole("button", { name: "打开项目 another-project", exact: true })
       .click();
     await page.getByText("添加第一个 Skill", { exact: true }).waitFor();
     await page
@@ -431,33 +431,16 @@ async function main() {
       fs.existsSync(path.join(secondProject, "desktop-proof.txt")),
       false,
     );
-    // Resume through the saved-session UI, after closing the live session.
-    await page
-      .locator(".session-select")
-      .filter({ hasText: "验收技能：请分析这个项目。" })
-      .click();
-    const originalSession = await page.evaluate(
-      () => document.querySelector(".session-item.active")?.textContent,
-    );
-    assert(originalSession.includes("验收技能"));
-    await page
-      .locator(".session-item.active")
-      .getByRole("button", { name: "关闭会话" })
-      .click();
-    await page
-      .locator(".project-item")
-      .filter({ hasText: "sample-project" })
-      .click();
-    await page
-      .locator(".history-item")
-      .filter({ hasText: "验收技能：请分析这个项目。" })
-      .click();
-    await page.getByRole("textbox", { name: "任务输入" }).waitFor();
-    assert(
-      (await page
-        .getByText("验收技能：请分析这个项目。", { exact: true })
-        .count()) > 0,
-    );
+    // Unload the runtime, then reopen the same durable row: no duplicate history.
+    await page.locator(".session-select").filter({ hasText: "验收技能：请分析这个项目。" }).click();
+    await page.locator(".session-item.active").filter({ hasText: "验收技能：请分析这个项目。" }).waitFor();
+    const originalId = await page.locator(".session-item.active").getAttribute("data-session-id");
+    const rowsBefore = await page.locator(".session-item").count();
+    await page.evaluate((session) => window.codeclaw.invoke("session.close", { session }), originalId);
+    await page.locator(".session-select").filter({ hasText: "验收技能：请分析这个项目。" }).click();
+    await page.locator(".session-item.active").filter({ hasText: "验收技能：请分析这个项目。" }).waitFor();
+    assert.equal(await page.locator(".session-item").count(), rowsBefore);
+    assert.equal(await page.locator(".session-item.active").getAttribute("data-session-id"), originalId);
     assert.deepEqual(errors, []);
     // Relaunch with the same data, without clicking Open project. All open
     // sessions, the selected conversation, and project history must restore.
@@ -469,9 +452,9 @@ async function main() {
     page = await app.firstWindow();
     page.setDefaultTimeout(45000);
     await page.getByRole("textbox", { name: "任务输入" }).waitFor();
-    await page.locator(".history-item").filter({ hasText: "验收技能：请分析这个项目。" }).waitFor();
+    await page.locator(".session-select").filter({ hasText: "验收技能：请分析这个项目。" }).waitFor();
     assert((await page.locator(".session-item.active").innerText()).includes("验收技能"));
-    assert.equal(await page.locator(".session-item").count(), savedWorkspace.length);
+    assert.equal(await page.locator(".session-item").count(), rowsBefore);
     assert.equal(received.length, requestsBeforeRestart, "Restoring history must not call the model");
     await page.getByRole("button", { name: "设置与模型", exact: true }).click();
     await page.getByPlaceholder("••••••••••••••••（已保存）").waitFor();

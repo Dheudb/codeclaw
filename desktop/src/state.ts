@@ -14,7 +14,7 @@ export function createSession(initial: InitialSession): SessionView {
     logs: [],
     selected: [],
     mode: "normal",
-    draft: "",
+    draft: initial.savedDraft || "",
   };
 }
 

@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
+const { SessionCatalog, projectKey, sessionKey, atomicJSON } = require("./catalog.cjs");
 const { EngineTransport } = require("./transport.cjs");
 const { resolveEnginePython } = require("./runtime.cjs");
 if (process.env.CODECLAW_USER_DATA)
@@ -12,6 +12,9 @@ let quitting = false;
 let configTransport;
 let activeSessionId;
 let restoration;
+const catalog = new SessionCatalog(settings, saveSettings);
+let workspaceQueue = Promise.resolve();
+let catalogRevision = 0;
 const engineMethods = new Set([
   "prompt",
   "respond",
@@ -20,6 +23,7 @@ const engineMethods = new Set([
   "capabilities.list",
   "capabilities.toggle",
   "skills.read",
+  "agents.read",
   "agents.cancel",
   "config.save",
   "mcp.list",
@@ -30,34 +34,42 @@ const engineMethods = new Set([
   "mcp.remove",
   "mcp.test",
   "mcp.reload",
+  "capabilities.example",
 ]);
 function settingsPath() {
   return path.join(app.getPath("userData"), "workbench.json");
 }
 function settings() {
-  try {
-    return JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
-  } catch {
-    return { projects: [] };
-  }
+  if (!fs.existsSync(settingsPath())) return { projects: [] };
+  return JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
 }
 function saveSettings(value) {
-  fs.mkdirSync(app.getPath("userData"), { recursive: true });
-  const target = settingsPath();
-  fs.writeFileSync(target + ".tmp", JSON.stringify(value, null, 2));
-  fs.renameSync(target + ".tmp", target);
+  atomicJSON(settingsPath(), value);
+}
+function broadcastCatalog() {
+  const snapshot = { ...catalog.snapshot(), revision: ++catalogRevision };
+  if (window && !window.isDestroyed())
+    window.webContents.send("workbench:event", { type: "catalog_changed", catalog: snapshot });
+  return snapshot;
 }
 function send(id, payload) {
+  const source = sessions.get(id);
+  if (source && payload.type === "turn_finished") source.busy = false;
+  if (source && payload.type === "subagent_status") source.workers.set(payload.agent.agent_id, payload.agent.status);
   if (payload.type === "session_started" && sessions.has(id)) {
     sessions.get(id).resumeId = payload.sessionId;
     saveWorkspace();
   }
   if (window && !window.isDestroyed())
     window.webContents.send("workbench:event", { session: id, ...payload });
+  if (payload.type === "engine_exit") sessions.delete(id);
+  if (["session_started", "sessions_changed"].includes(payload.type)) broadcastCatalog();
 }
 function saveWorkspace() {
+  const active = sessions.get(activeSessionId);
   saveSettings({
     ...settings(),
+    activeConversation: active ? { project: active.project, resumeId: active.resumeId } : null,
     workspace: [...sessions.entries()].map(([id, session]) => ({
       project: session.project,
       resumeId: session.resumeId,
@@ -66,21 +78,21 @@ function saveWorkspace() {
   });
 }
 function latestSavedSession(project) {
-  const directory = path.join(project, ".codeclaw", "sessions");
   try {
-    return fs.readdirSync(directory)
-      .filter((name) => /^[a-zA-Z0-9_-]+\.json$/.test(name))
-      .map((name) => ({ name, modified: fs.statSync(path.join(directory, name)).mtimeMs }))
-      .sort((a, b) => b.modified - a.modified)[0]?.name.slice(0, -5);
+    return catalog.list(project).filter((row) => !row.archived && !row.error)
+      .sort((a, b) => b.updated - a.updated)[0]?.sessionId;
   } catch {
     return undefined;
   }
 }
 async function restoreWorkspace() {
   const saved = settings();
-  const entries = Array.isArray(saved.workspace) ? saved.workspace :
+  const legacyEntries = Array.isArray(saved.workspace) ? saved.workspace :
     (saved.projects || []).map((project) => ({ project, resumeId: latestSavedSession(project) }))
       .filter((entry) => entry.resumeId).slice(0, 1);
+  const selected = Object.prototype.hasOwnProperty.call(saved, "activeConversation") ? saved.activeConversation :
+    legacyEntries.find((entry) => entry.active) || legacyEntries[0];
+  const entries = selected ? [selected] : [];
   const restored = [], errors = [];
   for (const entry of entries.slice(0, 8)) {
     try {
@@ -90,7 +102,7 @@ async function restoreWorkspace() {
         resumeId = latestSavedSession(entry.project);
       const initial = await createSession(entry.project, resumeId);
       restored.push(initial);
-      if (entry.active) activeSessionId = initial.id;
+      activeSessionId = initial.id;
     } catch {
       errors.push("无法恢复项目：" + entry.project);
     }
@@ -102,11 +114,6 @@ function engineRoot() {
   return app.isPackaged
     ? path.join(process.resourcesPath, "engine")
     : path.resolve(__dirname, "../..");
-}
-function projectKey(value) {
-  return process.platform === "win32"
-    ? path.resolve(value).toLowerCase()
-    : path.resolve(value);
 }
 function globalConfig() {
   if (!configTransport || configTransport.closed) {
@@ -129,8 +136,15 @@ function globalConfig() {
 async function createSession(project, resumeId) {
   project = fs.realpathSync(project);
   if (!fs.statSync(project).isDirectory()) throw new Error("项目目录不存在");
-  if (sessions.size >= 8) throw new Error("已打开 8 个会话，请先关闭一个会话");
-  const id = crypto.randomUUID();
+  const row = resumeId ? catalog.find(sessionKey(project, resumeId)) : catalog.create(project);
+  resumeId = row.sessionId;
+  const id = row.id;
+  if (sessions.has(id)) return { existingId: id };
+  if (sessions.size >= 8) {
+    const idle = [...sessions.entries()].find(([key, source]) => key !== activeSessionId && !running(source));
+    if (!idle) throw new Error("已有 8 个运行中的会话，请先停止一个任务");
+    await disposeSession(idle[0]);
+  }
   const transport = new EngineTransport({
     python: resolveEnginePython({
       packaged: app.isPackaged,
@@ -142,17 +156,47 @@ async function createSession(project, resumeId) {
     project,
     onEvent: (event) => send(id, event),
   });
-  sessions.set(id, { transport, project, resumeId });
+  sessions.set(id, { transport, project, resumeId, busy: false, workers: new Map() });
   try {
     const initial = await transport.request("initialize", {
       sessionId: resumeId,
     });
-    return { id, ...initial };
+    return { id, ...initial, title: row.title, savedDraft: row.draft || "" };
   } catch (error) {
     sessions.delete(id);
     await transport.close();
     throw error;
   }
+}
+function running(source) {
+  return source.busy || [...source.workers.values()].includes("running");
+}
+async function disposeSession(id) {
+  const source = sessions.get(id);
+  if (!source) return;
+  await source.transport.close();
+  sessions.delete(id);
+  if (window && !window.isDestroyed()) window.webContents.send("workbench:event", { type: "session_unloaded", session: id });
+}
+async function selectRow(row) {
+  catalog.updateProject(row.project, { open: true });
+  const initial = await createSession(row.project, row.sessionId);
+  activeSessionId = row.id;
+  saveWorkspace();
+  return { ...initial, activeId: row.id, catalog: broadcastCatalog() };
+}
+async function fallback(project, excluded = []) {
+  const snapshot = catalog.snapshot();
+  const eligible = snapshot.projects.filter((entry) => entry.open && !entry.archived)
+    .flatMap((entry) => entry.sessions).filter((row) => !row.archived && !row.error && !excluded.includes(row.id));
+  const next = eligible.filter((row) => projectKey(row.project) === projectKey(project))
+    .sort((a, b) => b.updated - a.updated)[0] || eligible.sort((a, b) => b.updated - a.updated)[0];
+  if (next) return selectRow(next);
+  const scope = snapshot.projects.find((entry) => projectKey(entry.path) === projectKey(project) && entry.open && !entry.archived);
+  if (scope) return selectRow(catalog.create(scope.path));
+  activeSessionId = undefined;
+  saveWorkspace();
+  return { activeId: "", catalog: broadcastCatalog() };
 }
 async function invoke(method, params) {
   if (method === "external.open") {
@@ -167,9 +211,15 @@ async function invoke(method, params) {
     return {
       ...settings(),
       ...await restoration,
+      catalog: broadcastCatalog(),
       version: app.getVersion(),
       config: await globalConfig().request("config.get"),
     };
+  }
+  if (method === "catalog.refresh") return broadcastCatalog();
+  if (method === "catalog.view") {
+    catalog.setView(params);
+    return broadcastCatalog();
   }
   if (method === "session.activate") {
     if (sessions.has(params.session)) {
@@ -191,40 +241,70 @@ async function invoke(method, params) {
       if (result.canceled) return null;
       project = result.filePaths[0];
     }
-    const existing = [...sessions.entries()].find(([, value]) => projectKey(value.project) === projectKey(project));
-    if (existing) {
-      activeSessionId = existing[0];
-      saveWorkspace();
-      return { existingId: existing[0] };
-    }
-    const result = await createSession(project, latestSavedSession(project));
-    activeSessionId = result.id;
-    const config = settings();
-    config.projects = [
-      result.project,
-      ...(config.projects || []).filter(
-        (p) => projectKey(p) !== projectKey(result.project),
-      ),
-    ].slice(0, 12);
-    saveSettings(config);
-    saveWorkspace();
-    return result;
+    project = catalog.addProject(project);
+    const active = sessions.get(activeSessionId);
+    const resumeId = active && projectKey(active.project) === projectKey(project) ? active.resumeId : latestSavedSession(project);
+    return selectRow(resumeId ? catalog.find(sessionKey(project, resumeId)) : catalog.create(project));
   }
-  if (method === "session.open") {
-    const source = sessions.get(params.session);
-    if (!source) throw new Error("会话不存在");
-    const result = await createSession(source.project, params.resumeId);
-    activeSessionId = result.id;
+  if (method === "session.select") return selectRow(catalog.find(params.id));
+  if (method === "session.open" || method === "session.new") {
+    const source = method === "session.new" ? { project: params.path } : sessions.get(params.session);
+    if (!source || !catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project))) throw new Error("项目不存在");
+    if (params.resumeId) return selectRow(catalog.find(sessionKey(source.project, params.resumeId)));
+    const empty = catalog.list(source.project).find((row) => !row.archived && !row.error && !row.draft &&
+      row.title === "新会话" && !running(sessions.get(row.id) || { busy: false, workers: new Map() }) &&
+      JSON.parse(fs.readFileSync(catalog.file(row.project, row.sessionId), "utf8")).messages?.length === 0);
+    return selectRow(empty || catalog.create(source.project));
+  }
+  if (method === "session.update") {
+    const ids = [...new Set(params.ids || [params.id])];
+    for (const id of ids) catalog.update(catalog.find(id), params.patch || {});
+    if (params.patch?.archived && ids.includes(activeSessionId)) return fallback(catalog.find(activeSessionId).project, ids);
+    return { catalog: broadcastCatalog() };
+  }
+  if (method === "session.fork") {
+    const row = catalog.find(params.id);
+    if (sessions.has(row.id) && running(sessions.get(row.id))) throw new Error("先停止当前任务，再复制会话");
+    return selectRow(catalog.fork(row));
+  }
+  if (method === "session.delete") {
+    if (params.confirm !== true) throw new Error("请确认删除会话");
+    const rows = [...new Set(params.ids || [params.id])].map((id) => catalog.find(id));
+    if (!params.stop && rows.some((row) => sessions.has(row.id) && running(sessions.get(row.id))))
+      throw new Error("会话正在运行，请先停止任务或选择停止并删除");
+    const wasActive = rows.find((row) => row.id === activeSessionId);
+    for (const row of rows) await disposeSession(row.id);
+    for (const row of rows) catalog.delete(row);
+    if (wasActive) return fallback(wasActive.project, rows.map((row) => row.id));
     saveWorkspace();
-    return result;
+    return { catalog: broadcastCatalog() };
+  }
+  if (["project.update", "project.close", "project.remove", "project.delete"].includes(method)) {
+    const project = catalog.snapshot().projects.find((entry) => projectKey(entry.path) === projectKey(params.path));
+    if (!project) throw new Error("项目不存在");
+    if (method === "project.update") {
+      catalog.updateProject(project.path, params.patch || {});
+      if (params.patch?.archived && sessions.get(activeSessionId)?.project === project.path) return fallback(project.path);
+      return { catalog: broadcastCatalog() };
+    }
+    if (["project.delete", "project.remove"].includes(method) && params.confirm !== true) throw new Error("请确认移除项目");
+    const live = [...sessions.entries()].filter(([, value]) => projectKey(value.project) === projectKey(project.path));
+    if (!params.stop && live.some(([, source]) => running(source))) throw new Error("项目有运行中的任务，请先停止任务");
+    const wasActive = live.some(([id]) => id === activeSessionId);
+    for (const [id] of live) await disposeSession(id);
+    if (method === "project.delete") for (const row of project.sessions) catalog.delete(row);
+    if (method === "project.close") catalog.updateProject(project.path, { open: false });
+    else catalog.removeProject(project.path);
+    if (wasActive) return fallback(project.path);
+    saveWorkspace();
+    return { catalog: broadcastCatalog() };
   }
   if (method === "session.close") {
     const source = sessions.get(params.session);
     if (source) {
-      sessions.delete(params.session);
+      await disposeSession(params.session);
       if (activeSessionId === params.session) activeSessionId = sessions.keys().next().value;
       saveWorkspace();
-      await source.transport.close();
     }
     return true;
   }
@@ -232,6 +312,11 @@ async function invoke(method, params) {
   if (!source) throw new Error("请先打开项目");
   if (method === "project.reveal") {
     await shell.openPath(source.project);
+    return true;
+  }
+  if (method === "capabilities.directory") {
+    const directory = await source.transport.request(method, params);
+    await shell.openPath(directory);
     return true;
   }
   if (method === "capabilities.import") {
@@ -252,6 +337,15 @@ async function invoke(method, params) {
   }
   if (!engineMethods.has(method)) throw new Error("不支持的操作");
   const { session: _session, ...payload } = params;
+  if (method === "prompt") {
+    if (source.busy) throw new Error("此会话已有运行中的任务");
+    source.busy = true;
+    const row = catalog.find(params.session);
+    catalog.update(row, { draft: "", ...(row.title === "新会话" ? { title: String(params.text || "").split("\n")[0].slice(0, 80) || "新会话" } : {}) });
+    broadcastCatalog();
+    try { return await source.transport.request(method, payload); }
+    catch (error) { source.busy = false; throw error; }
+  }
   return source.transport.request(method, payload);
 }
 app.whenReady().then(() => {
@@ -284,8 +378,14 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
+    if (/^(app\.initialize|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
+      const operation = workspaceQueue.then(() => invoke(method, params));
+      workspaceQueue = operation.catch(() => {});
+      return operation;
+    }
     return invoke(method, params);
   });
+  window.on("focus", () => { if (restoration) broadcastCatalog(); });
   const url = !app.isPackaged && process.env.CODECLAW_DEV_URL;
   if (url && url !== "http://127.0.0.1:5178")
     throw new Error("Invalid development server URL");

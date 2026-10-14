@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { SessionView, Skill } from "./types";
 import Markdown from "./Markdown";
+import CapabilityGuide from "./CapabilityGuide";
 
 export default function CapabilityPanel({
   session,
@@ -32,7 +33,7 @@ export default function CapabilityPanel({
   update: (patch: Partial<SessionView>) => void;
   onError: (e: unknown) => void;
 }) {
-  const [preview, setPreview] = useState<{ name: string; text: string } | null>(
+  const [preview, setPreview] = useState<{ name: string; text: string; kind?: "agent" } | null>(
     null,
   );
   const [changes, setChanges] = useState<{
@@ -40,6 +41,7 @@ export default function CapabilityPanel({
     diff: string;
   } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [guide, setGuide] = useState<"skills" | "agents" | null>(null);
   async function importDirectory(kind: string) {
     try {
       const capabilities = await invoke("capabilities.import", { kind });
@@ -137,6 +139,7 @@ export default function CapabilityPanel({
                 <Plus size={15} />
                 导入技能目录
               </button>
+              <button className="capability-guide-link" onClick={() => setGuide("skills")}>Skill 怎么配置？查看目录和示例</button>
               <div className="panel-scroll">
                 {!session.capabilities.skills.length && (
                   <div className="instruction-empty">
@@ -249,7 +252,7 @@ export default function CapabilityPanel({
                   <h3>子代理</h3>
                   <p>分配独立任务，查看执行结果</p>
                 </div>
-                <Bot size={17} />
+                <button className="icon-button" aria-label="刷新子代理" onClick={() => refresh().catch(onError)}><RefreshCw size={15} /></button>
               </div>
               <button
                 className="import-button"
@@ -258,6 +261,7 @@ export default function CapabilityPanel({
                 <Plus size={15} />
                 导入代理定义目录
               </button>
+              <button className="capability-guide-link" onClick={() => setGuide("agents")}>Subagent 怎么配置？查看目录和示例</button>
               <div className="panel-scroll">
                 {session.workers.length > 0 && (
                   <>
@@ -346,6 +350,8 @@ export default function CapabilityPanel({
                       </small>
                     )}
                     {agent.valid && !agent.shadowed && (
+                      <div className="card-actions">
+                      <button className="text-button" onClick={() => invoke("agents.read", { name: agent.name }).then((text) => setPreview({ name: agent.name, text, kind: "agent" })).catch(onError)}>查看代理定义</button>
                       <button
                         className="text-button"
                         onClick={() =>
@@ -359,6 +365,7 @@ export default function CapabilityPanel({
                       >
                         分配任务 →
                       </button>
+                      </div>
                     )}
                   </article>
                 ))}
@@ -445,21 +452,22 @@ export default function CapabilityPanel({
           )}
         </>
       )}
+      {guide && session && <CapabilityGuide kind={guide} session={session} invoke={invoke} update={update} close={() => setGuide(null)} />}
       {preview && (
         <div className="overlay" onClick={() => setPreview(null)}>
           <section
             className="dialog skill-preview"
             role="dialog"
-            aria-label="技能指令"
+            aria-label={preview.kind === "agent" ? "代理定义" : "技能指令"}
             onClick={(e) => e.stopPropagation()}
           >
             <header>
               <div>
-                <span className="eyebrow">SKILL INSTRUCTIONS</span>
+                <span className="eyebrow">{preview.kind === "agent" ? "SUBAGENT DEFINITION" : "SKILL INSTRUCTIONS"}</span>
                 <h2>{preview.name}</h2>
               </div>
               <button
-                aria-label="关闭技能预览"
+                aria-label={preview.kind === "agent" ? "关闭代理预览" : "关闭技能预览"}
                 className="icon-button"
                 onClick={() => setPreview(null)}
               >

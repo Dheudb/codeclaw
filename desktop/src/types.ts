@@ -31,6 +31,10 @@ export type Capabilities = {
     skill_roots?: string[];
     agent_roots?: string[];
     disabled_skills?: string[];
+    projectSkillsRoot?: string;
+    projectAgentsRoot?: string;
+    globalSkillsRoot?: string;
+    globalAgentsRoot?: string;
   };
 };
 export type ModelConfig = {
@@ -42,10 +46,36 @@ export type ModelConfig = {
 };
 export type HistoryItem = { role: "user" | "assistant"; text: string };
 export type SavedSession = { id: string; title: string; updated: number };
+export type CatalogSession = SavedSession & {
+  sessionId: string;
+  project: string;
+  created: number;
+  pinned: boolean;
+  archived: boolean;
+  error?: string;
+  draft?: string;
+};
+export type CatalogProject = {
+  path: string;
+  name: string;
+  open: boolean;
+  pinned: boolean;
+  archived: boolean;
+  collapsed?: boolean;
+  error?: string;
+  sessions: CatalogSession[];
+};
+export type SessionCatalog = {
+  revision?: number;
+  projects: CatalogProject[];
+  view: { sort: "recent" | "oldest" | "name" | "created"; showArchived: boolean };
+};
 export type InitialSession = {
   id: string;
   persistedId?: string;
   project: string;
+  title?: string;
+  savedDraft?: string;
   config: ModelConfig;
   capabilities: Capabilities;
   sessions: SavedSession[];

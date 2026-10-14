@@ -85,11 +85,12 @@ class SessionManager:
             with open(path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
                 if isinstance(payload, list):
-                    return {"messages": payload, "metadata": {}}
+                    return {"messages": payload, "metadata": {}, "_valid": True}
                 if isinstance(payload, dict):
                     return {
                         "messages": payload.get("messages", []),
                         "metadata": payload.get("metadata", {}),
+                        "_valid": isinstance(payload.get("messages", []), list) and isinstance(payload.get("metadata", {}), dict),
                     }
                 return {"messages": [], "metadata": {}}
         except Exception:

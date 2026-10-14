@@ -1,0 +1,40 @@
+import { useState } from "react";
+import { X } from "lucide-react";
+import type { SessionView } from "./types";
+
+export default function CapabilityGuide({ kind, session, invoke, update, close }: {
+  kind: "skills" | "agents"; session: SessionView;
+  invoke: (method: string, params?: Record<string, unknown>) => Promise<any>;
+  update: (patch: Partial<SessionView>) => void; close: () => void;
+}) {
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const settings = session.capabilities.settings;
+  const projectRoot = kind === "skills" ? settings.projectSkillsRoot : settings.projectAgentsRoot;
+  const globalRoot = kind === "skills" ? settings.globalSkillsRoot : settings.globalAgentsRoot;
+  const template = kind === "skills" ? `---\nname: project-review\ndescription: Review code, structure and tests.\n---\n\n检查项目实现与测试，报告具体问题和文件路径。` :
+    `---\nname: reviewer\ndescription: Review code independently.\nmodel: inherit\ntools: Read, Grep, Glob, Skill\nskills: [project-review]\n---\n\n使用 project-review 技能独立审查代码，报告问题，不修改文件。`;
+  async function examples() {
+    setBusy(true); setError("");
+    try { update({ capabilities: await invoke("capabilities.example") }); setSaved(true); }
+    catch (e) { setError(String(e)); } finally { setBusy(false); }
+  }
+  return <div className="overlay" onClick={close}>
+    <section className="dialog capability-guide" role="dialog" aria-modal="true" aria-label="能力配置说明" onClick={(e) => e.stopPropagation()}>
+      <header><h2>{kind === "skills" ? "配置 Skill" : "配置 Subagent"}</h2><button className="icon-button" aria-label="关闭配置说明" onClick={close}><X size={18} /></button></header>
+      <p>{kind === "skills" ? "每个技能使用一个目录，目录里的 SKILL.md 定义名称、使用时机和执行步骤。" : "每个子代理使用一个 Markdown 文件，定义职责、工具、模型和需要加载的 Skills。"}</p>
+      <p>当前项目：<code>{projectRoot}</code><br />所有项目共用：<code>{globalRoot}</code></p>
+      <div className="actions"><button onClick={() => invoke("capabilities.directory", { kind, scope: "project" }).catch((e) => setError(String(e)))}>打开项目配置目录</button>
+        <button onClick={() => invoke("capabilities.directory", { kind, scope: "global" }).catch((e) => setError(String(e)))}>打开全局配置目录</button></div>
+      <p>示例文件：{kind === "skills" ? "project-review/SKILL.md" : "reviewer.md"}</p>
+      <pre>{template}</pre>
+      {kind === "skills" ? <p>name 必须与技能目录名一致。导入技能目录会挂载原文件；修改后点击刷新。“用于下次任务”会显式加载完整指令，模型也可按需读取技能。</p> :
+        <p>model: inherit 沿用当前模型；tools 限制可用工具；skills 填写有效且启用的技能名称。点击角色卡片“分配任务”后补充任务并发送，模型通过子代理工具启动独立上下文。</p>}
+      <p>同名配置按项目目录、导入目录、全局目录的顺序选择。文件格式不正确时，面板会显示原因。</p>
+      {error && <p role="alert" className="error">{error}</p>}
+      {saved && <p role="status">已添加 project-review Skill 和 reviewer 子代理，可关闭说明后使用。</p>}
+      <footer><button onClick={close}>关闭</button><button className="primary" disabled={busy || session.busy || saved} onClick={examples}>{busy ? "添加中…" : "添加示例到当前项目"}</button></footer>
+    </section>
+  </div>;
+}

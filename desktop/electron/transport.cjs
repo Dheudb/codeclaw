@@ -26,6 +26,10 @@ class EngineTransport {
       },
     );
     this.lines = readline.createInterface({ input: this.child.stdout });
+    this.exited = new Promise((resolve) => {
+      this.child.once("exit", resolve);
+      this.child.once("error", resolve);
+    });
     this.lines.on("line", (line) => {
       let message;
       try {
@@ -57,7 +61,7 @@ class EngineTransport {
       }
       this.pending.clear();
       this.lines.close();
-      onEvent({ type: "engine_exit", message });
+      if (!this.closing) onEvent({ type: "engine_exit", message });
     };
     this.child.on("error", (error) =>
       fail("Python 启动失败：" + error.message),
@@ -82,8 +86,12 @@ class EngineTransport {
       this.child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
     });
   }
-  async close() {
-    if (this.closed) return;
+  close() {
+    return this.closePromise ||= this.dispose();
+  }
+  async dispose() {
+    if (this.closed) return this.exited;
+    this.closing = true;
     try {
       await Promise.race([
         this.request("stop"),
@@ -94,7 +102,8 @@ class EngineTransport {
     const timeout = setTimeout(() => {
       if (!this.closed) this.child.kill();
     }, 3000);
-    timeout.unref();
+    await this.exited;
+    clearTimeout(timeout);
   }
 }
 module.exports = { EngineTransport };

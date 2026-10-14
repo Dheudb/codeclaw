@@ -119,6 +119,12 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                 engine.switch_model_runtime(model="parent-model")
                 self.assertIs(engine.session_memory_manager.compactor, engine.compactor)
                 self.assertIs(engine.memory_extractor.compactor, engine.compactor)
+                engine.session_manager.save_session_state("empty-draft", [], {})
+                self.assertTrue(engine.load_session("empty-draft"))
+                self.assertEqual(engine.session_id, "empty-draft")
+                self.assertEqual(engine.messages, [])
+                from codeclaw.features.plans import get_plan_file_path
+                self.assertEqual(engine.plan_manager.plan_file_path, get_plan_file_path("empty-draft"))
                 await previous_client.close()
                 await previous_compactor.client.close()
                 engine.team_manager.create_team("test", engine.agent_id)

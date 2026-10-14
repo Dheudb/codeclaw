@@ -109,6 +109,9 @@ class PlanManager:
 
     # ---- serialization ----
 
+    def set_session(self, session_id: str):
+        self._session_id = session_id
+
     def load(self, mode: str = "normal", content: str = ""):
         self.mode = mode if mode in {"normal", "plan"} else "normal"
         if content:

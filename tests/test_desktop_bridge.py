@@ -13,6 +13,18 @@ from unittest.mock import patch, AsyncMock, Mock
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_capability_examples_are_valid_and_never_overwrite_existing_files(self):
+        with patch.dict(os.environ, {"CODECLAW_SKILLS_PATHS": ""}):
+            result = await self.bridge.dispatch("capabilities.example", {})
+        self.assertTrue(any(skill["name"] == "project-review" and skill["valid"] for skill in result["skills"]))
+        self.assertTrue(any(agent["name"] == "reviewer" and agent["valid"] for agent in result["agents"]))
+        target = self.root / ".codeclaw/skills/project-review/SKILL.md"
+        original = target.read_bytes()
+        with self.assertRaises(ValueError):
+            await self.bridge.dispatch("capabilities.example", {})
+        self.assertEqual(target.read_bytes(), original)
+        self.assertEqual(Path(result["settings"]["projectSkillsRoot"]).resolve(), (self.root / ".codeclaw/skills").resolve())
+
     async def test_resumed_engine_uses_current_config_and_not_old_session_endpoint(self):
         cfg = {"model_provider": "openai", "openai_model": "current-model", "openai_base_url": "https://current.invalid/v1", "openai_api_key": "private-fixture", "network_mode": "direct"}
         engine = Mock(client=Mock(close=AsyncMock()), compactor=Mock(client=Mock(close=AsyncMock())))

@@ -2743,7 +2743,7 @@ class QueryEngine:
     def load_session(self, sid: str) -> bool:
         state = self.session_manager.load_session_state(sid)
         msgs = state.get("messages", [])
-        if msgs:
+        if msgs or state.get("_valid"):
             self.session_id = sid
             self.last_persist_ok = self.session_manager.last_save_ok
             self.last_persist_error = self.session_manager.last_save_error
@@ -2777,6 +2777,7 @@ class QueryEngine:
                 self._sync_model_runtime_context()
             self.todo_manager.load(metadata.get("todos", []))
             plan_state = metadata.get("plan", {})
+            self.plan_manager.set_session(sid)
             self.plan_manager.load(
                 mode=plan_state.get("mode", "normal"),
                 content=plan_state.get("content", ""),

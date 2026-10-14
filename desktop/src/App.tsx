@@ -10,7 +10,6 @@ import {
   FolderOpen,
   GitBranch,
   LoaderCircle,
-  MessageSquare,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -21,12 +20,13 @@ import {
   X,
   Store,
 } from "lucide-react";
-import type { InitialSession, SessionView, ModelConfig } from "./types";
+import type { SessionView, ModelConfig, SessionCatalog } from "./types";
 import { applyEvent, beginTurn, createSession } from "./state";
 import CapabilityPanel from "./CapabilityPanel";
 import { InteractionCard, SettingsDialog } from "./Dialogs";
 import Markdown from "./Markdown";
 import McpDialog from "./McpDialog";
+import SessionSidebar from "./SessionSidebar";
 
 const basename = (value: string) =>
   value.split(/[\\/]/).filter(Boolean).pop() || value;
@@ -34,17 +34,21 @@ const basename = (value: string) =>
 export default function App() {
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [activeId, setActiveId] = useState("");
-  const [recent, setRecent] = useState<string[]>([]);
+  const [catalog, setCatalog] = useState<SessionCatalog>({ projects: [], view: { sort: "recent", showArchived: false } });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [globalModel, setGlobalModel] = useState<ModelConfig>();
   const [mcpOpen, setMcpOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelTab, setPanelTab] = useState("skills");
-  const [opening, setOpening] = useState(false);
+  const [opening, setOpening] = useState(true);
   const [notice, setNotice] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const navigation = useRef(0);
   const active = sessions.find((item) => item.id === activeId);
+  function receiveCatalog(value: SessionCatalog) {
+    setCatalog((previous) => (previous.revision || 0) > (value.revision || 0) ? previous : value);
+  }
 
   useEffect(() => {
     if (!window.codeclaw) {
@@ -54,19 +58,34 @@ export default function App() {
     window.codeclaw
       .invoke("app.initialize")
       .then((value) => {
-        setRecent(value.projects || []);
         setGlobalModel(value.config);
+        receiveCatalog(value.catalog);
         setSessions((value.restored || []).map(createSession));
         setActiveId(value.activeId || "");
         if (value.restoreErrors?.length) setNotice(value.restoreErrors.join("\n"));
       })
-      .catch((error) => setNotice(String(error)));
-    return window.codeclaw.onEvent((event) =>
+      .catch((error) => setNotice(String(error)))
+      .finally(() => setOpening(false));
+    return window.codeclaw.onEvent((event) => {
+      if (event.type === "catalog_changed") {
+        receiveCatalog(event.catalog);
+        return;
+      }
+      if (event.type === "session_unloaded") {
+        setSessions((previous) => previous.filter((session) => session.id !== event.session));
+        return;
+      }
       setSessions((previous) =>
         previous.map((session) => applyEvent(session, event)),
-      ),
-    );
+      );
+    });
   }, []);
+  useEffect(() => {
+    if (!active) return;
+    const id = active.id, draft = active.draft;
+    const timer = setTimeout(() => window.codeclaw.invoke("session.update", { id, patch: { draft } }).catch(onError), 500);
+    return () => clearTimeout(timer);
+  }, [activeId, active?.draft]);
   useEffect(() => {
     if (activeId) window.codeclaw.invoke("session.activate", { session: activeId }).catch(onError);
   }, [activeId]);
@@ -109,70 +128,42 @@ export default function App() {
   async function invoke(method: string, params: Record<string, unknown> = {}) {
     return window.codeclaw.invoke(method, { session: activeId, ...params });
   }
-  function accept(initial: InitialSession) {
-    setSessions((previous) => [...previous, createSession(initial)]);
-    setActiveId(initial.id);
-    setRecent((previous) =>
-      [
-        initial.project,
-        ...previous.filter(
-          (item) => item.toLowerCase() !== initial.project.toLowerCase(),
-        ),
-      ].slice(0, 12),
-    );
-  }
-  async function openProject(project?: string) {
-    setOpening(true);
+  async function workspaceAction(method: string, params: Record<string, unknown>) {
+    const changesSelection = !method.startsWith("catalog.") &&
+      (method !== "session.update" || !!(params.patch as { archived?: boolean } | undefined)?.archived) &&
+      (method !== "project.update" || !!(params.patch as { archived?: boolean } | undefined)?.archived);
+    const intent = changesSelection ? ++navigation.current : navigation.current;
+    if (changesSelection) setOpening(true);
     setNotice("");
     try {
-      const initial = await window.codeclaw.invoke("project.open", {
-        path: project,
-      });
-      if (initial?.existingId) setActiveId(initial.existingId);
-      else if (initial) accept(initial);
+      if (active?.draft && ["project.open", "session.new", "session.open", "session.select"].includes(method))
+        await window.codeclaw.invoke("session.update", { id: active.id, patch: { draft: active.draft } });
+      const result = await window.codeclaw.invoke(method, params);
+      if (!result) return;
+      if (result.catalog) receiveCatalog(result.catalog);
+      else if (method.startsWith("catalog.")) receiveCatalog(result);
+      if (result.id) {
+        setSessions((previous) => [...previous.filter((session) => session.id !== result.id), createSession(result)]);
+      }
+      if (changesSelection && intent === navigation.current) {
+        if ("activeId" in result) setActiveId(result.activeId);
+        else if (result.existingId || result.id) setActiveId(result.existingId || result.id);
+      }
+    } finally {
+      if (changesSelection && intent === navigation.current) setOpening(false);
+    }
+  }
+  async function openProject(project?: string) {
+    try {
+      await workspaceAction("project.open", { path: project });
     } catch (error) {
       onError(error);
-    } finally {
-      setOpening(false);
     }
   }
   async function openSession(resumeId?: string) {
     if (!active) return;
-    if (resumeId) {
-      const existing = sessions.find(
-        (item) =>
-          item.project === active.project && item.persistedId === resumeId,
-      );
-      if (existing) {
-        setActiveId(existing.id);
-        return;
-      }
-    }
-    setOpening(true);
     try {
-      const initial = await invoke("session.open", { resumeId });
-      accept(initial);
-      if (resumeId) update({ persistedId: resumeId }, initial.id);
-    } catch (error) {
-      onError(error);
-    } finally {
-      setOpening(false);
-    }
-  }
-  async function closeSession(id: string) {
-    const session = sessions.find((item) => item.id === id);
-    if (
-      session?.busy ||
-      session?.workers.some((worker) => worker.status === "running")
-    ) {
-      onError("先停止当前任务，再关闭会话。");
-      return;
-    }
-    try {
-      await window.codeclaw.invoke("session.close", { session: id });
-      setSessions((previous) => previous.filter((item) => item.id !== id));
-      if (activeId === id)
-        setActiveId(sessions.find((item) => item.id !== id)?.id || "");
+      await workspaceAction("session.open", { session: activeId, resumeId });
     } catch (error) {
       onError(error);
     }
@@ -181,7 +172,7 @@ export default function App() {
     if (active) update({ capabilities: await invoke("capabilities.list") });
   }
   async function send() {
-    if (!active || active.busy || !active.draft.trim()) return;
+    if (opening || !active || active.busy || !active.draft.trim()) return;
     const id = active.id,
       text = active.draft.trim(),
       selected = active.selected,
@@ -223,7 +214,7 @@ export default function App() {
       onError(error);
     }
   }
-  const title =
+  const title = catalog.projects.flatMap((project) => project.sessions).find((row) => row.id === activeId)?.title ||
     active?.messages
       .find((message) => message.role === "user")
       ?.text.split("\n")[0] || "新会话";
@@ -262,96 +253,8 @@ export default function App() {
           <FolderOpen size={16} />
           打开项目{opening && <LoaderCircle size={14} className="spin" />}
         </button>
-        <div className="sidebar-scroll">
-          <div className="sidebar-section">
-            <span>工作区</span>
-            <span className="count">
-              {new Set(sessions.map((session) => session.project)).size}
-            </span>
-          </div>
-          {!sessions.length && (
-            <p className="sidebar-hint">打开本地目录，开始你的第一个任务。</p>
-          )}
-          {sessions.map((session) => (
-            <div
-              className={
-                "session-item " + (session.id === activeId ? "active" : "")
-              }
-              key={session.id}
-            >
-              <button
-                className="session-select"
-                onClick={() => setActiveId(session.id)}
-              >
-                <span className="session-symbol">
-                  {session.busy ? (
-                    <LoaderCircle size={15} className="spin" />
-                  ) : (
-                    <MessageSquare size={15} />
-                  )}
-                </span>
-                <span>
-                  <strong>
-                    {session.messages
-                      .find((message) => message.role === "user")
-                      ?.text.slice(0, 25) || "新会话"}
-                  </strong>
-                  <small>{basename(session.project)}</small>
-                </span>
-              </button>
-              <button
-                className="close-session"
-                aria-label="关闭会话"
-                onClick={() => closeSession(session.id)}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
-          {active && (
-            <>
-              <div className="sidebar-section history-label">
-                <span>项目历史</span>
-                <span className="count">{active.sessions.length}</span>
-              </div>
-              {!active.sessions.length && (
-                <p className="sidebar-hint">
-                  完成任务后，会话自动保存在项目中。
-                </p>
-              )}
-              {active.sessions.slice(0, 12).map((session) => (
-                <button
-                  className="history-item"
-                  key={session.id}
-                  onClick={() => openSession(session.id)}
-                >
-                  <MessageSquare size={13} />
-                  <span>{session.title}</span>
-                </button>
-              ))}
-            </>
-          )}
-          {recent.length > 0 && (
-            <>
-              <div className="sidebar-section history-label">
-                <span>最近项目</span>
-              </div>
-              {recent.map((project) => (
-                <button
-                  className="history-item project-item"
-                  key={project}
-                  title={project}
-                  disabled={opening}
-                  onClick={() => openProject(project)}
-                >
-                  <Folder size={14} />
-                  <span>{basename(project)}</span>
-                  <ArrowUpRight size={12} />
-                </button>
-              ))}
-            </>
-          )}
-        </div>
+        <SessionSidebar catalog={catalog} activeId={activeId} live={sessions} opening={opening}
+          action={workspaceAction} openProject={openProject} onError={onError} />
         <div className="sidebar-bottom">
           <button
             className="sidebar-action"
@@ -382,7 +285,7 @@ export default function App() {
               title={active?.project}
               onClick={() => active && invoke("project.reveal").catch(onError)}
             >
-              {active ? basename(active.project) : "工作台"}
+              {active ? catalog.projects.find((project) => project.path.toLowerCase() === active.project.toLowerCase())?.name || basename(active.project) : "工作台"}
             </button>
             <ChevronRight size={13} />
             <span>{active ? title.slice(0, 35) : "开始"}</span>
@@ -604,7 +507,7 @@ export default function App() {
                   ? "描述你的任务，或选择一个 Skill 开始…"
                   : "打开项目后开始任务…"
               }
-              disabled={!active || active.busy}
+              disabled={opening || !active || active.busy}
               value={active?.draft || ""}
               onChange={(e) => update({ draft: e.target.value })}
               onKeyDown={(e) => {
@@ -622,7 +525,7 @@ export default function App() {
               <div className="composer-options">
                 <select
                   aria-label="执行模式"
-                  disabled={!active || active.busy}
+                  disabled={opening || !active || active.busy}
                   value={active?.mode || "normal"}
                   onChange={(e) => update({ mode: e.target.value })}
                 >
@@ -662,7 +565,7 @@ export default function App() {
                   <button
                     className="send-button"
                     aria-label="发送任务"
-                    disabled={!active?.draft.trim()}
+                    disabled={opening || !active?.draft.trim()}
                     onClick={send}
                   >
                     <ArrowUp size={19} />
