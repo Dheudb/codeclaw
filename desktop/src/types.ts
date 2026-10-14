@@ -38,11 +38,13 @@ export type ModelConfig = {
   model: string;
   baseUrl: string;
   hasKey: boolean;
+  networkMode?: "direct" | "system";
 };
 export type HistoryItem = { role: "user" | "assistant"; text: string };
 export type SavedSession = { id: string; title: string; updated: number };
 export type InitialSession = {
   id: string;
+  persistedId?: string;
   project: string;
   config: ModelConfig;
   capabilities: Capabilities;

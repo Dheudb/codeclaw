@@ -56,6 +56,9 @@ export default function App() {
       .then((value) => {
         setRecent(value.projects || []);
         setGlobalModel(value.config);
+        setSessions((value.restored || []).map(createSession));
+        setActiveId(value.activeId || "");
+        if (value.restoreErrors?.length) setNotice(value.restoreErrors.join("\n"));
       })
       .catch((error) => setNotice(String(error)));
     return window.codeclaw.onEvent((event) =>
@@ -64,6 +67,9 @@ export default function App() {
       ),
     );
   }, []);
+  useEffect(() => {
+    if (activeId) window.codeclaw.invoke("session.activate", { session: activeId }).catch(onError);
+  }, [activeId]);
   useEffect(() => {
     bottom.current?.scrollIntoView({
       behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -122,7 +128,8 @@ export default function App() {
       const initial = await window.codeclaw.invoke("project.open", {
         path: project,
       });
-      if (initial) accept(initial);
+      if (initial?.existingId) setActiveId(initial.existingId);
+      else if (initial) accept(initial);
     } catch (error) {
       onError(error);
     } finally {
@@ -697,7 +704,7 @@ export default function App() {
       {settingsOpen && (
         <SettingsDialog
           key={activeId}
-          config={active?.config || globalModel}
+          config={globalModel || active?.config}
           close={() => setSettingsOpen(false)}
           save={saveModel}
         />

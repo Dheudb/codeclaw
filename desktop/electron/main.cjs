@@ -10,6 +10,8 @@ const sessions = new Map();
 let window;
 let quitting = false;
 let configTransport;
+let activeSessionId;
+let restoration;
 const engineMethods = new Set([
   "prompt",
   "respond",
@@ -46,8 +48,55 @@ function saveSettings(value) {
   fs.renameSync(target + ".tmp", target);
 }
 function send(id, payload) {
+  if (payload.type === "session_started" && sessions.has(id)) {
+    sessions.get(id).resumeId = payload.sessionId;
+    saveWorkspace();
+  }
   if (window && !window.isDestroyed())
     window.webContents.send("workbench:event", { session: id, ...payload });
+}
+function saveWorkspace() {
+  saveSettings({
+    ...settings(),
+    workspace: [...sessions.entries()].map(([id, session]) => ({
+      project: session.project,
+      resumeId: session.resumeId,
+      active: id === activeSessionId,
+    })),
+  });
+}
+function latestSavedSession(project) {
+  const directory = path.join(project, ".codeclaw", "sessions");
+  try {
+    return fs.readdirSync(directory)
+      .filter((name) => /^[a-zA-Z0-9_-]+\.json$/.test(name))
+      .map((name) => ({ name, modified: fs.statSync(path.join(directory, name)).mtimeMs }))
+      .sort((a, b) => b.modified - a.modified)[0]?.name.slice(0, -5);
+  } catch {
+    return undefined;
+  }
+}
+async function restoreWorkspace() {
+  const saved = settings();
+  const entries = Array.isArray(saved.workspace) ? saved.workspace :
+    (saved.projects || []).map((project) => ({ project, resumeId: latestSavedSession(project) }))
+      .filter((entry) => entry.resumeId).slice(0, 1);
+  const restored = [], errors = [];
+  for (const entry of entries.slice(0, 8)) {
+    try {
+      let resumeId = entry.resumeId;
+      if (resumeId && (!/^[a-zA-Z0-9_-]+$/.test(resumeId) ||
+        !fs.existsSync(path.join(entry.project, ".codeclaw", "sessions", resumeId + ".json"))))
+        resumeId = latestSavedSession(entry.project);
+      const initial = await createSession(entry.project, resumeId);
+      restored.push(initial);
+      if (entry.active) activeSessionId = initial.id;
+    } catch {
+      errors.push("无法恢复项目：" + entry.project);
+    }
+  }
+  activeSessionId ||= restored[0]?.id;
+  return { restored, activeId: activeSessionId, restoreErrors: errors };
 }
 function engineRoot() {
   return app.isPackaged
@@ -93,7 +142,7 @@ async function createSession(project, resumeId) {
     project,
     onEvent: (event) => send(id, event),
   });
-  sessions.set(id, { transport, project });
+  sessions.set(id, { transport, project, resumeId });
   try {
     const initial = await transport.request("initialize", {
       sessionId: resumeId,
@@ -113,12 +162,22 @@ async function invoke(method, params) {
     await shell.openExternal(url.href);
     return true;
   }
-  if (method === "app.initialize")
+  if (method === "app.initialize") {
+    restoration ||= restoreWorkspace();
     return {
       ...settings(),
+      ...await restoration,
       version: app.getVersion(),
       config: await globalConfig().request("config.get"),
     };
+  }
+  if (method === "session.activate") {
+    if (sessions.has(params.session)) {
+      activeSessionId = params.session;
+      saveWorkspace();
+    }
+    return true;
+  }
   if (method === "config.get") return globalConfig().request("config.get");
   if (method === "config.save" && !params.session)
     return globalConfig().request("config.save", params);
@@ -132,7 +191,14 @@ async function invoke(method, params) {
       if (result.canceled) return null;
       project = result.filePaths[0];
     }
-    const result = await createSession(project);
+    const existing = [...sessions.entries()].find(([, value]) => projectKey(value.project) === projectKey(project));
+    if (existing) {
+      activeSessionId = existing[0];
+      saveWorkspace();
+      return { existingId: existing[0] };
+    }
+    const result = await createSession(project, latestSavedSession(project));
+    activeSessionId = result.id;
     const config = settings();
     config.projects = [
       result.project,
@@ -141,17 +207,23 @@ async function invoke(method, params) {
       ),
     ].slice(0, 12);
     saveSettings(config);
+    saveWorkspace();
     return result;
   }
   if (method === "session.open") {
     const source = sessions.get(params.session);
     if (!source) throw new Error("会话不存在");
-    return createSession(source.project, params.resumeId);
+    const result = await createSession(source.project, params.resumeId);
+    activeSessionId = result.id;
+    saveWorkspace();
+    return result;
   }
   if (method === "session.close") {
     const source = sessions.get(params.session);
     if (source) {
       sessions.delete(params.session);
+      if (activeSessionId === params.session) activeSessionId = sessions.keys().next().value;
+      saveWorkspace();
       await source.transport.close();
     }
     return true;

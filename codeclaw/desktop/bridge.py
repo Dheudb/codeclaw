@@ -61,6 +61,7 @@ class DesktopBridge:
         self.mcp_names = set()
         self.mcp_stamp = None
         self.mcp_testing = False
+        self.model_signature = None
 
     def config_stamp(self):
         try:
@@ -103,7 +104,23 @@ class DesktopBridge:
         cfg = load_config()
         provider = cfg.get("model_provider") or os.environ.get("CODECLAW_MODEL_PROVIDER", "anthropic")
         prefix = "openai" if provider == "openai" else "anthropic"
-        return {"provider": provider, "model": cfg.get(prefix + "_model") or os.environ.get(prefix.upper() + "_MODEL", ""), "baseUrl": cfg.get(prefix + "_base_url") or os.environ.get(prefix.upper() + "_BASE_URL", ""), "hasKey": bool(cfg.get(prefix + "_api_key") or os.environ.get(prefix.upper() + "_API_KEY"))}
+        return {"provider": provider, "model": cfg.get(prefix + "_model") or os.environ.get(prefix.upper() + "_MODEL", ""), "baseUrl": cfg.get(prefix + "_base_url") or os.environ.get(prefix.upper() + "_BASE_URL", ""), "hasKey": bool(cfg.get(prefix + "_api_key") or os.environ.get(prefix.upper() + "_API_KEY")), "networkMode": cfg.get("network_mode", "direct")}
+
+    async def sync_model(self, engine, force=False):
+        config = self.config()
+        cfg = load_config()
+        provider = config["provider"]
+        key = cfg.get(provider + "_api_key") or os.environ.get(provider.upper() + "_API_KEY", "")
+        signature = (provider, config["model"], config["baseUrl"], key, config["networkMode"])
+        if not config["model"] or (not force and signature == self.model_signature):
+            return
+        os.environ["CODECLAW_NETWORK_MODE"] = config["networkMode"]
+        previous_client, previous_compactor = engine.client, engine.compactor
+        engine.switch_model_runtime(provider=provider, model=config["model"], api_base_url=config["baseUrl"], api_key=key)
+        await previous_client.close()
+        if previous_compactor.client:
+            await previous_compactor.client.close()
+        self.model_signature = signature
 
     def capabilities(self):
         definitions = self.agents.definitions()
@@ -157,6 +174,7 @@ class DesktopBridge:
 
     async def ensure_engine(self):
         if self.engine is not None:
+            await self.sync_model(self.engine)
             if self.protocol_ready is not None:
                 await asyncio.shield(self.protocol_ready)
             if self.config_stamp() != self.mcp_stamp:
@@ -170,6 +188,9 @@ class DesktopBridge:
         if self.resume_id and not engine.load_session(self.resume_id):
             await engine.client.close()
             raise ValueError("Session could not be resumed")
+        # History restores conversation state; current saved settings determine
+        # how its next request connects, including changes made in another tab.
+        await self.sync_model(engine, force=True)
         for record in engine.subagent_registry:
             if record.get("status") == "running":
                 record["status"] = "interrupted"
@@ -238,7 +259,7 @@ class DesktopBridge:
                     self.emit({"type": "skill_loaded", "name": name})
             async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)})):
                 if event.get("type") == "final" and str(event.get("text", "")).startswith(("[bold red]API Loop Exception:", "[bold red]System Halt:")):
-                    self.emit({"type": "turn_error", "message": event["text"]})
+                    self.emit({"type": "turn_error", "message": re.sub(r"\[/?bold red\]", "", event["text"])})
                     continue
                 self.emit(event)
             self.emit({"type": "sessions_changed", "sessions": self.sessions()})
@@ -295,7 +316,7 @@ class DesktopBridge:
             if sid:
                 raw = json.loads((self.cwd / ".codeclaw" / "sessions" / (sid + ".json")).read_text(encoding="utf-8"))
                 messages = raw if isinstance(raw, list) else raw.get("messages", [])
-            return {"project": str(self.cwd), "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages)}
+            return {"project": str(self.cwd), "persistedId": sid, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages)}
         if method == "capabilities.list":
             return self.capabilities()
         if method == "capabilities.import":
@@ -365,8 +386,11 @@ class DesktopBridge:
             if not model:
                 raise ValueError("Model ID is required")
             base_url = normalize_api_base_url(provider, params.get("baseUrl", ""))
+            network_mode = params.get("networkMode", "direct")
+            if network_mode not in {"direct", "system"}:
+                raise ValueError("Unknown network mode")
             cfg = load_config()
-            cfg.update(model_provider=provider, **{provider + "_model": model, provider + "_base_url": base_url})
+            cfg.update(model_provider=provider, network_mode=network_mode, **{provider + "_model": model, provider + "_base_url": base_url})
             if params.get("apiKey"):
                 cfg[provider + "_api_key"] = params["apiKey"]
             save_config(cfg)
@@ -377,13 +401,9 @@ class DesktopBridge:
                 else:
                     os.environ.pop(provider.upper() + "_" + suffix.upper(), None)
             os.environ["CODECLAW_MODEL_PROVIDER"] = provider
+            os.environ["CODECLAW_NETWORK_MODE"] = network_mode
             if self.engine:
-                previous_client = self.engine.client
-                previous_compactor = self.engine.compactor
-                self.engine.switch_model_runtime(provider=provider, model=model, api_base_url=base_url, api_key=cfg.get(provider + "_api_key") or os.environ.get(provider.upper() + "_API_KEY"))
-                await previous_client.close()
-                if previous_compactor.client:
-                    await previous_compactor.client.close()
+                await self.sync_model(self.engine)
             return self.config()
         if method == "changes":
             async def git(*args):

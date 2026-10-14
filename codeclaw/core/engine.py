@@ -432,6 +432,7 @@ class QueryEngine:
         return candidate
 
     def _build_model_client(self):
+        from codeclaw.core.network import model_http_client
         if self.model_provider == "openai":
             if AsyncOpenAI is None:
                 raise RuntimeError(
@@ -440,8 +441,10 @@ class QueryEngine:
             kwargs = {}
             if self.api_base_url:
                 kwargs["base_url"] = self.api_base_url
-            return AsyncOpenAI(**kwargs)
-        return AsyncAnthropic()
+            from openai import DefaultAsyncHttpxClient
+            return AsyncOpenAI(http_client=model_http_client(DefaultAsyncHttpxClient), **kwargs)
+        from anthropic import DefaultAsyncHttpxClient
+        return AsyncAnthropic(http_client=model_http_client(DefaultAsyncHttpxClient))
 
     @property
     def is_configured(self) -> bool:

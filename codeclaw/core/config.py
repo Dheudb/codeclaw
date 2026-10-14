@@ -29,6 +29,7 @@ def normalize_api_base_url(provider: str, value: str) -> str:
 
 # Keys we persist — maps config key → environment variable name
 _PERSISTED_KEYS = {
+    "network_mode": "CODECLAW_NETWORK_MODE",
     "model_provider": "CODECLAW_MODEL_PROVIDER",
     "anthropic_model": "ANTHROPIC_MODEL",
     "openai_model": "OPENAI_MODEL",

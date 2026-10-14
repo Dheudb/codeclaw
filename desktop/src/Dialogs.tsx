@@ -18,6 +18,7 @@ export function SettingsDialog({
     baseUrl: config?.baseUrl || "",
     hasKey: !!config?.hasKey,
     apiKey: "",
+    networkMode: config?.networkMode || "direct",
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -98,16 +99,25 @@ export function SettingsDialog({
             API Key{" "}
             <span className="muted">
               {form.hasKey
-                ? "已配置，留空保留"
+                ? "✓ 已保存；输入新 Key 可替换"
                 : "本地无鉴权服务可填 not-needed"}
             </span>
             <input
               aria-label="API Key"
               type="password"
               autoComplete="off"
+              placeholder={form.hasKey ? "••••••••••••••••（已保存）" : "输入 API Key"}
               value={form.apiKey}
               onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
             />
+          </label>
+          <label>
+            连接方式
+            <select aria-label="连接方式" value={form.networkMode}
+              onChange={(e) => setForm({ ...form, networkMode: e.target.value as "direct" | "system" })}>
+              <option value="direct">直连（本地模型和兼容 API 默认）</option>
+              <option value="system">系统代理 / 环境代理</option>
+            </select>
           </label>
           <p className="fine-print">
             沿用 CodeClaw 本机配置；密钥不会返回聊天界面。

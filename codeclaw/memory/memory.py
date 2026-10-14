@@ -67,14 +67,17 @@ class MemoryCompactor:
         return candidate
 
     def _build_client(self):
+        from codeclaw.core.network import model_http_client
         if self.provider == "openai":
             if AsyncOpenAI is None:
                 return None
             kwargs = {}
             if self.api_base_url:
                 kwargs["base_url"] = self.api_base_url
-            return AsyncOpenAI(**kwargs)
-        return AsyncAnthropic()
+            from openai import DefaultAsyncHttpxClient
+            return AsyncOpenAI(http_client=model_http_client(DefaultAsyncHttpxClient), **kwargs)
+        from anthropic import DefaultAsyncHttpxClient
+        return AsyncAnthropic(http_client=model_http_client(DefaultAsyncHttpxClient))
 
     def _resolve_local_tokenizer(self):
         if not self.local_tokenizer_path:

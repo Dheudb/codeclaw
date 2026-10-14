@@ -9,6 +9,14 @@ const initial = {
   sessions: [],
   history: [],
 };
+test("a failed request removes its empty assistant placeholder and Rich tags", async () => {
+  const { createSession, beginTurn, applyEvent } = await state;
+  const session = applyEvent(beginTurn(createSession(initial), "hello"), {
+    session: "one", type: "turn_error", message: "[bold red]API Loop Exception:[/bold red] Connection error.",
+  });
+  assert.deepEqual(session.messages, [{ role: "user", text: "hello" }]);
+  assert.equal(session.error, "API Loop Exception: Connection error.");
+});
 test("events cannot alter another project session", async () => {
   const { createSession, applyEvent } = await state;
   const session = createSession(initial);

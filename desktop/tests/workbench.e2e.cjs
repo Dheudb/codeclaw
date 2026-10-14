@@ -215,17 +215,21 @@ async function main() {
     OPENAI_API_KEY: "local-test-key",
     OPENAI_BASE_URL: baseUrl,
     OPENAI_MODEL: "desktop-test",
-    NO_PROXY: "127.0.0.1,localhost",
+    // Reproduce a broken inherited proxy: direct model mode must bypass it.
+    HTTP_PROXY: "http://127.0.0.1:1",
+    HTTPS_PROXY: "http://127.0.0.1:1",
+    NO_PROXY: "",
   };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.CODECLAW_DEV_URL;
-  const app = await electron.launch({
+  const launchOptions = {
     executablePath: process.env.CODECLAW_TEST_EXECUTABLE,
     args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root],
     env,
     timeout: 30000,
-  });
-  const page = await app.firstWindow();
+  };
+  let app = await electron.launch(launchOptions);
+  let page = await app.firstWindow();
   await page.emulateMedia({ reducedMotion: "reduce" });
   const events = [];
   await page.exposeFunction("recordWorkbenchEvent", (event) => {
@@ -300,6 +304,8 @@ async function main() {
       await settingsDialog.locator('input[type="password"]').inputValue(),
       "",
     );
+    assert((await settingsDialog.locator('input[type="password"]').getAttribute("placeholder")).includes("已保存"));
+    assert.equal(await settingsDialog.getByLabel("连接方式", { exact: true }).inputValue(), "direct");
     await page.getByRole("button", { name: "关闭设置", exact: true }).click();
     await page
       .locator(".project-item")
@@ -453,12 +459,35 @@ async function main() {
         .count()) > 0,
     );
     assert.deepEqual(errors, []);
+    // Relaunch with the same data, without clicking Open project. All open
+    // sessions, the selected conversation, and project history must restore.
+    const requestsBeforeRestart = received.length;
+    const savedWorkspace = JSON.parse(fs.readFileSync(path.join(data, "workbench.json"), "utf8")).workspace;
+    assert(savedWorkspace.some((entry) => entry.resumeId && entry.active));
+    await app.close();
+    app = await electron.launch(launchOptions);
+    page = await app.firstWindow();
+    page.setDefaultTimeout(45000);
+    await page.getByRole("textbox", { name: "任务输入" }).waitFor();
+    await page.locator(".history-item").filter({ hasText: "验收技能：请分析这个项目。" }).waitFor();
+    assert((await page.locator(".session-item.active").innerText()).includes("验收技能"));
+    assert.equal(await page.locator(".session-item").count(), savedWorkspace.length);
+    assert.equal(received.length, requestsBeforeRestart, "Restoring history must not call the model");
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    await page.getByPlaceholder("••••••••••••••••（已保存）").waitFor();
+    await page.getByRole("button", { name: "关闭设置", exact: true }).click();
+    await page.getByRole("textbox", { name: "任务输入" }).fill("重启之后继续会话");
+    await page.getByRole("button", { name: "发送任务" }).click();
+    await page.getByRole("button", { name: "停止任务" }).waitFor({ state: "hidden" });
+    assert(received.length > requestsBeforeRestart);
+    assert(received.slice(requestsBeforeRestart).some((body) => body.stream &&
+      body.messages.some((message) => messageText(message).includes("验收技能：请分析这个项目。"))));
     assert(
       requestedPaths.length > 0 &&
         requestedPaths.every((url) => url === "/v1/chat/completions"),
     );
     console.log(
-      "PASS: desktop launch, real Python RPC, skill activation, permission-gated write, two background agents, project isolation, session resume",
+      "PASS: desktop launch, proxy bypass, saved Key indicator, skills, permissions, background agents, project isolation, history restored after restart, continued conversation",
     );
     console.log("Screenshot: " + path.join(root, "test-results/workbench.png"));
   } catch (error) {

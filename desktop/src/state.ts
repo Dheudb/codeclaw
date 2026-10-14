@@ -76,7 +76,9 @@ export function applyEvent(
         ...session,
         busy: false,
         streamIndex: null,
-        error: event.message || "引擎发生错误",
+        messages: session.messages.filter((message, index) =>
+          index !== session.streamIndex || !!message.text.trim()),
+        error: (event.message || "引擎发生错误").replace(/\[\/?bold red\]/g, ""),
         interactions: [],
       };
     case "permission":

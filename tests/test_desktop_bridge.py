@@ -9,10 +9,24 @@ from codeclaw.desktop.bridge import DesktopBridge
 from codeclaw.tools.plan_mode_tools import ExitPlanModeTool
 from codeclaw.features.plans import PlanManager
 from codeclaw.context.attachments import AttachmentCollector
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, Mock
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resumed_engine_uses_current_config_and_not_old_session_endpoint(self):
+        cfg = {"model_provider": "openai", "openai_model": "current-model", "openai_base_url": "https://current.invalid/v1", "openai_api_key": "private-fixture", "network_mode": "direct"}
+        engine = Mock(client=Mock(close=AsyncMock()), compactor=Mock(client=Mock(close=AsyncMock())))
+        with patch("codeclaw.desktop.bridge.load_config", return_value=cfg), patch.dict(os.environ):
+            await self.bridge.sync_model(engine, force=True)
+            engine.switch_model_runtime.assert_called_once_with(provider="openai", model="current-model", api_base_url="https://current.invalid/v1", api_key="private-fixture")
+            engine.client.close.assert_awaited_once()
+            await self.bridge.sync_model(engine)
+            self.assertEqual(engine.switch_model_runtime.call_count, 1)
+            cfg["openai_base_url"] = "https://updated.invalid/v1"
+            await self.bridge.sync_model(engine)
+            self.assertEqual(engine.switch_model_runtime.call_count, 2)
+            self.assertEqual(engine.switch_model_runtime.call_args.kwargs["api_base_url"], "https://updated.invalid/v1")
+
     async def test_model_can_save_without_project_engine_and_normalizes_full_endpoint(self):
         existing = {"openai_api_key": "fixture-existing-key", "other_setting": "keep"}
         with patch("codeclaw.desktop.bridge.load_config", return_value=existing), patch("codeclaw.desktop.bridge.save_config") as saved, patch.dict(os.environ, {}, clear=True):

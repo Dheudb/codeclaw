@@ -3,6 +3,7 @@
 桌面在“设置与模型”配置，CLI 通过 `/model` 配置。两者共用
 `~/.codeclaw/config.json`。`CODECLAW_CONFIG_DIR` 可以为开发或测试指定独立目录。
 配置文件中的 Key 以本地明文保存；界面读取配置时只收到 `hasKey` 标记。
+已保存的 Key 在输入框中显示遮罩和“已保存”提示，留空保存会保留原值。
 
 ## 支持的接口
 
@@ -27,7 +28,15 @@ $env:OPENAI_API_KEY = "local-placeholder"
 ```
 
 Anthropic 对应 `ANTHROPIC_MODEL`、`ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`。
-已设置的环境变量优先于从配置文件注入的值。
+CLI 启动时，已设置的环境变量优先于从配置文件注入的值。桌面会话使用设置页保存的连接配置，
+恢复历史时也使用当前连接配置，避免旧历史里的地址覆盖新设置。
+
+## 直连与代理
+
+模型请求默认直连，不会自动读取 Windows 系统代理。设置页可改为“系统代理 / 环境代理”，
+此时会使用系统代理以及 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`。
+CLI 可用 `CODECLAW_NETWORK_MODE=system` 启用代理，或 `direct` 直连。
+主代理、子代理和上下文压缩共用此规则；证书校验始终开启。
 
 ## 兼容边界
 
