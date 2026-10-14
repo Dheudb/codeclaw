@@ -16,8 +16,7 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
   onError: (error: unknown) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [showArchived, setShowArchived] = useState(catalog.view.showArchived);
-  useEffect(() => setShowArchived(catalog.view.showArchived), [catalog.view.showArchived]);
+  const showArchived = catalog.view.showArchived;
   const [menu, setMenu] = useState<Menu | null>(null);
   const [armed, setArmed] = useState("");
   const [choosing, setChoosing] = useState(false);
@@ -140,9 +139,7 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
         <button className="icon-button" aria-label="刷新会话列表" onClick={() => run("catalog.refresh", {})}><RefreshCw size={14} /></button>
       </div>
       <label className="archive-toggle"><input type="checkbox" checked={showArchived} onChange={(e) => {
-        const next = e.target.checked;
-        setShowArchived(next);
-        action("catalog.view", { showArchived: next }).catch((error) => { setShowArchived(catalog.view.showArchived); onError(error); });
+        action("catalog.view", { showArchived: e.target.checked }).catch(onError);
       }} />显示已归档</label>
       {choosing && selectedRows.length > 0 && <div className="batch-actions" onClick={(event) => event.stopPropagation()}>
         <span>已选 {selectedRows.length} 项</span>

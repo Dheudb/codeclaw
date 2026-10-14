@@ -4,7 +4,7 @@
 
 1. 解压完整的 `CodeClaw-win32-x64` 目录。
 2. 运行 `CodeClaw.exe`。
-3. 点击“打开项目”，选择本地项目目录。
+3. 点击“新建会话”即可使用自动创建的默认工作区；需要自己的文件夹时再点击“打开项目”。
 4. 在“设置与模型”配置模型协议、地址、模型 ID 和 Key。
 5. 输入任务。文件修改、命令和外部工具按会话权限执行。
 
@@ -19,7 +19,7 @@
 | 入口 | 用途 |
 |---|---|
 | 侧边栏项目与会话 | 打开项目、新建会话、恢复项目历史 |
-| 设置与模型 | 配置 Anthropic 或 OpenAI 兼容接口 |
+| 设置与模型 | 配置模型连接、修改默认工作目录 |
 | Skills 面板 | 导入技能目录、刷新、启停、查看指令 |
 | 代理面板 | 导入代理定义、查看和取消后台任务 |
 | 活动面板 | 查看工具调用与任务日志 |
@@ -27,6 +27,19 @@
 | MCP 市场 | 安装、配置、测试和启停外部工具 |
 
 模型设置详见[模型配置](models.md)，能力目录规范详见[Skills 与子代理](capabilities.md)。
+
+默认工作区在运行时按当前系统和用户解析，不包含开发者电脑的用户名或路径：
+
+| 系统 | 默认工作区 |
+|---|---|
+| Windows | `%LOCALAPPDATA%\CodeClaw\workspaces\default`，未设置时使用当前用户的 `AppData\Local` |
+| Linux | `$XDG_DATA_HOME/codeclaw/workspaces/default`，未设置时为 `~/.local/share/codeclaw/workspaces/default` |
+| macOS | `~/Library/Application Support/CodeClaw/workspaces/default` |
+
+目录在首次新建会话时自动创建，可在设置中独立保存新的默认目录，无需先配置模型。
+已选中项目时，新建会话使用该项目；未选择项目时使用默认工作区。修改默认目录不会移动已有项目或历史。
+会话仍保存在所属目录的 `.codeclaw/sessions/`，CLI 可在该目录恢复。
+上述路径逻辑适配三个系统；当前自带 Python 的发行包和成品验收仅提供 Windows 版本，Windows exe 不能在 Linux/macOS 上直接运行。
 
 ## 会话和停止
 

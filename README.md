@@ -22,7 +22,8 @@ CodeClaw 围绕本地项目提供模型对话、文件与命令工具、Skills�
 
 Windows 便携包内置 Python 运行时和 MCP 依赖，解压完整目录后运行 `CodeClaw.exe`。
 **使用便携包不需要安装 Python、Node.js，也不需要选择解释器。**
-打开项目目录，在“设置与模型”填写协议、API 地址、模型 ID 和 Key，即可开始任务。
+在“设置与模型”填写协议、API 地址、模型 ID 和 Key，点击“新建会话”即可使用默认工作区。
+默认目录按当前系统和用户自动设置，可在设置中修改；处理已有代码时再选择“打开项目”。
 仅打开界面、管理 Skills 或配置 MCP 不需要调用模型。
 
 本仓库保存源码；Windows 包由 `npm run pack` 构建，输出到 `desktop/release/`。

@@ -27,6 +27,7 @@ import { InteractionCard, SettingsDialog } from "./Dialogs";
 import Markdown from "./Markdown";
 import McpDialog from "./McpDialog";
 import SessionSidebar from "./SessionSidebar";
+import { CatalogPreferences } from "./catalog-preferences";
 
 const basename = (value: string) =>
   value.split(/[\\/]/).filter(Boolean).pop() || value;
@@ -35,6 +36,8 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [activeId, setActiveId] = useState("");
   const [catalog, setCatalog] = useState<SessionCatalog>({ projects: [], view: { sort: "recent", showArchived: false } });
+  const preferences = useRef(new CatalogPreferences(catalog));
+  const [defaultDirectory, setDefaultDirectory] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [globalModel, setGlobalModel] = useState<ModelConfig>();
   const [mcpOpen, setMcpOpen] = useState(false);
@@ -47,7 +50,7 @@ export default function App() {
   const navigation = useRef(0);
   const active = sessions.find((item) => item.id === activeId);
   function receiveCatalog(value: SessionCatalog) {
-    setCatalog((previous) => (previous.revision || 0) > (value.revision || 0) ? previous : value);
+    setCatalog(preferences.current.receive(value));
   }
 
   useEffect(() => {
@@ -59,6 +62,7 @@ export default function App() {
       .invoke("app.initialize")
       .then((value) => {
         setGlobalModel(value.config);
+        setDefaultDirectory(value.workspaceSettings.defaultDirectory);
         receiveCatalog(value.catalog);
         setSessions((value.restored || []).map(createSession));
         setActiveId(value.activeId || "");
@@ -103,7 +107,7 @@ export default function App() {
     const handler = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        if (!opening) active ? openSession() : openProject();
+        if (!opening) openSession();
       }
     };
     window.addEventListener("keydown", handler);
@@ -129,6 +133,8 @@ export default function App() {
     return window.codeclaw.invoke(method, { session: activeId, ...params });
   }
   async function workspaceAction(method: string, params: Record<string, unknown>) {
+    const preferenceWrite = method === "catalog.view" ? preferences.current.begin(params as Partial<SessionCatalog["view"]>) : undefined;
+    if (preferenceWrite) setCatalog(preferenceWrite.catalog);
     const changesSelection = !method.startsWith("catalog.") &&
       (method !== "session.update" || !!(params.patch as { archived?: boolean } | undefined)?.archived) &&
       (method !== "project.update" || !!(params.patch as { archived?: boolean } | undefined)?.archived);
@@ -140,7 +146,8 @@ export default function App() {
         await window.codeclaw.invoke("session.update", { id: active.id, patch: { draft: active.draft } });
       const result = await window.codeclaw.invoke(method, params);
       if (!result) return;
-      if (result.catalog) receiveCatalog(result.catalog);
+      if (preferenceWrite) setCatalog(preferences.current.finish(preferenceWrite.id, result));
+      else if (result.catalog) receiveCatalog(result.catalog);
       else if (method.startsWith("catalog.")) receiveCatalog(result);
       if (result.id) {
         setSessions((previous) => [...previous.filter((session) => session.id !== result.id), createSession(result)]);
@@ -149,6 +156,12 @@ export default function App() {
         if ("activeId" in result) setActiveId(result.activeId);
         else if (result.existingId || result.id) setActiveId(result.existingId || result.id);
       }
+    } catch (error) {
+      if (preferenceWrite) {
+        setCatalog(preferences.current.fail(preferenceWrite.id));
+        window.codeclaw.invoke("catalog.refresh").then(receiveCatalog).catch(() => {});
+      }
+      throw error;
     } finally {
       if (changesSelection && intent === navigation.current) setOpening(false);
     }
@@ -161,9 +174,9 @@ export default function App() {
     }
   }
   async function openSession(resumeId?: string) {
-    if (!active) return;
     try {
-      await workspaceAction("session.open", { session: activeId, resumeId });
+      if (resumeId && active) await workspaceAction("session.open", { session: activeId, resumeId });
+      else await workspaceAction("session.new", active ? { path: active.project } : {});
     } catch (error) {
       onError(error);
     }
@@ -208,7 +221,9 @@ export default function App() {
   }
   async function openSettings() {
     try {
-      setGlobalModel(await window.codeclaw.invoke("config.get"));
+      const [config, workspace] = await Promise.all([window.codeclaw.invoke("config.get"), window.codeclaw.invoke("workspace.get")]);
+      setGlobalModel(config);
+      setDefaultDirectory(workspace.defaultDirectory);
       setSettingsOpen(true);
     } catch (error) {
       onError(error);
@@ -240,7 +255,7 @@ export default function App() {
         <button
           className="new-task"
           disabled={opening}
-          onClick={() => (active ? openSession() : openProject())}
+          onClick={() => openSession()}
         >
           <Plus size={17} />
           新建会话<span>Ctrl N</span>
@@ -329,16 +344,16 @@ export default function App() {
               <p>
                 {active
                   ? "描述你的任务，连接模型，让代理在这个项目里开始工作。"
-                  : "连接你的模型、挂载本地项目，用 Skills 和子代理构建自己的工作流。"}
+                  : "连接模型即可开始；会话自动使用默认工作目录，也可以打开自己的项目。"}
               </p>
               {!active ? (
                 <button
                   className="primary open-project"
                   disabled={opening}
-                  onClick={() => openProject()}
+                  onClick={() => openSession()}
                 >
                   <FolderOpen size={17} />
-                  {opening ? "正在打开…" : "打开本地项目"}
+                  {opening ? "正在打开…" : "开始新会话"}
                   <ArrowUpRight size={15} />
                 </button>
               ) : (
@@ -505,7 +520,7 @@ export default function App() {
               placeholder={
                 active
                   ? "描述你的任务，或选择一个 Skill 开始…"
-                  : "打开项目后开始任务…"
+                  : "点击新建会话即可开始，也可以打开项目…"
               }
               disabled={opening || !active || active.busy}
               value={active?.draft || ""}
@@ -608,6 +623,13 @@ export default function App() {
         <SettingsDialog
           key={activeId}
           config={globalModel || active?.config}
+          defaultDirectory={defaultDirectory}
+          chooseDirectory={() => window.codeclaw.invoke("workspace.choose")}
+          saveDirectory={async (directory) => {
+            const value = await window.codeclaw.invoke("workspace.save", { defaultDirectory: directory });
+            setDefaultDirectory(value.defaultDirectory);
+            return value.defaultDirectory;
+          }}
           close={() => setSettingsOpen(false)}
           save={saveModel}
         />

@@ -4,6 +4,7 @@ const path = require("node:path");
 const { SessionCatalog, projectKey, sessionKey, atomicJSON } = require("./catalog.cjs");
 const { EngineTransport } = require("./transport.cjs");
 const { resolveEnginePython } = require("./runtime.cjs");
+const { defaultWorkspace } = require("./workspace.cjs");
 if (process.env.CODECLAW_USER_DATA)
   app.setPath("userData", process.env.CODECLAW_USER_DATA);
 const sessions = new Map();
@@ -45,6 +46,19 @@ function settings() {
 }
 function saveSettings(value) {
   atomicJSON(settingsPath(), value);
+}
+function workspaceSettings() {
+  const saved = settings().defaultDirectory;
+  return { defaultDirectory: typeof saved === "string" && path.isAbsolute(saved)
+    ? saved : defaultWorkspace({ home: app.getPath("home") }) };
+}
+function ensureWorkspace(directory) {
+  if (typeof directory !== "string" || !path.isAbsolute(directory.trim()))
+    throw new Error("默认工作目录必须是完整的绝对路径");
+  directory = directory.trim();
+  fs.mkdirSync(directory, { recursive: true });
+  if (!fs.statSync(directory).isDirectory()) throw new Error("请选择一个目录");
+  return fs.realpathSync(directory);
 }
 function broadcastCatalog() {
   const snapshot = { ...catalog.snapshot(), revision: ++catalogRevision };
@@ -214,7 +228,21 @@ async function invoke(method, params) {
       catalog: broadcastCatalog(),
       version: app.getVersion(),
       config: await globalConfig().request("config.get"),
+      workspaceSettings: workspaceSettings(),
     };
+  }
+  if (method === "workspace.get") return workspaceSettings();
+  if (method === "workspace.save") {
+    const defaultDirectory = ensureWorkspace(params.defaultDirectory);
+    saveSettings({ ...settings(), defaultDirectory });
+    return { defaultDirectory };
+  }
+  if (method === "workspace.choose") {
+    const result = await dialog.showOpenDialog(window, {
+      title: "选择默认工作目录", properties: ["openDirectory", "createDirectory"],
+      defaultPath: workspaceSettings().defaultDirectory,
+    });
+    return result.canceled ? null : result.filePaths[0];
   }
   if (method === "catalog.refresh") return broadcastCatalog();
   if (method === "catalog.view") {
@@ -248,7 +276,14 @@ async function invoke(method, params) {
   }
   if (method === "session.select") return selectRow(catalog.find(params.id));
   if (method === "session.open" || method === "session.new") {
-    const source = method === "session.new" ? { project: params.path } : sessions.get(params.session);
+    let project = params.path;
+    if (method === "session.new" && !project) {
+      const directory = ensureWorkspace(workspaceSettings().defaultDirectory);
+      const known = catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(directory));
+      project = catalog.addProject(directory);
+      if (!known) catalog.updateProject(project, { name: "默认工作区" });
+    }
+    const source = method === "session.new" ? { project } : sessions.get(params.session);
     if (!source || !catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project))) throw new Error("项目不存在");
     if (params.resumeId) return selectRow(catalog.find(sessionKey(source.project, params.resumeId)));
     const empty = catalog.list(source.project).find((row) => !row.archived && !row.error && !row.draft &&
@@ -378,7 +413,7 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
-    if (/^(app\.initialize|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|workspace\.save|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;

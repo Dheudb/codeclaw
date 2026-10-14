@@ -39,6 +39,7 @@ npm test
 npm run build
 npm run test:e2e
 npm run test:sessions
+npm run test:workspace
 npm run test:mcp
 ```
 
@@ -46,6 +47,7 @@ Electron 端到端验收默认隐藏窗口，使用本地模拟模型 API 和 MC
 不调用真实模型或付费搜索。测试覆盖 Skills、审批、后台代理、项目隔离、会话恢复、
 MCP 安装与连接、凭据保留和停用重连。会话测试另覆盖重命名、归档恢复、删除与停止运行中的引擎、
 草稿和重启恢复、项目关闭/移除、能力配置说明与示例。截图保存在 `desktop/test-results/`。
+工作区测试覆盖首次启动无需选目录、默认目录独立保存与重启恢复、显式项目优先，以及归档开关连续点击和延迟响应。
 本地模型质量、真实搜索源可用性和第三方服务账户权限需要单独验证。
 
 ## Windows 便携包

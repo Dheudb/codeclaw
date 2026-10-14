@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, KeyRound, Check } from "lucide-react";
+import { X, KeyRound, Check, FolderOpen } from "lucide-react";
 import type { EngineEvent, ModelConfig } from "./types";
 import Markdown from "./Markdown";
 
@@ -7,11 +7,20 @@ export function SettingsDialog({
   config,
   close,
   save,
+  defaultDirectory,
+  chooseDirectory,
+  saveDirectory,
 }: {
   config?: ModelConfig;
   close: () => void;
   save: (value: ModelConfig & { apiKey: string }) => Promise<void>;
+  defaultDirectory: string;
+  chooseDirectory: () => Promise<string | null>;
+  saveDirectory: (value: string) => Promise<string>;
 }) {
+  const [directory, setDirectory] = useState(defaultDirectory);
+  const [directoryBusy, setDirectoryBusy] = useState(false);
+  const [directorySaved, setDirectorySaved] = useState(false);
   const [form, setForm] = useState({
     provider: config?.provider || "openai",
     model: config?.model || "",
@@ -56,7 +65,7 @@ export function SettingsDialog({
           <h3>
             <KeyRound size={16} /> 模型连接
           </h3>
-          <p className="notice">模型连接可先保存，打开项目后即可使用。</p>
+          <p className="notice">保存模型连接后，新建会话即可使用。</p>
           <label>
             API 协议
             <select
@@ -122,6 +131,26 @@ export function SettingsDialog({
           <p className="fine-print">
             沿用 CodeClaw 本机配置；密钥不会返回聊天界面。
           </p>
+        </div>
+        <div className="form-section">
+          <h3><FolderOpen size={16} /> 默认工作目录</h3>
+          <p className="fine-print">按当前系统和用户自动设置。未选择项目时，新会话使用此目录；已有项目和历史不会移动。</p>
+          <label>目录路径
+            <input aria-label="默认工作目录" value={directory} onChange={(e) => { setDirectory(e.target.value); setDirectorySaved(false); }} />
+          </label>
+          <div className="actions">
+            <button disabled={directoryBusy} onClick={async () => {
+              setDirectoryBusy(true); setError("");
+              try { const value = await chooseDirectory(); if (value) { setDirectory(value); setDirectorySaved(false); } }
+              catch (e) { setError(String(e)); } finally { setDirectoryBusy(false); }
+            }}>选择文件夹</button>
+            <button disabled={directoryBusy || !directory.trim()} onClick={async () => {
+              setDirectoryBusy(true); setError(""); setDirectorySaved(false);
+              try { setDirectory(await saveDirectory(directory)); setDirectorySaved(true); }
+              catch (e) { setError(String(e)); } finally { setDirectoryBusy(false); }
+            }}>{directoryBusy ? "处理中…" : "保存默认目录"}</button>
+            {directorySaved && <span role="status">默认目录已保存</span>}
+          </div>
         </div>
         {error && (
           <p role="alert" className="error">

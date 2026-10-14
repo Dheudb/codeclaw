@@ -69,6 +69,6 @@ fs.copyFileSync(
 );
 fs.writeFileSync(
   path.join(output, "START-HERE.txt"),
-  "CodeClaw Desktop\r\n\r\nExtract the complete folder, then run CodeClaw.exe.\r\nPython and MCP dependencies are included. No Python installation or interpreter selection is required.\r\nOpen a project and configure a model endpoint to begin.\r\nThird-party MCP programs may have their own runtime requirements.\r\nPython's license and dependency metadata are under resources/python.\r\n",
+  "CodeClaw Desktop\r\n\r\nExtract the complete folder, then run CodeClaw.exe.\r\nPython and MCP dependencies are included. No Python installation or interpreter selection is required.\r\nConfigure a model endpoint, then start a new session in the automatic per-user workspace.\r\nChange the default directory in Settings, or use Open Project for an existing folder.\r\nThird-party MCP programs may have their own runtime requirements.\r\nPython's license and dependency metadata are under resources/python.\r\n",
 );
 console.log("Self-contained desktop: " + path.join(output, "CodeClaw.exe"));
