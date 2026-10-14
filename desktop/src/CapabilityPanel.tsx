@@ -282,7 +282,7 @@ export default function CapabilityPanel({
                           <span>{worker.agent_type || "子代理"} · {worker.model || "继承主模型"}</span>
                           <span>
                             {worker.status === "running"
-                              ? "执行中"
+                              ? worker.phase === "starting" ? "启动中" : "执行中"
                               : worker.status === "completed"
                                 ? "已完成"
                                 : worker.status === "cancelled"
@@ -290,6 +290,7 @@ export default function CapabilityPanel({
                                   : "异常"}
                           </span>
                         </div>
+                        {worker.started_at && <div className="card-meta"><span>启动 {new Date(worker.started_at).toLocaleTimeString("zh-CN", { hour12: false })}</span></div>}
                         {worker.status === "running" && worker.background && (
                           <button
                             className="text-button"

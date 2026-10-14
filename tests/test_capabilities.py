@@ -124,6 +124,100 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
 
 
 class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_one_call_starts_ten_before_any_reply(self):
+        from codeclaw.agents.agent_tool import AgentTool
+        tool = AgentTool()
+        records, entered = {}, []
+        def register(record):
+            records.setdefault(record["agent_id"], {}).update(record)
+        tool.context = {"register_subagent_record": register}
+        gate = asyncio.Event()
+        async def child(**kwargs):
+            self.assertEqual(len(records), 10, "All cards must be registered before the first request")
+            entered.append(kwargs["child_agent_id"])
+            if len(entered) == 10:
+                gate.set()
+            await gate.wait()
+            return {"agent_id": kwargs["child_agent_id"], "status": "completed", "result": kwargs["description"]}
+        with patch.object(tool, "_run_single_subagent", side_effect=child):
+            report = await asyncio.wait_for(tool.execute(prompt="你好", description="问候", count=10), 2)
+        self.assertEqual(len(set(entered)), 10)
+        self.assertIn("Completed: 10", report)
+        for index in range(1, 11):
+            self.assertIn(f"问候 {index}/10", report)
+
+    async def test_background_batch_wait_and_capacity_are_atomic(self):
+        from codeclaw.agents.agent_tool import AgentTool
+        tool = AgentTool()
+        records, entered = {}, []
+        def register(record):
+            records.setdefault(record["agent_id"], {}).update(record)
+        tool.context = {"register_subagent_record": register}
+        gate = asyncio.Event()
+        async def child(**kwargs):
+            entered.append(kwargs["child_agent_id"])
+            await gate.wait()
+            return {"agent_id": kwargs["child_agent_id"], "status": "completed", "result": "你好"}
+        with patch.object(tool, "_run_single_subagent", side_effect=child):
+            response = await tool.execute(prompt="你好", count=10, run_in_background=True)
+            self.assertIn("count=10", response)
+            self.assertEqual(len(records), 10)
+            await asyncio.sleep(0)
+            self.assertEqual(len(entered), 10)
+            with self.assertRaises(ValueError):
+                await tool.execute(prompt="extra", count=2, run_in_background=True)
+            self.assertEqual(len(records), 10, "Rejected batch must not allocate any workers")
+            gate.set()
+            report = await tool.execute(action="wait")
+            self.assertIn("Completed: 10", report)
+            self.assertEqual(tool.context["subagent_tasks"].completed(), [])
+        await tool.context["subagent_tasks"].close()
+
+    async def test_parallel_batches_share_ten_slots_and_early_cancel_settles_cards(self):
+        from codeclaw.agents.agent_tool import AgentTool
+        tool = AgentTool()
+        rows, entered = {}, []
+        def register(record):
+            rows.setdefault(record["agent_id"], {}).update(record)
+        tool.context = {"register_subagent_record": register}
+        gate = asyncio.Event()
+        async def child(**kwargs):
+            entered.append(kwargs["child_agent_id"])
+            await gate.wait()
+            return {"agent_id": kwargs["child_agent_id"], "status": "completed", "result": "你好"}
+        with patch.object(tool, "_run_single_subagent", side_effect=child):
+            batches = [asyncio.create_task(tool.execute(prompt="你好", count=10)) for _ in range(2)]
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertEqual(len(entered), 10)
+            gate.set()
+            await asyncio.gather(*batches)
+            self.assertEqual(len(set(entered)), 20)
+            await tool.execute(prompt="你好", count=10, run_in_background=True)
+            manager = tool.context["subagent_tasks"]
+            # Cancel without yielding after allocation: child code never starts.
+            await manager.cancel(next(iter(manager.tasks)))
+            await manager.close()
+            self.assertTrue(all(rows[identity]["status"] == "cancelled" for identity, result in manager.results.items() if result["status"] == "cancelled"))
+
+    async def test_batch_initialization_failure_and_invalid_count(self):
+        from codeclaw.agents.agent_tool import AgentTool, AgentToolInput
+        tool = AgentTool()
+        records = {}
+        def register(record):
+            records.setdefault(record["agent_id"], {}).update(record)
+        tool.context = {"register_subagent_record": register}
+        for count in [0, 11, True, 1.5, "10"]:
+            with self.assertRaises(ValueError):
+                AgentToolInput(count=count)
+            with self.assertRaises(ValueError):
+                await tool.execute(prompt="你好", count=count)
+        self.assertEqual(records, {})
+        with patch.object(tool, "_run_single_subagent", side_effect=RuntimeError("client initialization failed")):
+            report = await tool.execute(prompt="你好", count=10)
+        self.assertIn("Crashed: 10", report)
+        self.assertTrue(all(record["status"] == "crashed" and record["finished_at"] for record in records.values()))
+
     async def test_model_override_tools_team_registration_and_background(self):
         from codeclaw.core.engine import QueryEngine
         from codeclaw.memory.memory import MemoryCompactor

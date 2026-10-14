@@ -9,10 +9,27 @@ class SubagentTasks:
         self.results = {}
         self.delivered = set()
 
-    def launch(self, agent_id, coroutine):
-        if sum(not task.done() for task in self.tasks.values()) >= self.limit:
-            coroutine.close()
+    def check_capacity(self, count):
+        if sum(not task.done() for task in self.tasks.values()) + count > self.limit:
             raise ValueError("At most {} background subagents may run at once".format(self.limit))
+
+    def launch_batch(self, coroutines, on_cancelled_before_start=None):
+        try:
+            self.check_capacity(len(coroutines))
+        except ValueError:
+            for coroutine in coroutines.values():
+                coroutine.close()
+            raise
+        # No awaits: capacity validation and allocation are atomic on this loop.
+        for agent_id, coroutine in coroutines.items():
+            self.launch(agent_id, coroutine, on_cancelled_before_start)
+
+    def launch(self, agent_id, coroutine, on_cancelled_before_start=None):
+        try:
+            self.check_capacity(1)
+        except ValueError:
+            coroutine.close()
+            raise
 
         started = False
         async def run():
@@ -34,6 +51,8 @@ class SubagentTasks:
             if completed.cancelled() and not started:
                 coroutine.close()
                 self.results[agent_id] = {"agent_id": agent_id, "status": "cancelled", "result": "Cancelled before execution"}
+                if on_cancelled_before_start:
+                    on_cancelled_before_start(self.results[agent_id])
         task.add_done_callback(settled)
         self.tasks[agent_id] = task
 

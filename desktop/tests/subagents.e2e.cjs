@@ -50,7 +50,12 @@ const server = http.createServer((req, res) => {
       const afterTask = task ? body.messages.slice(body.messages.indexOf(task) + 1) : [];
       if (typeof task?.content === "string" && task.content.startsWith("启动10个") && !afterTask.some((message) => message.role === "tool")) {
         batch++;
-        reply(res, null, Array.from({ length: 10 }, (_, index) => ({ description: `问候测试 ${batch}-${index + 1}`, prompt: "你好", subagent_type: "general-purpose", run_in_background: task.content.includes("后台") })));
+        const schema = body.tools.find((tool) => tool.function?.name === "agent_tool").function.parameters;
+        assert.equal(schema.properties.count.maximum, 10);
+        const background = task.content.includes("后台");
+        reply(res, null, task.content.includes("单次")
+          ? [{ description: `问候测试 ${batch}`, prompt: "你好", count: 10, subagent_type: "general-purpose", run_in_background: background }]
+          : Array.from({ length: 10 }, (_, index) => ({ description: `问候测试 ${batch}-${index + 1}`, prompt: "你好", subagent_type: "general-purpose", run_in_background: background })));
       } else {
         reply(res, "已启动本批 10 个子代理");
       }
@@ -71,7 +76,7 @@ async function main() {
     await page.getByLabel("访问权限", { exact: true }).selectOption("full");
     await page.waitForFunction(() => !document.querySelector(".permission-picker").disabled);
     await page.evaluate(() => { window.workerEvents = []; window.codeclaw.onEvent((event) => { if (event.type === "subagent_status") window.workerEvents.push(event.agent); }); });
-    for (const [index, task] of ["启动10个subagent，都发送你好", "启动10个后台subagent，都发送你好"].entries()) {
+    for (const [index, task] of ["启动10个subagent，都发送你好", "启动10个后台subagent，都发送你好", "启动10个subagent，单次批量，都发送你好", "启动10个后台subagent，单次批量，都发送你好"].entries()) {
       await page.getByRole("textbox", { name: "任务输入" }).fill(task);
       await page.getByRole("button", { name: "发送任务", exact: true }).click();
       await page.waitForFunction((count) => window.workerEvents.filter((worker) => worker.status === "completed").length === count, (index + 1) * 10);
@@ -79,11 +84,13 @@ async function main() {
       assert.equal(childRequests.length, (index + 1) * 10);
     }
     await page.getByRole("button", { name: "代理", exact: true }).click();
-    assert.equal(await page.locator(".capability-card").filter({ hasText: "问候测试" }).count(), 20);
-    assert.equal(await page.locator(".capability-card").filter({ hasText: "已完成" }).count(), 20);
+    assert.equal(await page.locator(".capability-card").filter({ hasText: "问候测试" }).count(), 40);
+    assert.equal(await page.locator(".capability-card").filter({ hasText: "已完成" }).count(), 40);
+    assert.equal(await page.locator(".capability-card").filter({ hasText: "问候测试 4 10/10" }).count(), 1);
+    assert.equal(await page.locator(".capability-card").filter({ hasText: "启动 " }).count(), 40);
     assert.deepEqual(failures, []);
     assert(!(await page.locator("body").innerText()).includes("DSML"));
-    console.log("Subagent E2E passed: isolated task/system roles, ten simultaneous foreground workers, ten background workers, distinct labels and completed states");
+    console.log("Subagent E2E passed: ten simultaneous requests before any reply in multi-call and single-call batches, foreground/background, 40 distinct workers");
   } finally {
     if (app) await app.close().catch(() => {});
     server.closeAllConnections(); server.close();

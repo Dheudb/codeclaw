@@ -97,6 +97,9 @@ export type Worker = {
   description?: string;
   status: string;
   task?: string;
+  phase?: string;
+  started_at?: number;
+  finished_at?: number;
   result?: string;
   model?: string;
   background?: boolean;

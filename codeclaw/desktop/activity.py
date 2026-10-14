@@ -47,6 +47,7 @@ def restore_activity(raw, cwd):
         activity.append({"id": "agent:" + agent_id, "name": "subagent", "agentId": agent_id,
                          "agentRole": worker.get("agent_role"), "status": worker.get("status", "interrupted"),
                          "input": {"description": worker.get("description"), "prompt": worker.get("task")},
+                         "startedAt": worker.get("started_at"), "finishedAt": worker.get("finished_at"),
                          "result": str(worker.get("result", ""))[:16000]})
         try:
             child = json.loads((cwd / ".codeclaw/sessions/subagents" / (agent_id + ".json")).read_text(encoding="utf-8"))

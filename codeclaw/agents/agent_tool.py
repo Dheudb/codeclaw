@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import time
 import uuid
 from typing import List, Optional
 from pydantic import BaseModel, Field
@@ -31,6 +32,7 @@ class AgentToolInput(BaseModel):
     agent_id: Optional[str] = Field(None, description="Background subagent ID for result or cancel")
     description: str = Field("", description="A short description of the task")
     prompt: str = Field("", description="The task for the agent to perform")
+    count: int = Field(1, ge=1, le=10, strict=True, description="Number of independent agents given this same prompt in parallel. For ten greeting/comparison agents, use count=10 in ONE call.")
     subagent_type: Optional[str] = Field(
         None,
         description=(
@@ -71,7 +73,7 @@ Set `subagent_type` to one of the following to get a specialized system prompt a
 
 {agent_list}
 
-If `subagent_type` is omitted, the agent defaults to general-purpose behavior. Multiple foreground calls in one message run concurrently. When you need to compare or synthesize the answers now, use run_in_background=false. Use run_in_background=true only for work you can continue without. Use action=wait to await background results (agent_id for one, or omit it for all), then compare the actual answers. Use action=list/result/cancel to manage background workers by agent_id.
+If `subagent_type` is omitted, the agent defaults to general-purpose behavior. To give the SAME assignment to N independent agents, use count=N in ONE call; the runtime starts them concurrently. Example for ten greetings: agent_tool(prompt="你好，请简短介绍自己。", description="问候测试", count=10, run_in_background=false). Do not call this tool ten times in successive turns for that request. For DIFFERENT assignments, multiple calls in the same message run concurrently. When you need to compare or synthesize the answers now, use run_in_background=false and compare all returned results. Use run_in_background=true only for work you can continue without. Use action=wait to await background results (agent_id for one, or omit it for all), then compare the actual answers. Use action=list/result/cancel to manage background workers by agent_id.
 
 ## When NOT to use agent_tool
 - If you want to read a specific file path, use file_read_tool or glob_tool instead — they find the match more quickly.
@@ -83,7 +85,7 @@ For simple, directed codebase searches (e.g. for a specific file/class/function)
 
 ## Usage notes
 - Always include a short description (3-5 words) summarizing what the agent will do.
-- Launch multiple agents concurrently whenever possible — use a single message with multiple tool uses.
+- Launch agents concurrently: count=N for the same assignment, or multiple tool uses in one message for different assignments.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user. To show the user the result, send a text message with a concise summary.
 - Each Agent invocation starts fresh — provide a complete task description with all necessary context.
 - Parent conversation history is excluded by default. Set inherit_context=true only when it is needed as reference; the assigned prompt remains the child's task.
@@ -91,7 +93,7 @@ For simple, directed codebase searches (e.g. for a specific file/class/function)
 - The agent's outputs should generally be trusted.
 - Clearly tell the agent whether you expect it to write code or just do research (search, file reads, web fetches, etc.).
 - If the agent description mentions that it should be used proactively, try your best to use it without the user having to ask for it first.
-- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple agent_tool use content blocks.
+- If the user specifies parallel agents, use count=N in one call for a shared assignment, or multiple tool uses in one message for different assignments. Never wait for one agent to finish before launching the next independent agent.
 - Use subagent_type="verification" proactively after non-trivial implementations (3+ file edits).
 
 ## Writing the prompt
@@ -116,6 +118,7 @@ Terse command-style prompts produce shallow, generic work."""
         action: str = "spawn",
         agent_id: str = None,
         inherit_context: bool = False,
+        count: int = 1,
     ) -> str:
         preview = prompt[:240] + ("..." if len(prompt) > 240 else "") if prompt else "<empty>"
         agent_type_str = subagent_type or "general-purpose"
@@ -125,6 +128,7 @@ Terse command-style prompts produce shallow, generic work."""
             f"subagent_type: {agent_type_str}\n"
             f"model: {model or '<inherit>'}\n"
             f"run_in_background: {run_in_background}\n"
+            f"parallel_agent_count: {count}\n"
             f"prompt_preview: {preview}"
         )
 
@@ -373,6 +377,7 @@ Terse command-style prompts produce shallow, generic work."""
                 "agent_role": effective_role,
                 "agent_type": builtin_agent_def.get("agent_type") if builtin_agent_def else None,
                 "status": "running",
+                "phase": "running",
                 "task": task[:240] + ("..." if len(task) > 240 else ""),
                 "description": description,
                 "transcript_path": transcript_path,
@@ -419,6 +424,7 @@ Terse command-style prompts produce shallow, generic work."""
                 **registry_record,
                 "status": "completed",
                 "result": res,
+                "finished_at": int(time.time() * 1000),
             })
             return {
                 "task": task,
@@ -428,7 +434,7 @@ Terse command-style prompts produce shallow, generic work."""
                 "result": res,
             }
         except asyncio.CancelledError:
-            await self._write_subagent_registry_record({"agent_id": child_agent_id, "status": "cancelled"})
+            await self._write_subagent_registry_record({"agent_id": child_agent_id, "status": "cancelled", "finished_at": int(time.time() * 1000)})
             raise
         except Exception as e:
             session_manager = self.context.get("session_manager")
@@ -450,6 +456,7 @@ Terse command-style prompts produce shallow, generic work."""
                 **registry_record,
                 "status": "crashed",
                 "result": str(e),
+                "finished_at": int(time.time() * 1000),
             })
             return {
                 "task": task,
@@ -651,8 +658,10 @@ Terse command-style prompts produce shallow, generic work."""
         action: str = "spawn",
         agent_id: str = None,
         inherit_context: bool = False,
+        count: int = 1,
     ) -> str:
         tasks = self.context.setdefault("subagent_tasks", SubagentTasks())
+        self.context.setdefault("subagent_execution_semaphore", asyncio.Semaphore(10))
         if action == "list":
             return str(self.context.get("subagent_registry", []))
         if action == "result":
@@ -669,6 +678,8 @@ Terse command-style prompts produce shallow, generic work."""
             return str(await tasks.cancel(agent_id))
         if action != "spawn":
             raise ValueError("Unknown subagent action")
+        if type(count) is not int or not 1 <= count <= 10:
+            raise ValueError("Subagent count must be an integer from 1 to 10")
         if not prompt:
             return "Sub-agent spawn denied: no prompt was provided."
 
@@ -683,27 +694,76 @@ Terse command-style prompts produce shallow, generic work."""
         builtin_def = registry.resolve(subagent_type or "general-purpose")
         parent_agent_id = self.context.get("agent_id")
 
-        child_agent_id = "subagent-" + str(uuid.uuid4())
         allowed = builtin_def.get("allowed_tools")
         if allowed and "*" not in allowed:
             available = self.context.get("engine_available_tools", {})
             unknown = set(allowed) - set(available)
             if unknown:
                 raise ValueError("Subagent requires unavailable tools: " + ", ".join(sorted(unknown)))
-        coroutine = self._run_single_subagent(
-            task=prompt,
-            allowed_tools=allowed,
-            inherit_context=inherit_context,
-            parent_depth=parent_depth,
-            parent_agent_id=parent_agent_id,
-            builtin_agent_def=builtin_def,
-            model=model,
-            child_agent_id=child_agent_id,
-            background=run_in_background,
-            description=description,
-        )
+        # Check the complete batch before registering or scheduling any workers.
+        # launch_batch checks again without yielding, so concurrent calls cannot
+        # partially launch an over-capacity batch.
         if run_in_background:
-            tasks.launch(child_agent_id, coroutine)
-            return "Background subagent started. agent_id=" + child_agent_id
-        payload = await coroutine
-        return self._format_single_report(payload)
+            tasks.check_capacity(count)
+        records = [{
+            "agent_id": "subagent-" + str(uuid.uuid4()),
+            "parent_agent_id": parent_agent_id,
+            "agent_depth": parent_depth + 1,
+            "agent_role": builtin_def.get("agent_role", "subagent"),
+            "agent_type": builtin_def.get("agent_type", subagent_type or "general-purpose"),
+            "status": "running", "phase": "starting",
+            "task": prompt[:240] + ("..." if len(prompt) > 240 else ""),
+            "description": f"{description or '子代理'} {index + 1}/{count}" if count > 1 else description,
+            "model": model or builtin_def.get("model") or self.context.get("primary_model"),
+            "background": run_in_background,
+            "started_at": int(time.time() * 1000),
+        } for index in range(count)]
+        # Register every card before any child can make a model request.
+        try:
+            for record in records:
+                await self._write_subagent_registry_record(record)
+            coroutines = {record["agent_id"]: self._run_registered_subagent(
+                record, task=prompt,
+                allowed_tools=allowed,
+                inherit_context=inherit_context,
+                parent_depth=parent_depth,
+                parent_agent_id=parent_agent_id,
+                builtin_agent_def=builtin_def,
+                model=model,
+                child_agent_id=record["agent_id"],
+                background=run_in_background,
+                description=record["description"],
+            ) for record in records}
+            if run_in_background:
+                tasks.launch_batch(coroutines, on_cancelled_before_start=self.context.get("register_subagent_record"))
+                if count == 1:
+                    return "Background subagent started. agent_id=" + records[0]["agent_id"]
+                return "Background subagents started in parallel. count={}\n{}".format(count, "\n".join(record["agent_id"] for record in records))
+            payloads = await asyncio.gather(*coroutines.values())
+            return self._format_single_report(payloads[0]) if count == 1 else self._format_batch_report(payloads, parallel=True)
+        except BaseException as exc:
+            terminal_ids = {item["agent_id"] for item in self.context.get("subagent_registry", [])
+                            if item.get("status") not in {"running"}}
+            for record in records:
+                if record["agent_id"] in terminal_ids:
+                    continue
+                await self._write_subagent_registry_record({"agent_id": record["agent_id"],
+                    "status": "cancelled" if isinstance(exc, asyncio.CancelledError) else "crashed",
+                    "finished_at": int(time.time() * 1000), "result": str(exc)})
+            raise
+
+    async def _run_registered_subagent(self, record, **kwargs):
+        # Initialization can fail before the engine's run try/finally starts.
+        # Every allocated worker must still reach a terminal status.
+        try:
+            async with self.context["subagent_execution_semaphore"]:
+                payload = await self._run_single_subagent(**kwargs)
+        except asyncio.CancelledError:
+            await self._write_subagent_registry_record({"agent_id": record["agent_id"],
+                "status": "cancelled", "finished_at": int(time.time() * 1000)})
+            raise
+        except Exception as exc:
+            payload = {"agent_id": record["agent_id"], "agent_role": record["agent_role"],
+                "task": kwargs["task"], "status": "crashed", "result": str(exc)}
+            await self._write_subagent_registry_record({**payload, "finished_at": int(time.time() * 1000)})
+        return payload

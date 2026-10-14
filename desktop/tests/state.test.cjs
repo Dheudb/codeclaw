@@ -121,6 +121,17 @@ test("activity handles out-of-order events and identical child tool IDs", async 
   assert.equal(session.tools[0].status, "completed");
 });
 
+test("workers keep batch order and original start time when results arrive out of order", async () => {
+  const { createSession, applyEvent } = await state;
+  let session = createSession(initial);
+  for (const agent_id of ["a", "b", "c"]) session = applyEvent(session, { session: "one", type: "subagent_status", agent: { agent_id, status: "running", phase: "starting", started_at: 1000 } });
+  session = applyEvent(session, { session: "one", type: "subagent_status", agent: { agent_id: "b", status: "running", phase: "running" } });
+  session = applyEvent(session, { session: "one", type: "subagent_status", agent: { agent_id: "b", status: "completed", finished_at: 2000 } });
+  assert.deepEqual(session.workers.map((worker) => worker.agent_id), ["a", "b", "c"]);
+  assert.equal(session.tools.find((tool) => tool.id === "agent:b").startedAt, 1000);
+  assert.equal(session.tools.find((tool) => tool.id === "agent:b").finishedAt, 2000);
+});
+
 test("only the resolved approval changes its activity state", async () => {
   const { createSession, applyEvent } = await state;
   let session = createSession(initial);
