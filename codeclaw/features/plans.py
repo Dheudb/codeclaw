@@ -1,5 +1,6 @@
 import os
 import hashlib
+from codeclaw.core.storage import data_directory, migrate_user_file
 
 
 def _make_plan_slug(session_id: str) -> str:
@@ -10,7 +11,12 @@ def _make_plan_slug(session_id: str) -> str:
 
 def get_plans_directory() -> str:
     """Return the directory where plan files are stored."""
-    return os.path.join(os.path.expanduser("~"), ".codeclaw", "plans")
+    target = data_directory() / "plans"
+    legacy = os.path.join(os.path.expanduser("~"), ".codeclaw", "plans")
+    if os.path.isdir(legacy) and not os.path.islink(legacy):
+        for name in os.listdir(legacy):
+            if name.endswith(".md"): migrate_user_file(os.path.join(legacy, name), target / name)
+    return str(target)
 
 
 def get_plan_file_path(session_id: str, agent_id: str = None) -> str:

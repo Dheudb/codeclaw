@@ -4,20 +4,23 @@ const path = require("node:path");
 const { SessionCatalog, projectKey, sessionKey, atomicJSON } = require("./catalog.cjs");
 const { EngineTransport } = require("./transport.cjs");
 const { resolveEnginePython } = require("./runtime.cjs");
-const { defaultWorkspace } = require("./workspace.cjs");
+const { defaultWorkspace, dataDirectory } = require("./workspace.cjs");
 const { prepareMove, moveSession } = require("./session-move.cjs");
 const { HtmlPreviews, SCHEME: PREVIEW_SCHEME } = require("./html-preview.cjs");
 protocol.registerSchemesAsPrivileged([{ scheme: PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 const htmlPreviews = new HtmlPreviews();
 if (process.env.CODECLAW_USER_DATA)
   app.setPath("userData", process.env.CODECLAW_USER_DATA);
+const requestedDataRoot = process.env.CODECLAW_DATA_DIR || process.env.CODECLAW_USER_DATA;
+const dataRoot = requestedDataRoot && path.isAbsolute(requestedDataRoot) ? path.resolve(requestedDataRoot) : dataDirectory({ home: app.getPath("home") });
+process.env.CODECLAW_DATA_DIR = dataRoot;
 const sessions = new Map();
 let window;
 let quitting = false;
 let configTransport;
 let activeSessionId;
 let restoration;
-const catalog = new SessionCatalog(settings, saveSettings);
+const catalog = new SessionCatalog(settings, saveSettings, dataRoot);
 let workspaceQueue = Promise.resolve();
 let catalogRevision = 0;
 const engineMethods = new Set([
@@ -46,7 +49,13 @@ const engineMethods = new Set([
   "capabilities.example",
 ]);
 function settingsPath() {
-  return path.join(app.getPath("userData"), "workbench.json");
+  const target = path.join(dataRoot, "workbench.json"), legacy = path.join(app.getPath("userData"), "workbench.json");
+  if (target !== legacy && !fs.existsSync(target) && fs.existsSync(legacy)) {
+    const original = fs.readFileSync(legacy);
+    atomicJSON(target, JSON.parse(original.toString("utf8").replace(/^\uFEFF/, "")));
+    if (fs.readFileSync(legacy).equals(original)) fs.unlinkSync(legacy);
+  }
+  return target;
 }
 function settings() {
   if (!fs.existsSync(settingsPath())) return { projects: [] };
@@ -109,6 +118,9 @@ function latestSavedSession(project, scope = "project") {
   }
 }
 async function restoreWorkspace() {
+  const upgradeErrors = [];
+  try { catalog.upgradeStandaloneWorkspaces(workspaceSettings().defaultDirectory); }
+  catch (error) { upgradeErrors.push("旧独立会话的工作区隔离未完成，历史和原文件已保留：" + error.message); }
   const saved = settings();
   const legacyEntries = Array.isArray(saved.workspace) ? saved.workspace :
     (saved.projects || []).map((project) => ({ project, resumeId: latestSavedSession(project) }))
@@ -116,13 +128,13 @@ async function restoreWorkspace() {
   const selected = Object.prototype.hasOwnProperty.call(saved, "activeConversation") ? saved.activeConversation :
     legacyEntries.find((entry) => entry.active) || legacyEntries[0];
   const entries = selected ? [selected] : [];
-  const restored = [], errors = [];
+  const restored = [], errors = [...upgradeErrors];
   for (const entry of entries.slice(0, 8)) {
     try {
       if (entry.scope !== "standalone" && catalog.snapshot().projects.some((project) => projectKey(project.path) === projectKey(entry.project) && project.archived)) continue;
       let resumeId = entry.resumeId;
       if (resumeId && (!/^[a-zA-Z0-9_-]+$/.test(resumeId) ||
-        !fs.existsSync(path.join(entry.project, ".codeclaw", "sessions", resumeId + ".json"))))
+        !fs.existsSync(catalog.file(entry.project, resumeId))))
         resumeId = latestSavedSession(entry.project, entry.scope || "project");
       if (resumeId && catalog.list(entry.project).find((row) => row.sessionId === resumeId)?.archived)
         resumeId = latestSavedSession(entry.project, entry.scope || "project");
@@ -319,7 +331,7 @@ async function invoke(method, params) {
     if (scope !== "standalone" && catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project) && entry.archived))
       throw new Error("请先在设置的已归档会话页面恢复项目");
     if (params.resumeId) return selectRow(catalog.find(sessionKey(source.project, params.resumeId)));
-    const empty = catalog.list(source.project).find((row) => row.scope === scope && !row.archived && !row.error && !row.draft &&
+    const empty = scope !== "standalone" && catalog.list(source.project).find((row) => row.scope === scope && !row.archived && !row.error && !row.draft &&
       row.title === "新会话" && !running(sessions.get(row.id) || { busy: false, workers: new Map() }) &&
       JSON.parse(fs.readFileSync(catalog.file(row.project, row.sessionId), "utf8")).messages?.length === 0);
     return selectRow(empty || (scope === "standalone" ? catalog.createStandalone(source.project) : catalog.create(source.project)));

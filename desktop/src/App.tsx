@@ -391,7 +391,7 @@ export default function App() {
                 {active?.scope === "standalone" ? "开始一个新会话。" : active ? "今天想构建什么？" : "把想法变成可运行的代码。"}
               </h1>
               <p>
-                {active?.scope === "standalone" ? "直接开始对话；文件和命令任务使用默认工作目录。" : active
+                {active?.scope === "standalone" ? "直接开始对话；文件和命令任务使用此会话的专属工作目录。" : active
                   ? "描述你的任务，连接模型，让代理在这个项目里开始工作。"
                   : "连接模型即可开始；会话自动使用默认工作目录，也可以打开自己的项目。"}
               </p>

@@ -16,6 +16,7 @@ from codeclaw.desktop.activity import restore_activity
 from codeclaw.desktop.turns import TurnRecorder, conversation_history
 from codeclaw.features.file_changes import legacy_changes, preview_file
 from codeclaw.features.workspace_files import list_directory, git_changes, git_file_diff
+from codeclaw.core.storage import session_directory
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.protocols.mcp_config import MCPConfigStore
@@ -152,7 +153,7 @@ class DesktopBridge:
         return {"skills": self.skills.discover(), "agents": builtins + [{k: v for k, v in item.items() if k != "disallowed_tools"} for item in self.agents.discover()], "settings": {**self.skills.settings(), "projectSkillsRoot": str(self.cwd / ".codeclaw" / "skills"), "projectAgentsRoot": str(self.cwd / ".codeclaw" / "agents"), "globalSkillsRoot": str(self.skills.home / ".codeclaw" / "skills"), "globalAgentsRoot": str(self.skills.home / ".codeclaw" / "agents")}}
 
     def sessions(self):
-        root = self.cwd / ".codeclaw" / "sessions"
+        root = session_directory(self.cwd)
         items = []
         if not root.exists():
             return items
@@ -356,7 +357,7 @@ class DesktopBridge:
             messages = []
             raw = {"messages": []}
             if sid:
-                raw = json.loads((self.cwd / ".codeclaw" / "sessions" / (sid + ".json")).read_text(encoding="utf-8"))
+                raw = json.loads((session_directory(self.cwd) / (sid + ".json")).read_text(encoding="utf-8"))
                 messages = raw if isinstance(raw, list) else raw.get("messages", [])
             activity, workers = restore_activity(raw, self.cwd)
             saved_changes = raw.get("metadata", {}).get("file_changes", []) if isinstance(raw, dict) else []

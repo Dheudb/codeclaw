@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { projectKey } = require("./catalog.cjs");
+const { rebase } = require("./history-storage.cjs");
 
 function targetProject(catalog, directory) {
   if (typeof directory !== "string" || !path.isAbsolute(directory)) throw new Error("请选择目标项目");
@@ -11,9 +12,9 @@ function targetProject(catalog, directory) {
 }
 
 // Only session-owned records move. No project source, Skills or MCP configuration is copied.
-function prepareMove(catalog, row, directory) {
-  const target = targetProject(catalog, directory);
-  if (row.error || row.archived) throw new Error("请先修复或恢复此会话，再移动");
+function prepareMove(catalog, row, directory, scope = "project") {
+  const target = scope === "standalone" ? fs.realpathSync(directory) : targetProject(catalog, directory);
+  if (row.error || row.archived && scope !== "standalone") throw new Error("请先修复或恢复此会话，再移动");
   const sameDirectory = projectKey(row.project) === projectKey(target);
   const sourceIndex = catalog.index(row.project), targetIndex = sameDirectory ? sourceIndex : catalog.index(target);
   if (!sameDirectory && (fs.existsSync(catalog.file(target, row.sessionId)) || Object.hasOwn(targetIndex, row.sessionId)))
@@ -22,10 +23,11 @@ function prepareMove(catalog, row, directory) {
   const original = fs.readFileSync(sourceFile);
   const raw = JSON.parse(original.toString("utf8"));
   if (!(Array.isArray(raw) || Array.isArray(raw.messages))) throw new Error("会话记录格式不正确");
-  const payload = Array.isArray(raw) ? { messages: raw, metadata: {} } : structuredClone(raw);
+  let payload = rebase(Array.isArray(raw) ? { messages: raw, metadata: {} } : structuredClone(raw), catalog.artifacts(row.project), catalog.artifacts(target));
+  if (scope === "standalone") payload = rebase(payload, row.project, target);
   const files = [];
   function assertOwned(project, candidate) {
-    const base = fs.realpathSync(project), relative = path.relative(base, candidate);
+    const base = fs.realpathSync(catalog.dataRoot), relative = path.relative(base, candidate);
     if (relative.startsWith(".." + path.sep) || relative === ".." || path.isAbsolute(relative)) throw new Error("会话资源必须位于项目目录中");
     let probe = base;
     for (const name of relative.split(path.sep)) {
@@ -69,15 +71,15 @@ function prepareMove(catalog, row, directory) {
       if (stat.isDirectory()) for (const name of fs.readdirSync(source)) collect(path.join(source, name), path.join(destination, name));
       else add(source, destination);
     }
-    collect(path.join(row.project, ".codeclaw/tool-results", row.sessionId), path.join(target, ".codeclaw/tool-results", row.sessionId));
+    collect(path.join(catalog.artifacts(row.project), row.sessionId), path.join(catalog.artifacts(target), row.sessionId));
   }
   return { target, sameDirectory, sourceIndex, targetIndex, files };
 }
 
-function moveSession(catalog, row, directory) {
-  const plan = prepareMove(catalog, row, directory);
+function moveSession(catalog, row, directory, scope = "project") {
+  const plan = prepareMove(catalog, row, directory, scope);
   const { target, sameDirectory, sourceIndex, targetIndex, files } = plan;
-  const metadata = { ...sourceIndex[row.sessionId], title: row.title, created: row.created, scope: "project" };
+  const metadata = { ...sourceIndex[row.sessionId], title: row.title, created: row.created, scope, ...(scope === "standalone" ? { workspaceIsolated: true } : {}) };
   if (sameDirectory) {
     catalog.saveIndex(target, { ...sourceIndex, [row.sessionId]: metadata });
     return catalog.list(target).find((entry) => entry.sessionId === row.sessionId);

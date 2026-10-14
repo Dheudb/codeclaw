@@ -2,6 +2,7 @@
 import json
 import re
 from datetime import datetime
+from codeclaw.core.storage import session_directory
 
 
 def timestamp(message):
@@ -50,7 +51,7 @@ def restore_activity(raw, cwd):
                          "startedAt": worker.get("started_at"), "finishedAt": worker.get("finished_at"),
                          "result": str(worker.get("result", ""))[:16000]})
         try:
-            child = json.loads((cwd / ".codeclaw/sessions/subagents" / (agent_id + ".json")).read_text(encoding="utf-8"))
+            child = json.loads((session_directory(cwd) / "subagents" / (agent_id + ".json")).read_text(encoding="utf-8"))
             messages = child.get("messages", [])
             task = child.get("task", "")
             for index, message in enumerate(messages):

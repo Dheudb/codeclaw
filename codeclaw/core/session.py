@@ -3,14 +3,15 @@ import json
 import shutil
 import time
 import tempfile
+from codeclaw.core.storage import session_directory
 
 class SessionManager:
     """
     Infinite Context Engine Cache Layer. 
     Drops conversation trees into lightweight logs maintaining persistence after crash or terminal exit.
     """
-    def __init__(self, session_dir=".codeclaw/sessions"):
-        self.session_dir = session_dir
+    def __init__(self, session_dir=None, cwd=None):
+        self.session_dir = str(session_dir if session_dir is not None else session_directory(cwd))
         os.makedirs(self.session_dir, exist_ok=True)
         self.last_save_error = ""
         self.last_save_path = ""

@@ -1,3 +1,4 @@
+const { historyRoot } = require("../electron/history-storage.cjs");
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -208,6 +209,7 @@ async function main() {
   );
   const env = {
     ...process.env,
+    USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"),
     CODECLAW_TEST_HEADLESS: "1",
     CODECLAW_USER_DATA: data,
     CODECLAW_CONFIG_DIR: config,
@@ -426,7 +428,7 @@ async function main() {
       .waitFor({ state: "hidden" });
     assert(
       fs
-        .readdirSync(path.join(secondProject, ".codeclaw/sessions"))
+        .readdirSync(path.join(historyRoot(secondProject, data), "sessions"))
         .some((name) => name.endsWith(".json")),
     );
     assert.equal(

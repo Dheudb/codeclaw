@@ -1,3 +1,4 @@
+const { historyRoot } = require("../electron/history-storage.cjs");
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
@@ -20,7 +21,7 @@ async function opened(count) {
 }
 async function main() {
   try {
-    const env = { ...process.env, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
+    const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
     for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
     app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
     page = await app.firstWindow(); page.setDefaultTimeout(30000);
@@ -53,7 +54,7 @@ async function main() {
     await page.getByRole("alert").filter({ hasText: "无法打开链接" }).waitFor();
     assert.equal(page.url(), initialURL);
     assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
-    assert.deepEqual(fs.readFileSync(history), original, "Existing transcripts must remain unchanged");
+    assert.deepEqual(fs.readFileSync(path.join(historyRoot(project, data), "sessions/links.json")), original, "Existing transcripts must remain unchanged");
     assert.deepEqual(errors, []);
     console.log("Link E2E passed: saved Sources links, HTTP/HTTPS, bare URLs, mouse/keyboard/middle click, opener failures, protocol validation and no app navigation");
   } finally { if (app) await app.close().catch(() => {}); }

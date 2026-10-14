@@ -215,8 +215,8 @@ export function SettingsDialog({
           </fieldset>
         </div>
         <div className="form-section" role="tabpanel" id="settings-panel-workspace" aria-labelledby="settings-tab-workspace" hidden={tab !== "workspace"}>
-          <h3><FolderOpen size={16} /> 默认工作目录</h3>
-          <p className="fine-print">按当前系统和用户自动设置。未选择项目时，新会话使用此目录；已有项目和历史不会移动。</p>
+          <h3><FolderOpen size={16} /> 独立会话工作区根目录</h3>
+          <p className="fine-print">每个新建的独立会话会在此目录下分配专属文件夹，互不共用工作文件。聊天记录集中存储；修改此路径不移动已有文件或历史。</p>
           <label>目录路径
             <input aria-label="默认工作目录" value={directory} onChange={(e) => { setDirectory(e.target.value); setDirectorySaved(false); }} />
           </label>

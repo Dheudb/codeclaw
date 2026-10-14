@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import os
+from codeclaw.core.storage import data_directory, migrate_user_file
 import time
 from pathlib import Path
 from typing import Optional
@@ -114,9 +115,9 @@ class SessionMemoryManager:
     def memory_path(self) -> str:
         if self._memory_path is None:
             home = str(Path.home())
-            session_dir = os.path.join(home, ".codeclaw", "sessions", self.session_id, "session-memory")
+            session_dir = str(data_directory() / "memory/sessions" / self.session_id)
             os.makedirs(session_dir, exist_ok=True)
-            self._memory_path = os.path.join(session_dir, "summary.md")
+            self._memory_path = str(migrate_user_file(Path(home) / ".codeclaw/sessions" / self.session_id / "session-memory/summary.md", Path(session_dir) / "summary.md"))
         return self._memory_path
 
     def record_tool_call(self):

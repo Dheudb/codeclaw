@@ -4,6 +4,7 @@ const path = require("node:path");
 const os = require("node:os");
 const assert = require("node:assert/strict");
 const { atomicJSON, projectKey } = require("../electron/catalog.cjs");
+const { historyRoot } = require("../electron/history-storage.cjs");
 const { defaultWorkspace } = require("../electron/workspace.cjs");
 const root = path.resolve(__dirname, "..");
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-workspace-e2e-"));
@@ -14,7 +15,7 @@ const workbench = path.join(data, "workbench.json");
 // No projects, workspace selection, or preconfigured default directory.
 atomicJSON(workbench, { projects: [], activeConversation: null });
 atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "", openai_api_key: "", openai_base_url: "http://127.0.0.1:9/v1" });
-const env = { ...process.env, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1",
+const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1",
   LOCALAPPDATA: path.join(fixture, "os-data"), XDG_DATA_HOME: path.join(fixture, "xdg-data") };
 delete env.ELECTRON_RUN_AS_NODE; delete env.CODECLAW_DEV_URL;
 for (const key of ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
@@ -35,18 +36,21 @@ async function main() {
     // Stub only the OS home for macOS, keeping all created files in the fixture.
     if (process.platform === "darwin") await app.evaluate(({ app }, home) => app.setPath("home", home), fixture);
     const home = await app.evaluate(({ app }) => app.getPath("home"));
-    const defaultDirectory = defaultWorkspace({ home, env });
+    const defaultDirectory = defaultWorkspace({ home, env: { ...env, CODECLAW_DATA_DIR: data } });
     assertPath((await page.evaluate(() => window.codeclaw.invoke("workspace.get"))).defaultDirectory, defaultDirectory);
     assert(!fs.existsSync(defaultDirectory), "Startup does not create an unsolicited project");
     // New session must never request an OS folder chooser.
     await app.evaluate(({ dialog }) => { dialog.showOpenDialog = async () => { throw new Error("Unexpected folder chooser"); }; });
     await page.locator(".new-task").click();
     await page.locator(".session-item.active").waitFor();
-    assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(defaultDirectory));
+    const firstWorkspace = await page.locator(".project-context span").getAttribute("title");
+    assertPath(path.dirname(firstWorkspace), fs.realpathSync(defaultDirectory));
+    fs.writeFileSync(path.join(firstWorkspace, "isolation.txt"), "first conversation only");
     const defaultId = await page.locator(".session-item.active").getAttribute("data-session-id");
     assert.equal(await page.locator(".standalone-group .session-item.active").count(), 1);
     assert.equal(await page.locator(".project-group").count(), 0);
-    assert(fs.existsSync(path.join(defaultDirectory, ".codeclaw/sessions", defaultId.split(":")[1] + ".json")));
+    assert(fs.existsSync(path.join(historyRoot(firstWorkspace, data), "sessions", defaultId.split(":")[1] + ".json")));
+    assert(!fs.existsSync(path.join(firstWorkspace, ".codeclaw/sessions")));
     await page.getByRole("button", { name: "设置与模型", exact: true }).click();
     // Directory configuration works independently of the model configuration.
     await page.getByLabel("模型 ID", { exact: true }).fill("");
@@ -72,8 +76,12 @@ async function main() {
     await page.locator(".new-task").click();
     await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
     const customId = await page.locator(".session-item.active").getAttribute("data-session-id");
+    const secondWorkspace = await page.locator(".project-context span").getAttribute("title");
+    assert.notEqual(secondWorkspace, firstWorkspace); assert(!fs.existsSync(path.join(secondWorkspace, "isolation.txt")));
+    fs.writeFileSync(path.join(secondWorkspace, "isolation.txt"), "second conversation only");
+    assert.equal(fs.readFileSync(path.join(firstWorkspace, "isolation.txt"), "utf8"), "first conversation only");
     assert.notEqual(customId, defaultId);
-    assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(custom));
+    assertPath(path.dirname(await page.locator(".project-context span").getAttribute("title")), fs.realpathSync(custom));
     assert.equal(await page.locator(".standalone-group .session-item").count(), 2);
     await page.getByRole("textbox", { name: "任务输入" }).fill("独立会话的草稿");
     await app.evaluate(({ dialog }, directory) => {
@@ -88,7 +96,7 @@ async function main() {
     assert.equal(await page.locator(".project-group .session-item").count(), 2);
     await page.keyboard.press("Control+n");
     await page.waitForFunction(() => !document.querySelector(".new-task").disabled && !!document.querySelector(".standalone-group .session-item.active"));
-    assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(custom));
+    assertPath(path.dirname(await page.locator(".project-context span").getAttribute("title")), fs.realpathSync(custom));
     assert.equal(await page.locator(".project-group .session-item").count(), 2);
     assert.equal(await page.locator(".standalone-group .session-item").count(), 3);
     const layout = await app.evaluate(async ({ BrowserWindow }) => {
@@ -101,10 +109,10 @@ async function main() {
     await page.evaluate((directory) => window.codeclaw.invoke("project.remove", { path: directory, confirm: true }), explicit);
     await page.waitForFunction(() => document.querySelectorAll(".project-group").length === 0);
     assert.equal(await page.locator(".standalone-group .session-item").count(), 3);
-    assert(fs.existsSync(path.join(defaultDirectory, ".codeclaw/sessions", defaultId.split(":")[1] + ".json")), "Default directory changes preserve old histories");
+    assert(fs.existsSync(path.join(historyRoot(firstWorkspace, data), "sessions", defaultId.split(":")[1] + ".json")), "Default directory changes preserve centralized histories");
 
     await app.close(); await launch();
-    assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(custom));
+    assertPath(path.dirname(await page.locator(".project-context span").getAttribute("title")), fs.realpathSync(custom));
     assert.equal(await page.locator(".standalone-group .session-item.active").count(), 1);
     assert.equal(await page.locator(".standalone-group .session-item").count(), 3);
     assert.equal(readSettings().activeConversation.scope, "standalone");

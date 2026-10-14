@@ -1,6 +1,7 @@
 import os
 from pydantic import BaseModel, Field
 from codeclaw.tools.base import BaseAgenticTool
+from codeclaw.core.storage import history_root
 
 class NotebookToolInput(BaseModel):
     action: str = Field(..., description="'read', 'write', or 'append'")
@@ -9,7 +10,7 @@ class NotebookToolInput(BaseModel):
 
 class NotebookTool(BaseAgenticTool):
     name = "notebook_tool"
-    description = "Internal memory notebook for logging architectural milestones and hypotheses across multi-agent turns. Saves to .codeclaw/notebooks/ directory."
+    description = "Internal memory notebook for logging architectural milestones and hypotheses across multi-agent turns. Saves to centralized CodeClaw history storage."
     input_schema = NotebookToolInput
     risk_level = "medium"
 
@@ -29,7 +30,7 @@ class NotebookTool(BaseAgenticTool):
         return self.context.get("incremental_write_queue")
     
     async def execute(self, action: str, title: str, content: str = None) -> str:
-        nb_dir = ".codeclaw/notebooks"
+        nb_dir = str(history_root(self.context.get("cwd")) / "notebooks")
         os.makedirs(nb_dir, exist_ok=True)
         
         safe_title = "".join([c if c.isalnum() or c in ['-', '_'] else '_' for c in title]).strip()

@@ -2,6 +2,7 @@ import os
 import time
 import uuid
 from typing import Any, Dict
+from codeclaw.core.storage import artifact_directory
 
 
 def build_tool_result(
@@ -23,9 +24,10 @@ def serialize_tool_result(
     payload: Any,
     *,
     spill_threshold_chars: int = 5000,
-    artifact_dir: str = ".codeclaw/tool-results",
+    artifact_dir: str = None,
     spill_recorder=None,
 ) -> str:
+    artifact_dir = artifact_dir if artifact_dir is not None else str(artifact_directory())
     if isinstance(payload, dict) and {"ok", "content", "metadata", "is_error"}.issubset(payload.keys()):
         content = str(payload.get("content", ""))
         metadata = dict(payload.get("metadata", {}) or {})

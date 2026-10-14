@@ -63,7 +63,7 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, CODECLAW_SKILLS_PATHS: "" };
+  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, CODECLAW_SKILLS_PATHS: "" };
   for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
   app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(45000); page.on("pageerror", (error) => errors.push(error.message));
@@ -92,7 +92,7 @@ async function main() {
     await page.locator(".inline-file-link").filter({ hasText: "legacy.md" }).click();
     await dialog().getByText("legacy one", { exact: false }).waitFor(); await page.getByRole("button", { name: "关闭文件预览", exact: true }).click();
     const legacy = page.locator(".conversation .file-changes"); assert.match(await legacy.innerText(), /\+2/);
-    await page.locator(".new-task").click(); await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
+    await page.getByRole("button", { name: "在项目 project 中新建会话", exact: true }).click(); await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
     const id = await page.locator(".session-item.active").getAttribute("data-session-id");
     await page.getByLabel("访问权限", { exact: true }).selectOption("full"); await page.waitForFunction(() => !document.querySelector(".permission-picker").disabled);
     await send("FILE_CREATE"); await finished("FILE_CREATE");

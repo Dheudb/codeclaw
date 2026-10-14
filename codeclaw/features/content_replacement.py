@@ -3,6 +3,7 @@ import os
 import time
 import uuid as _uuid
 from typing import Optional
+from codeclaw.core.storage import artifact_directory
 
 
 TOOL_RESULT_BUDGET_CHARS = 200_000
@@ -11,8 +12,8 @@ MIN_REPLACE_CHARS = 500
 
 
 class ContentReplacementManager:
-    def __init__(self, base_dir: str = ".codeclaw/tool-results", session_id: str = None):
-        self.base_dir = base_dir
+    def __init__(self, base_dir: str = None, session_id: str = None):
+        self.base_dir = base_dir if base_dir is not None else str(artifact_directory())
         self.session_id = session_id
         self.registry = {}
         self.cleanup_history = []

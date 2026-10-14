@@ -85,7 +85,7 @@ setup.py        Python 依赖与 CLI 入口的统一定义
 ```
 
 会话、密钥、虚拟环境、依赖目录和构建产物不进入 Git。
-模型配置在 `~/.codeclaw/config.json`，项目会话在 `.codeclaw/sessions/`，
+模型配置在 `~/.codeclaw/config.json`，会话集中存储在当前用户数据目录的 `CodeClaw/history/`（Linux 为 `codeclaw/history/`），
 MCP 配置在项目根目录 `mcp_servers.json`。
 
 ## 开发验证

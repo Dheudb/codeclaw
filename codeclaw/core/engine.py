@@ -58,6 +58,7 @@ from codeclaw.protocols.mcp_bridge import MCPBridge
 from codeclaw.protocols.lsp_manager import LSPManager
 from codeclaw.security.sandbox import SandboxManager
 from codeclaw.core.session import SessionManager
+from codeclaw.core.storage import artifact_directory, history_root
 from codeclaw.tools.lsp_tool import LspTool
 from codeclaw.tools.sandbox_tool import SandboxTool
 from codeclaw.tools.task_tools import (
@@ -195,7 +196,7 @@ class QueryEngine:
         self.messages = []
         self._compact_boundary_index = 0
         self._tool_result_budget_chars = int(os.environ.get("CODECLAW_TOOL_RESULT_BUDGET_CHARS", "0")) or 200000
-        self.session_manager = SessionManager()
+        self.session_manager = SessionManager(cwd=self.session_cwd)
         self.last_persist_ok = True
         self.last_persist_error = ""
         self._last_reported_persist_error = ""
@@ -205,8 +206,9 @@ class QueryEngine:
         self.active_streaming_tool_entries = []
         self.active_stream = None
         self.sandbox_manager = SandboxManager()
-        self.browser_manager = BrowserSessionManager()
-        self.shell_task_manager = ShellTaskManager()
+        runtime_root = history_root(self.session_cwd)
+        self.browser_manager = BrowserSessionManager(artifact_dir=str(runtime_root / "browser"))
+        self.shell_task_manager = ShellTaskManager(log_dir=str(runtime_root / "shell-tasks"))
         self.memory_file_manager = MemoryFileManager()
         self.session_memory_manager = SessionMemoryManager(
             session_id=self.session_id,
@@ -219,9 +221,9 @@ class QueryEngine:
         self.file_state_cache = FileStateCache()
         self.artifact_tracker = ArtifactTracker()
         self.incremental_write_queue = IncrementalWriteQueue()
-        self.vcr_manager = VCRManager()
+        self.vcr_manager = VCRManager(cassette_dir=str(runtime_root / "vcr"))
         self.auto_commit_manager = AutoCommitManager(state_change_callback=self.persist_session_state)
-        self.content_replacement_manager = ContentReplacementManager(session_id=self.session_id)
+        self.content_replacement_manager = ContentReplacementManager(base_dir=str(artifact_directory(self.session_cwd)), session_id=self.session_id)
         self.ultraplan_manager = UltraplanManager()
         self.team_manager = TeamManager()
         self.attachment_collector = AttachmentCollector()
@@ -2219,7 +2221,7 @@ class QueryEngine:
                     },
                     is_error=True,
                 ),
-                artifact_dir=os.path.join(".codeclaw", "tool-results", self.session_id),
+                artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id),
                 spill_recorder=spill_recorder,
             )
         else:
@@ -2265,14 +2267,14 @@ class QueryEngine:
                             },
                             is_error=True,
                         ),
-                        artifact_dir=os.path.join(".codeclaw", "tool-results", self.session_id),
+                        artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id),
                         spill_recorder=spill_recorder,
                     )
                 else:
                     raw_result = await handler(**tool_inputs)
                     res_text = serialize_tool_result(
                         raw_result,
-                        artifact_dir=os.path.join(".codeclaw", "tool-results", self.session_id),
+                        artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id),
                         spill_recorder=spill_recorder,
                     )
             except asyncio.CancelledError:

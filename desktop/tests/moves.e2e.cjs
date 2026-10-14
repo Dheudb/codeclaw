@@ -1,3 +1,4 @@
+const { historyRoot } = require("../electron/history-storage.cjs");
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), http = require("node:http"), assert = require("node:assert/strict");
 const { atomicJSON, sessionKey, projectKey } = require("../electron/catalog.cjs");
@@ -5,14 +6,15 @@ const root = path.resolve(__dirname, "..");
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-moves-e2e-"));
 const first = path.join(fixture, "project-a"), second = path.join(fixture, "项目 b"), data = path.join(fixture, "profile"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const directory of [first, second, data, config, home]) fs.mkdirSync(directory);
-const history = (directory, id) => path.join(directory, ".codeclaw/sessions", id + ".json");
-atomicJSON(history(first, "moving"), { messages: [{ role: "user", content: "原来的问题" }, { role: "assistant", content: "原来的回答" }], metadata: {
+const legacyHistory = (directory, id) => path.join(directory, ".codeclaw/sessions", id + ".json");
+const history = (directory, id) => path.join(historyRoot(directory, data), "sessions", id + ".json");
+atomicJSON(legacyHistory(first, "moving"), { messages: [{ role: "user", content: "原来的问题" }, { role: "assistant", content: "原来的回答" }], metadata: {
   memory_files: { cwd: first }, permissions: { always_allow_tools: ["file_write_tool", "bash_tool"] },
   turn_traces: [{ id: "old-turn", status: "completed", elapsedMs: 2345, answer: "原来的回答", steps: [] }],
 } });
-atomicJSON(history(first, "inactive"), { messages: [{ role: "user", content: "未打开的历史" }, { role: "assistant", content: "未打开的回复" }], metadata: {} });
+atomicJSON(legacyHistory(first, "inactive"), { messages: [{ role: "user", content: "未打开的历史" }, { role: "assistant", content: "未打开的回复" }], metadata: {} });
 atomicJSON(path.join(first, ".codeclaw/session-index.json"), { version: 1, sessions: {
-  moving: { title: "迁移中的会话", scope: "standalone", draft: "未发送的草稿", pinned: true, permissionMode: "ask" },
+  moving: { title: "迁移中的会话", scope: "standalone", workspaceIsolated: true, draft: "未发送的草稿", pinned: true, permissionMode: "ask" },
 } });
 for (const [directory, name] of [[first, "only-first"], [second, "only-second"]]) {
   const file = path.join(directory, ".codeclaw/skills", name, "SKILL.md"); fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -55,7 +57,7 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, CODECLAW_SKILLS_PATHS: "" };
+  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, CODECLAW_SKILLS_PATHS: "" };
   for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
   app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(45000); page.on("pageerror", (error) => errors.push(error.message));
@@ -116,11 +118,11 @@ async function main() {
     await moved(sessionKey(second, "inactive"), second); await page.getByText("未打开的回复", { exact: true }).waitFor();
     await app.close(); await launch(); await moved(sessionKey(second, "inactive"), second);
     await page.getByText("未打开的回复", { exact: true }).waitFor(); assert(!fs.existsSync(history(first, "inactive")));
-    // Converting a standalone chat already in a project's directory must not copy/delete its file.
+    // A standalone chat owns a private directory; moving changes its association and working directory.
     await page.locator(".new-task").click(); await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
     const same = await page.locator(".session-item.active").getAttribute("data-session-id");
     await page.getByRole("textbox", { name: "任务输入" }).fill("SAME_DIRECTORY_DRAFT");
-    await row(same).dragTo(group(first).locator(".project-heading")); await moved(same, first);
+    await row(same).dragTo(group(first).locator(".project-heading")); await moved(sessionKey(first, same.split(":")[1]), first);
     assert.equal(await page.getByRole("textbox", { name: "任务输入" }).inputValue(), "SAME_DIRECTORY_DRAFT");
     const shot = await app.evaluate(async ({ BrowserWindow }) => {
       const web = BrowserWindow.getAllWindows()[0].webContents; await web.capturePage(undefined, { stayHidden: true, stayAwake: true });

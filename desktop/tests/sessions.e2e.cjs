@@ -1,3 +1,4 @@
+const { historyRoot } = require("../electron/history-storage.cjs");
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -10,10 +11,11 @@ const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-session-e2e-"));
 const project = path.join(fixture, "项目 one"), second = path.join(fixture, "project-two");
 const data = path.join(fixture, "app-data"), config = path.join(fixture, "config");
 for (const dir of [project, second, data, config]) fs.mkdirSync(dir);
-const historyFile = (directory, id) => path.join(directory, ".codeclaw", "sessions", id + ".json");
+const legacyHistory = (directory, id) => path.join(directory, ".codeclaw", "sessions", id + ".json");
+const historyFile = (directory, id) => path.join(historyRoot(directory, data), "sessions", id + ".json");
 for (const [directory, id, title] of [[project, "first", "第一条历史"], [project, "second", "第二条历史"],
   [project, "archived", "以前归档的会话"], [second, "other", "另一项目的历史"]])
-  atomicJSON(historyFile(directory, id), { messages: [{ role: "user", content: title }, { role: "assistant", content: "已有回复" }], metadata: {} });
+  atomicJSON(legacyHistory(directory, id), { messages: [{ role: "user", content: title }, { role: "assistant", content: "已有回复" }], metadata: {} });
 atomicJSON(path.join(project, ".codeclaw/session-index.json"), { version: 1, sessions: { archived: { archived: true } } });
 fs.writeFileSync(path.join(project, "keep.py"), "print('keep project source')");
 atomicJSON(path.join(data, "workbench.json"), { projects: [project, second], workspace: [{ project, resumeId: "first", active: true }] });
@@ -38,7 +40,7 @@ async function main() {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "sessions-test",
     openai_base_url: `http://127.0.0.1:${server.address().port}/v1`, openai_api_key: "fixture-key" });
-  const env = { ...process.env, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
+  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
   delete env.ELECTRON_RUN_AS_NODE; delete env.CODECLAW_DEV_URL;
   for (const key of ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
   const options = { executablePath: process.env.CODECLAW_TEST_EXECUTABLE,
@@ -104,7 +106,7 @@ async function main() {
     await newSession(); assert.equal(await activeId(), draftKey, "Repeated new-session clicks reuse empty slot");
     await page.getByRole("textbox", { name: "任务输入" }).fill("未发送的草稿");
     await page.locator(".session-item.active small").filter({ hasText: "有草稿" }).waitFor();
-    assert.equal(JSON.parse(fs.readFileSync(path.join(project, ".codeclaw/session-index.json"), "utf8")).sessions[draftKey.split(":")[1]].draft, "未发送的草稿");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(historyRoot(project, data), "index.json"), "utf8")).sessions[draftKey.split(":")[1]].draft, "未发送的草稿");
     await app.close(); await launch();
     assert.equal(await page.getByRole("textbox", { name: "任务输入" }).inputValue(), "未发送的草稿");
     assert.equal(await page.getByLabel("会话排序").inputValue(), "name");
@@ -177,7 +179,7 @@ async function main() {
     await projectMenu(projectName); await page.getByRole("menuitem", { name: "删除项目会话记录" }).click();
     await page.getByRole("button", { name: "确认删除项目会话", exact: true }).click();
     await page.getByRole("button", { name: "项目操作 " + projectName, exact: true }).waitFor({ state: "hidden" });
-    assert.equal(fs.readdirSync(path.join(project, ".codeclaw/sessions")).filter((name) => name.endsWith(".json")).length, 0);
+    assert.equal(fs.readdirSync(path.join(historyRoot(project, data), "sessions")).filter((name) => name.endsWith(".json")).length, 0);
     assert.deepEqual(errors, []);
     assert.equal(fs.readFileSync(path.join(project, "keep.py"), "utf8"), "print('keep project source')");
     console.log("PASS: grouped history, rename, pin, archive/restore, search/sort, fork, two-step delete, empty-slot reuse, persistent draft, restart, stop/delete running engine, project close/remove/delete, batch archive/delete, Skill/Subagent guide and examples");

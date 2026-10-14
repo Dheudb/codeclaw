@@ -38,10 +38,10 @@ CLI 直接使用 QueryEngine。Windows 便携包通过内置 Python 的隔离模
 | 位置 | 数据 |
 |---|---|
 | `~/.codeclaw/config.json` | 模型连接和用户配置 |
-| `<项目>/.codeclaw/sessions/` | 会话记录 |
-| `<项目>/.codeclaw/capabilities.json` | 导入目录与禁用的 Skills |
+| `<用户数据>/CodeClaw/history/<工作目录标识>/` | CLI/桌面共用的会话、索引、子代理和工具输出；Linux 目录名为 `codeclaw` |
+| `<项目>/.codeclaw/capabilities.json` | 导入的 Skill/Subagent 配置目录 |
 | `<项目>/mcp_servers.json` | 项目 MCP 服务与凭据 |
-| Electron userData 的 `workbench.json` | 桌面最近项目 |
+| `<用户数据>/CodeClaw/workbench.json` | 桌面项目列表、会话关联与界面设置 |
 | `desktop/dist/` | 前端编译结果 |
 | `desktop/build/python/` | 打包用的内置 Python 与依赖 |
 | `desktop/release/` | Windows 便携应用 |

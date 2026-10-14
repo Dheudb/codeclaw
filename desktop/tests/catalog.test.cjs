@@ -10,15 +10,15 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, "项目 with spaces"); fs.mkdirSync(project);
   let settings = { projects: [] };
-  const catalog = new SessionCatalog(() => settings, (value) => { settings = value; });
+  const catalog = new SessionCatalog(() => settings, (value) => { settings = value; }, path.join(root, "data"));
   catalog.addProject(project);
   return { root, project, catalog, settings: () => settings };
 }
 
 test("moving an independent conversation changes its directory and preserves history, traces, draft and owned child results", (t) => {
-  const { catalog, root, project } = fixture(t);
+  const { catalog, root, project: base } = fixture(t);
   const target = path.join(root, "target"); fs.mkdirSync(target); catalog.addProject(target);
-  const row = catalog.createStandalone(project);
+  const row = catalog.createStandalone(base), project = row.project;
   catalog.update(row, { title: "待迁移", draft: "unfinished", pinned: true, permissionMode: "full" });
   const payload = { messages: [{ role: "user", content: "old history" }, { role: "assistant", content: "answer" }], metadata: {
     turn_traces: [{ id: "turn", elapsedMs: 1234 }], subagents: [{ agent_id: "owned", status: "completed", result: "child answer" }],
@@ -28,7 +28,7 @@ test("moving an independent conversation changes its directory and preserves his
   const child = path.join(catalog.directory(project), "subagents/owned.json"), unrelated = path.join(catalog.directory(project), "subagents/other.json");
   atomicJSON(child, { session_id: row.sessionId, messages: [{ role: "assistant", content: "child answer" }] });
   atomicJSON(unrelated, { session_id: "another", messages: [] });
-  const proof = path.join(project, ".codeclaw/tool-results", row.sessionId, "result.txt");
+  const proof = path.join(catalog.artifacts(project), row.sessionId, "result.txt");
   fs.mkdirSync(path.dirname(proof), { recursive: true }); fs.writeFileSync(proof, "large tool output");
   fs.writeFileSync(path.join(project, "source.py"), "keep source code");
   const moved = moveSession(catalog, catalog.find(row.id), target);
@@ -41,13 +41,14 @@ test("moving an independent conversation changes its directory and preserves his
   assert.equal(saved.metadata.workspace_moves[0].to, fs.realpathSync(target));
   assert(!fs.existsSync(catalog.file(project, row.sessionId))); assert(!fs.existsSync(child)); assert(fs.existsSync(unrelated));
   assert(fs.existsSync(path.join(catalog.directory(target), "subagents/owned.json")));
-  assert.equal(fs.readFileSync(path.join(target, ".codeclaw/tool-results", row.sessionId, "result.txt"), "utf8"), "large tool output");
+  assert.equal(fs.readFileSync(path.join(catalog.artifacts(target), row.sessionId, "result.txt"), "utf8"), "large tool output");
   assert.equal(fs.readFileSync(path.join(project, "source.py"), "utf8"), "keep source code");
   assert.equal(catalog.snapshot().standalone.length, 0); assert.throws(() => catalog.find(row.id));
 });
 
 test("same-directory independent-to-project conversion preserves transcript bytes", (t) => {
-  const { catalog, project } = fixture(t), row = catalog.createStandalone(project);
+  const { catalog, project: base } = fixture(t), row = catalog.createStandalone(base);
+  const project = row.project; catalog.addProject(project);
   const file = catalog.file(project, row.sessionId), bytes = fs.readFileSync(file);
   const moved = moveSession(catalog, row, project);
   assert.equal(moved.id, row.id); assert.equal(moved.scope, "project");

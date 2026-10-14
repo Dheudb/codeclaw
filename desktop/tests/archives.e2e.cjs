@@ -1,3 +1,4 @@
+const { historyRoot } = require("../electron/history-storage.cjs");
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -10,18 +11,19 @@ const project = path.join(fixture, "当前项目"), archivedProject = path.join(
 const third = path.join(fixture, "另一个归档项目"), missing = path.join(fixture, "已移动目录");
 const data = path.join(fixture, "profile"), config = path.join(fixture, "config");
 for (const directory of [project, archivedProject, third, data, config]) fs.mkdirSync(directory);
-const history = (directory, id) => path.join(directory, ".codeclaw/sessions", id + ".json");
+const legacyHistory = (directory, id) => path.join(directory, ".codeclaw/sessions", id + ".json");
+const history = (directory, id) => path.join(historyRoot(directory, data), "sessions", id + ".json");
 for (const [directory, id, title] of [[project, "active", "当前会话"], [project, "one", "同名归档"], [project, "two", "同名归档"],
   [archivedProject, "child", "项目内归档会话"], [archivedProject, "visible", "项目内普通会话"], [third, "ordinary", "另一个项目会话"]])
-  atomicJSON(history(directory, id), { messages: [{ role: "user", content: title }, { role: "assistant", content: "保留的历史回复" }], metadata: {} });
-const indexPath = (directory) => path.join(directory, ".codeclaw/session-index.json");
-atomicJSON(indexPath(project), { version: 1, sessions: { active: { draft: "未发送的内容" }, one: { archived: true, pinned: true, draft: "归档草稿" }, two: { archived: true } } });
-atomicJSON(indexPath(archivedProject), { version: 1, sessions: { child: { archived: true } } });
+  atomicJSON(legacyHistory(directory, id), { messages: [{ role: "user", content: title }, { role: "assistant", content: "保留的历史回复" }], metadata: {} });
+const indexPath = (directory) => path.join(historyRoot(directory, data), "index.json");
+atomicJSON(path.join(project, ".codeclaw/session-index.json"), { version: 1, sessions: { active: { draft: "未发送的内容" }, one: { archived: true, pinned: true, draft: "归档草稿" }, two: { archived: true } } });
+atomicJSON(path.join(archivedProject, ".codeclaw/session-index.json"), { version: 1, sessions: { child: { archived: true } } });
 const workbench = path.join(data, "workbench.json");
 atomicJSON(workbench, { projects: [project, archivedProject, third, missing], activeConversation: { project, resumeId: "active" },
   sidebar: { showArchived: true, sort: "recent" }, projectMeta: Object.fromEntries([archivedProject, third, missing].map((directory) => [projectKey(directory), { archived: true, open: false, collapsed: true }])) });
 atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "archive-fixture", openai_api_key: "fixture-key", openai_base_url: "http://127.0.0.1:9/v1" });
-const env = { ...process.env, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
+const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
 for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
 const options = { executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 };
 let app, page;

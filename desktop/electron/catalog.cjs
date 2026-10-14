@@ -1,6 +1,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { historyRoot, migrateProject } = require("./history-storage.cjs");
+const { dataDirectory } = require("./workspace.cjs");
 
 const validId = (id) => typeof id === "string" && /^[a-zA-Z0-9_-]+$/.test(id);
 const projectKey = (project) => process.platform === "win32"
@@ -22,15 +24,16 @@ function atomicJSON(target, value) {
 
 /** Durable sidebar data. Runtime processes are a cache, not the session list. */
 class SessionCatalog {
-  constructor(readSettings, writeSettings) {
+  constructor(readSettings, writeSettings, dataRoot = dataDirectory({ home: require("node:os").homedir() })) {
     this.readSettings = readSettings;
     this.writeSettings = writeSettings;
+    this.dataRoot = dataRoot;
   }
   directory(project) {
-    const base = fs.realpathSync(project);
-    const root = path.join(base, ".codeclaw", "sessions");
-    if (fs.existsSync(root) && !projectKey(fs.realpathSync(root)).startsWith(projectKey(base) + path.sep))
-      throw new Error("会话目录必须位于当前项目中");
+    const base = path.resolve(project);
+    const root = path.join(migrateProject(base, this.dataRoot, atomicJSON), "sessions");
+    if (fs.existsSync(root) && !projectKey(fs.realpathSync(root)).startsWith(projectKey(path.resolve(this.dataRoot)) + path.sep))
+      throw new Error("会话目录必须位于集中存储中");
     return root;
   }
   file(project, id) {
@@ -42,7 +45,8 @@ class SessionCatalog {
       throw new Error("会话文件必须位于项目的历史目录中");
     return target;
   }
-  indexPath(project) { return path.join(this.directory(project), "..", "session-index.json"); }
+  indexPath(project) { return path.join(this.directory(project), "..", "index.json"); }
+  artifacts(project) { return path.join(historyRoot(project, this.dataRoot), "tool-results"); }
   index(project) {
     const target = this.indexPath(project);
     if (!fs.existsSync(target)) return Object.create(null);
@@ -145,11 +149,66 @@ class SessionCatalog {
     this.writeSettings(settings);
   }
   createStandalone(directory) {
-    directory = fs.realpathSync(directory);
+    const base = fs.realpathSync(directory);
+    directory = path.join(base, "chat-" + crypto.randomUUID());
+    fs.mkdirSync(directory, { recursive: false });
+    this.seedWorkspaceConfiguration(base, directory);
     const settings = this.readSettings();
     settings.standaloneDirectories = [directory, ...(settings.standaloneDirectories || []).filter((p) => projectKey(p) !== projectKey(directory))];
     this.writeSettings(settings);
-    return this.create(directory, [], undefined, "standalone");
+    const row = this.create(directory, [], undefined, "standalone");
+    const index = this.index(directory); index[row.sessionId].workspaceIsolated = true; this.saveIndex(directory, index);
+    return row;
+  }
+  seedWorkspaceConfiguration(base, target) {
+    const settingsFile = path.join(base, ".codeclaw/capabilities.json");
+    const inherited = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, "utf8")) : {};
+    const roots = (kind) => [".codeclaw", ".agents", ".claude"].map((name) => path.join(base, name, kind)).filter((root) => fs.existsSync(root));
+    const skills = [...new Set([...(inherited.skill_roots || []), ...roots("skills")])], agents = [...new Set([...(inherited.agent_roots || []), ...roots("agents")])];
+    if (fs.existsSync(settingsFile) || skills.length || agents.length) atomicJSON(path.join(target, ".codeclaw/capabilities.json"), { ...inherited, skill_roots: skills, agent_roots: agents });
+    const mcp = path.join(base, "mcp_servers.json");
+    if (fs.existsSync(mcp) && !fs.lstatSync(mcp).isSymbolicLink()) fs.copyFileSync(mcp, path.join(target, "mcp_servers.json"), fs.constants.COPYFILE_EXCL);
+  }
+  upgradeStandaloneWorkspaces(base) {
+    const roots = [...new Set([...(this.readSettings().standaloneDirectories || []), ...(this.readSettings().projects || [])])];
+    const rows = roots.flatMap((directory) => {
+      try { return this.list(directory).filter((row) => row.scope === "standalone" && !row.error && !this.index(directory)[row.sessionId]?.workspaceIsolated); }
+      catch { return []; } // snapshot() keeps damaged records and migration conflicts visible.
+    });
+    if (!rows.length) return;
+    fs.mkdirSync(base, { recursive: true });
+    const { moveSession } = require("./session-move.cjs");
+    for (const row of rows) {
+      const target = path.join(base, "chat-" + crypto.randomUUID()); fs.mkdirSync(target);
+      this.seedWorkspaceConfiguration(row.project, target);
+      const raw = JSON.parse(fs.readFileSync(this.file(row.project, row.sessionId), "utf8")), owned = new Set();
+      function collect(value) {
+        if (!value || typeof value !== "object") return;
+        if (value.type === "tool_use" && ["file_write_tool", "file_edit_tool", "notebook_edit_tool"].includes(value.name)) {
+          const filename = value.input?.file_path || value.input?.notebook_path; if (filename) owned.add(filename);
+        }
+        if (value.path && value.operation && "added" in value) owned.add(value.path);
+        for (const child of Object.values(value)) collect(child);
+      }
+      collect(raw);
+      for (const filename of owned) {
+        const source = path.resolve(row.project, filename), relative = path.relative(row.project, source);
+        if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative) || relative.split(path.sep).some((name) => name.startsWith("."))) continue;
+        if (!fs.existsSync(source) || !fs.statSync(source).isFile() || fs.lstatSync(source).isSymbolicLink()) continue;
+        const canonical = fs.realpathSync(source), check = path.relative(row.project, canonical);
+        if (check === ".." || check.startsWith(".." + path.sep) || path.isAbsolute(check)) continue;
+        const destination = path.join(target, relative); fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+      }
+      const pendingSettings = this.readSettings();
+      pendingSettings.standaloneDirectories = [...new Set([...(pendingSettings.standaloneDirectories || []), target])];
+      this.writeSettings(pendingSettings);
+      const moved = moveSession(this, row, target, "standalone"), settings = this.readSettings();
+      settings.standaloneDirectories = [...new Set([...(settings.standaloneDirectories || []), moved.project])];
+      const matches = (entry) => entry && projectKey(entry.project) === projectKey(row.project) && entry.resumeId === row.sessionId;
+      if (matches(settings.activeConversation)) settings.activeConversation = { ...settings.activeConversation, project: moved.project, scope: "standalone" };
+      if (settings.workspace) settings.workspace = settings.workspace.map((entry) => matches(entry) ? { ...entry, project: moved.project, scope: "standalone" } : entry);
+      this.writeSettings(settings);
+    }
   }
   create(project, messages = [], title, scope = "project") {
     const id = crypto.randomUUID();
@@ -178,6 +237,12 @@ class SessionCatalog {
   }
   fork(row) {
     const raw = JSON.parse(fs.readFileSync(this.file(row.project, row.sessionId), "utf8"));
+    if (row.scope === "standalone") {
+      const copy = this.createStandalone(path.dirname(row.project));
+      atomicJSON(this.file(copy.project, copy.sessionId), { messages: Array.isArray(raw) ? raw : raw.messages || [], metadata: {} });
+      this.update(copy, { title: row.title + "（副本）" });
+      return this.find(copy.id);
+    }
     return this.create(row.project, Array.isArray(raw) ? raw : raw.messages || [], row.title + "（副本）", row.scope);
   }
   delete(row) {
@@ -198,6 +263,8 @@ class SessionCatalog {
     const index = this.index(row.project);
     delete index[row.sessionId];
     this.saveIndex(row.project, index);
+    const artifacts = path.join(this.artifacts(row.project), row.sessionId);
+    if (fs.existsSync(artifacts) && !fs.lstatSync(artifacts).isSymbolicLink()) fs.rmSync(artifacts, { recursive: true });
   }
   setView(patch) {
     const settings = this.readSettings();

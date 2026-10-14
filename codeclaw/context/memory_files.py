@@ -63,7 +63,11 @@ class MemoryFileManager:
         project_hash = hashlib.sha256(
             os.path.abspath(self.cwd).encode("utf-8")
         ).hexdigest()[:16]
-        memory_dir = Path(self.home) / ".codeclaw" / "projects" / project_hash / "memory"
+        from codeclaw.core.storage import data_directory, migrate_user_file
+        memory_dir = data_directory() / "memory/projects" / project_hash
+        old = Path(self.home) / ".codeclaw/projects" / project_hash / "memory"
+        if old.is_dir() and not old.is_symlink():
+            for child in old.glob("*.md"): migrate_user_file(child, memory_dir / child.name)
         if not memory_dir.is_dir():
             return []
 

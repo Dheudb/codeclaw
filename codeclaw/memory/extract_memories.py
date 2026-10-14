@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import json
 import os
+from codeclaw.core.storage import data_directory, migrate_user_file
 import time
 from pathlib import Path
 from typing import Optional
@@ -69,9 +70,10 @@ class MemoryExtractor:
                 os.path.abspath(self.project_dir).encode("utf-8")
             ).hexdigest()[:16]
             home = str(Path.home())
-            self._memory_dir = os.path.join(
-                home, ".codeclaw", "projects", project_hash, "memory"
-            )
+            self._memory_dir = str(data_directory() / "memory/projects" / project_hash)
+            old = Path(home) / ".codeclaw/projects" / project_hash / "memory"
+            if old.is_dir() and not old.is_symlink():
+                for child in old.glob("*.md"): migrate_user_file(child, Path(self._memory_dir) / child.name)
         return self._memory_dir
 
     def record_turn(self):
