@@ -115,6 +115,12 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
             os.chdir(temp)
             try:
                 engine = QueryEngine(model="parent-model", model_provider="openai", cwd=temp)
+                previous_client, previous_compactor = engine.client, engine.compactor
+                engine.switch_model_runtime(model="parent-model")
+                self.assertIs(engine.session_memory_manager.compactor, engine.compactor)
+                self.assertIs(engine.memory_extractor.compactor, engine.compactor)
+                await previous_client.close()
+                await previous_compactor.client.close()
                 engine.team_manager.create_team("test", engine.agent_id)
                 tool = engine.available_tools["agent_tool"]
                 child_models, child_tools, child_teams = [], [], []

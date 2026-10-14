@@ -388,6 +388,10 @@ class QueryEngine:
         }
 
     def _sync_model_runtime_context(self):
+        for name in ("session_memory_manager", "memory_extractor"):
+            manager = getattr(self, name, None)
+            if manager is not None:
+                manager.compactor = self.compactor
         self.tool_context["model_provider"] = self.model_provider
         self.tool_context["primary_model"] = self.primary_model
         self.tool_context["fallback_model"] = self.fallback_model
