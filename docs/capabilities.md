@@ -64,6 +64,7 @@ Inspect the task and report concrete findings. Do not modify files.
 子代理默认只接收分配的任务，角色指令和 Skill 放在系统提示中，不继承主会话的聊天请求。
 需要参考主会话时可设置 `inherit_context=true`；历史仅供参考，当前任务仍由 `prompt` 指定。
 同一批前台子代理调用可并发执行，后台任务最多同时运行十个；代理面板可以查看结果和取消后台任务。
+需要立即比较或汇总多个回答时使用前台并发调用；后台任务可通过 `agent_tool action=wait` 等待一个或全部任务的实际结果。
 子代理的计划和待办独立维护，不会覆盖主代理的计划和待办；文件修改仍共享项目，分配任务时应避免修改同一个文件。
 `model` 可以是 `inherit` 或同一连接提供的模型 ID。
 

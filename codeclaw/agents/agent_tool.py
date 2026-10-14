@@ -27,7 +27,7 @@ ALL_AGENT_DISALLOWED_TOOLS = frozenset({
 })
 
 class AgentToolInput(BaseModel):
-    action: str = Field("spawn", description="spawn, list, result, or cancel")
+    action: str = Field("spawn", description="spawn, list, result, wait, or cancel")
     agent_id: Optional[str] = Field(None, description="Background subagent ID for result or cancel")
     description: str = Field("", description="A short description of the task")
     prompt: str = Field("", description="The task for the agent to perform")
@@ -56,7 +56,10 @@ class AgentTool(BaseAgenticTool):
     risk_level = "medium"
 
     def is_concurrency_safe_call(self, action="spawn", **kwargs):
-        return action in {"spawn", "list", "result"}
+        return action in {"spawn", "list", "result", "wait"}
+
+    def is_read_only_call(self, action="spawn", **kwargs):
+        return action in {"list", "result", "wait"}
 
     def prompt(self) -> str:
         registry = self.context.get("agent_registry") or AgentRegistry(self.context.get("session_cwd"))
@@ -68,7 +71,7 @@ Set `subagent_type` to one of the following to get a specialized system prompt a
 
 {agent_list}
 
-If `subagent_type` is omitted, the agent defaults to general-purpose behavior. Use run_in_background=true to launch parallel work. Use action=list/result/cancel to manage background workers by agent_id.
+If `subagent_type` is omitted, the agent defaults to general-purpose behavior. Multiple foreground calls in one message run concurrently. When you need to compare or synthesize the answers now, use run_in_background=false. Use run_in_background=true only for work you can continue without. Use action=wait to await background results (agent_id for one, or omit it for all), then compare the actual answers. Use action=list/result/cancel to manage background workers by agent_id.
 
 ## When NOT to use agent_tool
 - If you want to read a specific file path, use file_read_tool or glob_tool instead — they find the match more quickly.
@@ -76,7 +79,7 @@ If `subagent_type` is omitted, the agent defaults to general-purpose behavior. U
 - If you are searching for code within a specific file or set of 2-3 files, use file_read_tool instead.
 - Other tasks that are not related to the available agent descriptions.
 
-For simple, directed codebase searches (e.g. for a specific file/class/function) use grep_tool or glob_tool directly. For broader codebase exploration and deep research, use agent_tool with agent_type="explore" — this is slower than direct search, so use it only when a simple directed search is insufficient.
+For simple, directed codebase searches (e.g. for a specific file/class/function) use grep_tool or glob_tool directly. For broader codebase exploration and deep research, use agent_tool with subagent_type="explore" — this is slower than direct search, so use it only when a simple directed search is insufficient.
 
 ## Usage notes
 - Always include a short description (3-5 words) summarizing what the agent will do.
@@ -89,7 +92,7 @@ For simple, directed codebase searches (e.g. for a specific file/class/function)
 - Clearly tell the agent whether you expect it to write code or just do research (search, file reads, web fetches, etc.).
 - If the agent description mentions that it should be used proactively, try your best to use it without the user having to ask for it first.
 - If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple agent_tool use content blocks.
-- Use agent_type="verification" proactively after non-trivial implementations (3+ file edits).
+- Use subagent_type="verification" proactively after non-trivial implementations (3+ file edits).
 
 ## Writing the prompt
 Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
@@ -655,6 +658,13 @@ Terse command-style prompts produce shallow, generic work."""
         if action == "result":
             saved = next((record for record in self.context.get("subagent_registry", []) if record.get("agent_id") == agent_id), None)
             return str(tasks.results.get(agent_id) or saved or {"agent_id": agent_id, "status": "running" if agent_id in tasks.tasks else "unknown"})
+        if action == "wait":
+            ids = [agent_id] if agent_id else list(tasks.tasks)
+            if any(identity not in tasks.tasks for identity in ids):
+                raise ValueError("Unknown background subagent")
+            await asyncio.gather(*(tasks.tasks[identity] for identity in ids), return_exceptions=True)
+            tasks.delivered.update(ids)
+            return self._format_batch_report([tasks.results[identity] for identity in ids], parallel=True)
         if action == "cancel":
             return str(await tasks.cancel(agent_id))
         if action != "spawn":

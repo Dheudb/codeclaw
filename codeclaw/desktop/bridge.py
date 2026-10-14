@@ -12,6 +12,7 @@ from codeclaw.core.config import load_config, load_config_into_env, save_config,
 from codeclaw.core.model_catalog import public_config, active_connection, save_connection, select_model, discover_models, apply_connection_env
 from codeclaw.security.permissions import ApprovalPolicy
 from codeclaw.desktop.activity import restore_activity
+from codeclaw.protocols.dsml import marker_position
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.protocols.mcp_config import MCPConfigStore
@@ -156,6 +157,10 @@ class DesktopBridge:
             content = message.get("content", "")
             text = content if isinstance(content, str) else "\n".join(block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text")
             text = text.split("\n\n<selected-skills>")[0]
+            position = marker_position(text) if message.get("role") == "assistant" else None
+            has_calls = isinstance(content, list) and any(isinstance(block, dict) and block.get("type") == "tool_use" for block in content)
+            if position is not None and not has_calls:
+                text = text[:position].rstrip() + "\n\n上次回复中的工具调用未执行，请重新发送任务。"
             if text.strip():
                 items.append({"role": message["role"], "text": text})
         return items

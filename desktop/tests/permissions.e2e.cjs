@@ -5,6 +5,7 @@ const os = require("node:os");
 const http = require("node:http");
 const assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
+const { encodeDSML } = require("./dsml-fixture.cjs");
 const root = path.resolve(__dirname, "..");
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-permissions-e2e-"));
 const project = path.join(fixture, "project"), data = path.join(fixture, "profile"), config = path.join(fixture, "config");
@@ -29,12 +30,17 @@ const server = http.createServer((req, res) => {
     if (match && !after.some((message) => message.role === "tool")) {
       const [_, kind, filename] = match;
       if (kind === "CHILD" && !child) tool = { name: "agent_tool", arguments: { description: "Write test file", prompt: taskText, subagent_type: "writer", run_in_background: false } };
-      else if (kind === "SHELL") tool = { name: "bash_tool", arguments: { command: "echo permission-shell > " + filename, cwd: project } };
+      else if (kind === "SHELL") tool = { name: "bash_tool", arguments: { command: "echo permission-shell > " + filename } };
       else tool = { name: "file_write_tool", arguments: { file_path: path.join(filename === "outside.txt" ? fixture : project, filename), content: "permission-proof" } };
     }
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "test", model: body.model, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
-    if (tool) { chunk({ role: "assistant", tool_calls: [{ index: 0, id: "call_" + Date.now(), type: "function", function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }); chunk({}, "tool_calls"); }
+    if (tool && process.env.CODECLAW_TEST_DSML === "1") {
+      const wire = encodeDSML([{ name: tool.name, input: tool.arguments }]);
+      for (let offset = 0; offset < wire.length; offset += 7) chunk({ content: wire.slice(offset, offset + 7) });
+      chunk({}, "stop");
+    }
+    else if (tool) { chunk({ role: "assistant", tool_calls: [{ index: 0, id: "call_" + Date.now(), type: "function", function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }); chunk({}, "tool_calls"); }
     else { chunk({ role: "assistant", content: "权限任务完成：" + taskText }); chunk({}, "stop"); }
     res.end("data: [DONE]\n\n");
   });
@@ -47,7 +53,7 @@ async function launch() {
   app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(60000); page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
-  await page.evaluate(() => { window.permissionEvents = []; window.codeclaw.onEvent((event) => { if (event.type === "permission") window.permissionEvents.push(event); }); });
+  await page.evaluate(() => { window.permissionEvents = []; window.textEvents = []; window.codeclaw.onEvent((event) => { if (event.type === "permission") window.permissionEvents.push(event); if (event.type === "text_delta") window.textEvents.push(event.text); }); });
 }
 const mode = () => page.getByLabel("访问权限", { exact: true });
 const row = (id) => page.locator(`[data-session-id="${id}"]`);
@@ -117,6 +123,7 @@ async function main() {
     const screenshot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString("base64"));
     fs.mkdirSync(path.join(root, "test-results"), { recursive: true }); fs.writeFileSync(path.join(root, "test-results/permission-modes.png"), Buffer.from(screenshot, "base64"));
     assert.deepEqual(errors, []);
+    assert(!(await page.evaluate(() => window.textEvents.join(""))).includes("DSML"), "Protocol markup must not leak into chat");
     console.log("Permission E2E passed: two modes, pending approval release, full file/shell/subagent execution, revoked grants, per-session isolation, restart and fail-closed transport recovery");
   } finally { if (app) await app.close().catch(() => {}); server.closeAllConnections(); server.close(); }
 }

@@ -30,10 +30,11 @@ export default function ActivityPanel({ session }: { session: SessionView }) {
         const worker = session.workers.find((worker) => worker.agent_id === tool.agentId);
         const origin = tool.agentId ? worker?.description || tool.agentRole || "子代理" : "主代理";
         const elapsed = tool.startedAt && tool.finishedAt ? Math.max(0, tool.finishedAt - tool.startedAt) / 1000 : null;
+        const title = tool.name === "agent_tool" && input.action === "wait" ? "等待子代理结果" : names[tool.name] || tool.name;
         return <details className={"tool-row activity-card " + tool.status} key={tool.id} data-activity-id={tool.id} data-status={tool.status}>
           <summary>
             <span className={"status-dot " + tool.status} />
-            <span className="activity-heading"><strong>{names[tool.name] || tool.name}</strong><span className="activity-origin" title={origin}>{origin}</span></span>
+            <span className="activity-heading"><strong>{title}</strong><span className="activity-origin" title={origin}>{origin}</span></span>
             <span className="activity-status">{statusText[tool.status] || tool.status}</span><ChevronDown size={13} />
             {brief && <span className="activity-brief">{String(brief)}</span>}
             <span className="activity-meta"><code>{tool.name}</code>{tool.startedAt && <time>{new Date(tool.startedAt).toLocaleTimeString("zh-CN", { hour12: false })}</time>}{elapsed !== null && <span>{elapsed.toFixed(1)} 秒</span>}</span>

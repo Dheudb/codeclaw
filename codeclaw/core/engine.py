@@ -43,6 +43,7 @@ from codeclaw.features.plans import PlanManager, is_session_plan_file
 from codeclaw.security.permissions import PermissionManager
 from codeclaw.utils.shell_tasks import ShellTaskManager
 from codeclaw.context.tool_results import build_tool_result, serialize_tool_result
+from codeclaw.protocols.dsml import ToolTextFilter, decode_tool_text
 from codeclaw.features.todos import TodoManager
 from codeclaw.utils.vcr import VCRManager
 from codeclaw.features.ultraplan import UltraplanManager
@@ -3561,6 +3562,7 @@ class QueryEngine:
                     create_kwargs["tools"] = tools_schema
 
                 text_fragments = []
+                text_filter = ToolTextFilter()
                 tool_calls = {}
                 dispatched_indices = set()
                 emitted_tool_ids = set()
@@ -3662,11 +3664,9 @@ class QueryEngine:
                         delta_text = getattr(delta, "content", None)
                         if delta_text:
                             text_fragments.append(delta_text)
-                            await self._emit_stream_event(event_callback, {
-                                "type": "text_delta",
-                                "turn": turn_count,
-                                "text": delta_text,
-                            })
+                            visible_delta = text_filter.feed(delta_text)
+                            if visible_delta:
+                                await self._emit_stream_event(event_callback, {"type": "text_delta", "turn": turn_count, "text": visible_delta})
 
                         for tool_delta in list(getattr(delta, "tool_calls", []) or []):
                             index = int(getattr(tool_delta, "index", 0) or 0)
@@ -3703,6 +3703,22 @@ class QueryEngine:
                     if getattr(choice, "finish_reason", None):
                         finish_reason = self._map_openai_finish_reason(choice.finish_reason)
 
+                full_text = "".join(text_fragments)
+                if not tool_calls:
+                    full_text, recovered = decode_tool_text(full_text, tools_schema)
+                    for index, call in enumerate(recovered):
+                        tool_calls[index] = {**call, "arguments": [call["arguments"]]}
+                else:
+                    # Native calls take precedence over a duplicate leaked envelope.
+                    from codeclaw.protocols.dsml import marker_position
+                    position = marker_position(full_text)
+                    if position is not None:
+                        full_text = full_text[:position]
+                tail = text_filter.finish(full_text)
+                if tail:
+                    await self._emit_stream_event(event_callback, {"type": "text_delta", "turn": turn_count, "text": tail})
+                if tool_calls:
+                    finish_reason = "tool_use"
                 for idx in sorted(tool_calls.keys()):
                     _dispatch_tool_if_ready(idx)
 
@@ -3710,7 +3726,6 @@ class QueryEngine:
                     previous_batch_gate = asyncio.gather(*current_safe_batch_tasks)
 
                 content_blocks = []
-                full_text = "".join(text_fragments)
                 if full_text:
                     content_blocks.append(self._make_text_block(full_text))
                 for record in [tool_calls[idx] for idx in sorted(tool_calls.keys())]:

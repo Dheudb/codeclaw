@@ -105,6 +105,23 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "cancelled")
         await manager.close()
 
+    async def test_wait_collects_real_results_and_does_not_deliver_twice(self):
+        from codeclaw.agents.agent_tool import AgentTool
+        manager = SubagentTasks()
+        gate = asyncio.Event()
+        async def child():
+            await gate.wait()
+            return {"agent_id": "one", "status": "completed", "result": "child answer"}
+        manager.launch("one", child())
+        tool = AgentTool(); tool.context = {"subagent_tasks": manager}
+        waiting = asyncio.create_task(tool.execute(action="wait"))
+        await asyncio.sleep(0)
+        self.assertFalse(waiting.done())
+        gate.set()
+        self.assertIn("child answer", await waiting)
+        self.assertEqual(manager.completed(), [])
+        await manager.close()
+
 
 class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_override_tools_team_registration_and_background(self):

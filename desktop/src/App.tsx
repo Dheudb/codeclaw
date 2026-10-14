@@ -51,6 +51,7 @@ export default function App() {
   const [viewport, setViewport] = useState(window.innerWidth);
   const [opening, setOpening] = useState(true);
   const [notice, setNotice] = useState("");
+  const [buildId, setBuildId] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const navigation = useRef(0);
@@ -68,6 +69,7 @@ export default function App() {
       .invoke("app.initialize")
       .then((value) => {
         setGlobalModel(value.config);
+        setBuildId(value.buildId || "");
         setDefaultDirectory(value.workspaceSettings.defaultDirectory);
         if (Number.isFinite(value.layout?.inspectorWidth)) setPanelWidth(value.layout.inspectorWidth);
         receiveCatalog(value.catalog);
@@ -317,7 +319,7 @@ export default function App() {
           </button>
           <div className="local-status">
             <span />
-            本地工作区<span className="version">v0.1.0</span>
+            本地工作区<span className="version" title={buildId ? "构建 " + buildId : "开发版本"}>v0.1.0{buildId ? " · " + buildId.slice(-4) : ""}</span>
           </div>
           <button className="sidebar-action" onClick={openSettings}>
             <Settings2 size={16} />

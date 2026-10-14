@@ -5,6 +5,7 @@ const os = require("node:os");
 const http = require("node:http");
 const assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
+const { encodeDSML } = require("./dsml-fixture.cjs");
 const root = path.resolve(__dirname, "..");
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-subagents-e2e-"));
 const project = path.join(fixture, "project"), data = path.join(fixture, "profile"), config = path.join(fixture, "config");
@@ -15,7 +16,11 @@ let app, page, batch = 0;
 function reply(res, text, tools) {
   res.writeHead(200, { "Content-Type": "text/event-stream" });
   const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
-  if (tools) {
+  if (tools && process.env.CODECLAW_TEST_DSML === "1") {
+    const wire = encodeDSML(tools.map((input) => ({ name: "agent_tool", input })));
+    for (let offset = 0; offset < wire.length; offset += 17) chunk({ content: wire.slice(offset, offset + 17) });
+    chunk({}, "stop");
+  } else if (tools) {
     chunk({ role: "assistant", tool_calls: tools.map((arguments_, index) => ({ index, id: `call_${batch}_${index}`, type: "function", function: { name: "agent_tool", arguments: JSON.stringify(arguments_) } })) });
     chunk({}, "tool_calls");
   } else { chunk({ role: "assistant", content: text }); chunk({}, "stop"); }
@@ -77,6 +82,7 @@ async function main() {
     assert.equal(await page.locator(".capability-card").filter({ hasText: "问候测试" }).count(), 20);
     assert.equal(await page.locator(".capability-card").filter({ hasText: "已完成" }).count(), 20);
     assert.deepEqual(failures, []);
+    assert(!(await page.locator("body").innerText()).includes("DSML"));
     console.log("Subagent E2E passed: isolated task/system roles, ten simultaneous foreground workers, ten background workers, distinct labels and completed states");
   } finally {
     if (app) await app.close().catch(() => {});

@@ -52,6 +52,12 @@ jobs:
       - run: npm run test:permissions
       - run: npm run test:subagents
       - run: npm run test:activity
+      - run: npm run test:subagents
+        env:
+          CODECLAW_TEST_DSML: '1'
+      - run: npm run test:permissions
+        env:
+          CODECLAW_TEST_DSML: '1'
       - run: npm run test:mcp
         env:
           CODECLAW_PYTHON: python

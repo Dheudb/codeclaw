@@ -234,6 +234,7 @@ async function invoke(method, params) {
       ...await restoration,
       catalog: broadcastCatalog(),
       version: app.getVersion(),
+      buildId: JSON.parse(fs.readFileSync(path.join(app.getAppPath(), "package.json"), "utf8")).buildId || "",
       config: await globalConfig().request("config.get"),
       workspaceSettings: workspaceSettings(),
     };
