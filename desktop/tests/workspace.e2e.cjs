@@ -44,6 +44,8 @@ async function main() {
     await page.locator(".session-item.active").waitFor();
     assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(defaultDirectory));
     const defaultId = await page.locator(".session-item.active").getAttribute("data-session-id");
+    assert.equal(await page.locator(".standalone-group .session-item.active").count(), 1);
+    assert.equal(await page.locator(".project-group").count(), 0);
     assert(fs.existsSync(path.join(defaultDirectory, ".codeclaw/sessions", defaultId.split(":")[1] + ".json")));
     await page.getByRole("button", { name: "设置与模型", exact: true }).click();
     // Directory configuration works independently of the model configuration.
@@ -66,31 +68,60 @@ async function main() {
     fs.mkdirSync(path.join(root, "test-results"), { recursive: true });
     fs.writeFileSync(path.join(root, "test-results/workspace-settings.png"), Buffer.from(screenshot, "base64"));
     await page.getByRole("button", { name: "关闭设置", exact: true }).click();
-    // Changing the default does not redirect a conversation in a selected project.
+    // Global New always uses the current default, preserving old independent histories.
     await page.locator(".new-task").click();
     await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
-    assert.equal(await page.locator(".session-item.active").getAttribute("data-session-id"), defaultId);
+    const customId = await page.locator(".session-item.active").getAttribute("data-session-id");
+    assert.notEqual(customId, defaultId);
+    assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(custom));
+    assert.equal(await page.locator(".standalone-group .session-item").count(), 2);
+    await page.getByRole("textbox", { name: "任务输入" }).fill("独立会话的草稿");
     await app.evaluate(({ dialog }, directory) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] });
     }, explicit);
     await page.getByRole("button", { name: "打开项目", exact: true }).click();
     await page.locator(`[data-project="${explicit.replace(/\\/g, "\\\\")}"] .session-item.active`).waitFor();
-    await page.locator(".new-task").click();
+    await page.getByRole("textbox", { name: "任务输入" }).fill("项目会话的草稿");
+    await page.getByRole("button", { name: "在项目 explicit-project 中新建会话", exact: true }).click();
     await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
     assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(explicit));
-    for (const directory of [defaultDirectory, explicit]) await page.evaluate((directory) => window.codeclaw.invoke("project.remove", { path: directory, confirm: true }), directory);
-    // Restore renderer after backend-only project removal; this also checks persistent empty selection.
-    await app.close(); await launch();
-    assert.equal(await page.locator(".session-item").count(), 0);
-    await page.getByRole("button", { name: "开始新会话", exact: true }).click();
-    await page.locator(".session-item.active").waitFor();
+    assert.equal(await page.locator(".project-group .session-item").count(), 2);
+    await page.keyboard.press("Control+n");
+    await page.waitForFunction(() => !document.querySelector(".new-task").disabled && !!document.querySelector(".standalone-group .session-item.active"));
     assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(custom));
+    assert.equal(await page.locator(".project-group .session-item").count(), 2);
+    assert.equal(await page.locator(".standalone-group .session-item").count(), 3);
+    const layout = await app.evaluate(async ({ BrowserWindow }) => {
+      const web = BrowserWindow.getAllWindows()[0].webContents;
+      await web.capturePage(undefined, { stayHidden: true, stayAwake: true });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return (await web.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString("base64");
+    });
+    fs.writeFileSync(path.join(root, "test-results/standalone-sessions.png"), Buffer.from(layout, "base64"));
+    await page.evaluate((directory) => window.codeclaw.invoke("project.remove", { path: directory, confirm: true }), explicit);
+    await page.waitForFunction(() => document.querySelectorAll(".project-group").length === 0);
+    assert.equal(await page.locator(".standalone-group .session-item").count(), 3);
     assert(fs.existsSync(path.join(defaultDirectory, ".codeclaw/sessions", defaultId.split(":")[1] + ".json")), "Default directory changes preserve old histories");
 
     await app.close(); await launch();
     assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(custom));
+    assert.equal(await page.locator(".standalone-group .session-item.active").count(), 1);
+    assert.equal(await page.locator(".standalone-group .session-item").count(), 3);
+    assert.equal(readSettings().activeConversation.scope, "standalone");
+    const independentId = await page.locator(".session-item.active").getAttribute("data-session-id");
+    await page.evaluate((id) => window.codeclaw.invoke("session.update", { id, patch: { title: "独立归档测试" } }), independentId);
+    await page.getByRole("button", { name: "会话操作 独立归档测试", exact: true }).click();
+    await page.getByRole("menuitem", { name: "归档会话", exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".standalone-group .session-item").length === 2);
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    await page.getByRole("tab", { name: "已归档会话", exact: true }).click();
+    await page.getByRole("button", { name: "恢复会话 独立归档测试", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "已恢复会话" }).waitFor();
+    await page.getByRole("button", { name: "关闭设置", exact: true }).click();
+    assert.equal(await page.locator(".standalone-group .session-item").count(), 3);
+    assert.equal(await page.locator(".project-group").count(), 0);
     assert.deepEqual(errors, []);
-    console.log("Workspace E2E passed: per-user default, no folder chooser, independent save, explicit project and restart");
+    console.log("Workspace E2E passed: global New/Ctrl+N independent, project + scoped, default-directory changes, drafts/history preserved, project removal and restart");
   } finally { if (app) await app.close().catch(() => {}); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -54,7 +54,7 @@ async function main() {
   async function menu(title) { await row(title).getByRole("button", { name: "会话操作 " + title, exact: true }).click(); }
   async function projectMenu(name) { await page.getByRole("button", { name: "项目操作 " + name, exact: true }).click(); }
   async function newSession() {
-    await page.locator(".new-task").click();
+    await page.getByRole("button", { name: "在项目 项目 one 中新建会话", exact: true }).click();
     await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
     await page.locator(".session-item.active").filter({ hasText: "新会话" }).waitFor();
   }

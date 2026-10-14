@@ -63,6 +63,7 @@ export type TurnTrace = {
 export type HistoryItem = { role: "user" | "assistant"; text: string; trace?: TurnTrace };
 export type SavedSession = { id: string; title: string; updated: number };
 export type CatalogSession = SavedSession & {
+  scope?: "project" | "standalone";
   permissionMode: PermissionMode;
   sessionId: string;
   project: string;
@@ -83,11 +84,13 @@ export type CatalogProject = {
   sessions: CatalogSession[];
 };
 export type SessionCatalog = {
+  standalone?: CatalogSession[];
   revision?: number;
   projects: CatalogProject[];
   view: { sort: "recent" | "oldest" | "name" | "created" };
 };
 export type InitialSession = {
+  scope?: "project" | "standalone";
   permissionMode?: PermissionMode;
   id: string;
   persistedId?: string;

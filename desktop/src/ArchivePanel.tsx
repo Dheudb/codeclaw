@@ -25,10 +25,12 @@ export default function ArchivePanel({ catalog, action }: {
   const needle = query.trim().toLocaleLowerCase();
   const matches = (...values: string[]) => !needle || values.some((value) => value.toLocaleLowerCase().includes(needle));
   const projects = catalog.projects.filter((project) => project.archived && matches(project.name, project.path));
-  const sessions = catalog.projects.flatMap((project) => project.sessions.filter((row) => row.archived &&
-    matches(row.title, project.name, project.path)).map((row) => ({ row, project })))
+  const sessions = [...catalog.projects.flatMap((project) => project.sessions.filter((row) => row.archived &&
+    matches(row.title, project.name, project.path)).map((row) => ({ row, project }))),
+    ...(catalog.standalone || []).filter((row) => row.archived && matches(row.title, "独立会话", row.project))
+      .map((row) => ({ row, project: { name: "独立会话", path: row.project, archived: false } }))]
     .sort((a, b) => b.row.updated - a.row.updated);
-  const count = catalog.projects.reduce((total, project) => total + project.sessions.filter((row) => row.archived).length, 0);
+  const count = catalog.projects.reduce((total, project) => total + project.sessions.filter((row) => row.archived).length, 0) + (catalog.standalone || []).filter((row) => row.archived).length;
   const projectCount = catalog.projects.filter((project) => project.archived).length;
   return <div className="archive-manager" aria-busy={busy}>
     <div className="settings-section-heading"><div><h3>已归档会话</h3>

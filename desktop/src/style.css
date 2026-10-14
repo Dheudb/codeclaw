@@ -317,6 +317,9 @@ a,
 .session-item > input { width: 13px; height: 13px; accent-color: #788768; }
 .catalog-scroll { padding-top: 8px; overflow-x: hidden; }
 .project-group { margin-bottom: 13px; }
+.standalone-group { margin: 0 0 17px; }
+.standalone-group > .section-label { display: block; padding: 7px 10px; }
+.standalone-sessions .session-select { flex: 1; min-width: 0; }
 .project-heading { position: relative; display: flex; align-items: center; gap: 2px; padding: 3px 0; }
 .project-heading .project-item { display: flex; align-items: center; gap: 7px; border: 0; background: transparent; min-width: 0; flex: 1; text-align: left; justify-content: flex-start; padding: 7px 2px; font-size: 11px; font-weight: 600; color: #606858; }
 .project-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

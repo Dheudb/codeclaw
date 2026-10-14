@@ -70,12 +70,14 @@ class SessionCatalog {
             (first?.content || []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
           const item = meta[sessionId] || {};
           return [{ id: sessionKey(project, sessionId), sessionId, project,
+            scope: item.scope === "standalone" ? "standalone" : "project",
             title: item.title || text.split("\n")[0].slice(0, 80) || "新会话",
             updated: stat.mtimeMs, created: item.created || stat.birthtimeMs || stat.mtimeMs,
             pinned: !!item.pinned, archived: !!item.archived, draft: item.draft || "", permissionMode: item.permissionMode === "full" ? "full" : "ask" }];
         } catch (error) {
           // Keep an unreadable record visible and deletable instead of hiding it.
           return [{ id: sessionKey(project, sessionId), sessionId, project,
+            scope: meta[sessionId]?.scope === "standalone" ? "standalone" : "project",
             title: meta[sessionId]?.title || "无法读取的会话", updated: 0, created: 0,
             pinned: !!meta[sessionId]?.pinned, archived: !!meta[sessionId]?.archived, permissionMode: meta[sessionId]?.permissionMode === "full" ? "full" : "ask",
             error: error.message }];
@@ -89,17 +91,24 @@ class SessionCatalog {
       try {
         return { path: project, name: meta.name || basename(project), open: meta.open !== false,
           pinned: !!meta.pinned, archived: !!meta.archived, collapsed: !!meta.collapsed,
-          sessions: this.list(project) };
+          sessions: this.list(project).filter((row) => row.scope !== "standalone") };
       } catch (error) {
         return { path: project, name: meta.name || basename(project), open: false,
           pinned: !!meta.pinned, archived: !!meta.archived, sessions: [], error: error.message };
       }
     });
+    const roots = [...new Map([...(settings.standaloneDirectories || []), ...(settings.projects || [])]
+      .map((directory) => [projectKey(directory), directory])).values()];
+    const standalone = roots.flatMap((directory) => {
+      try { return this.list(directory).filter((row) => row.scope === "standalone"); }
+      catch { return []; }
+    });
     const sort = settings.sidebar?.sort;
-    return { projects, view: { sort: ["recent", "oldest", "name", "created"].includes(sort) ? sort : "recent" } };
+    return { projects, standalone, view: { sort: ["recent", "oldest", "name", "created"].includes(sort) ? sort : "recent" } };
   }
   find(id) {
-    const row = this.snapshot().projects.flatMap((project) => project.sessions).find((row) => row.id === id);
+    const snapshot = this.snapshot();
+    const row = [...snapshot.standalone, ...snapshot.projects.flatMap((project) => project.sessions)].find((row) => row.id === id);
     if (!row) throw new Error("会话不存在，可能已被删除");
     return row;
   }
@@ -135,11 +144,18 @@ class SessionCatalog {
     if (settings.projectMeta) delete settings.projectMeta[projectKey(project)];
     this.writeSettings(settings);
   }
-  create(project, messages = [], title) {
+  createStandalone(directory) {
+    directory = fs.realpathSync(directory);
+    const settings = this.readSettings();
+    settings.standaloneDirectories = [directory, ...(settings.standaloneDirectories || []).filter((p) => projectKey(p) !== projectKey(directory))];
+    this.writeSettings(settings);
+    return this.create(directory, [], undefined, "standalone");
+  }
+  create(project, messages = [], title, scope = "project") {
     const id = crypto.randomUUID();
     atomicJSON(this.file(project, id), { messages, metadata: {} });
     const index = this.index(project);
-    index[id] = { created: Date.now(), ...(title ? { title } : {}) };
+    index[id] = { created: Date.now(), scope, ...(title ? { title } : {}) };
     this.saveIndex(project, index);
     return this.list(project).find((row) => row.sessionId === id);
   }
@@ -162,7 +178,7 @@ class SessionCatalog {
   }
   fork(row) {
     const raw = JSON.parse(fs.readFileSync(this.file(row.project, row.sessionId), "utf8"));
-    return this.create(row.project, Array.isArray(raw) ? raw : raw.messages || [], row.title + "（副本）");
+    return this.create(row.project, Array.isArray(raw) ? raw : raw.messages || [], row.title + "（副本）", row.scope);
   }
   delete(row) {
     // Runtime disposal must complete before this is called, otherwise closing
@@ -191,6 +207,11 @@ class SessionCatalog {
   }
   restoreArchive({ id, path: project }) {
     const row = id ? this.find(id) : null;
+    if (row?.scope === "standalone") {
+      if (!fs.statSync(row.project).isDirectory()) throw new Error("默认工作目录不存在或无法访问");
+      this.update(row, { archived: false });
+      return;
+    }
     const scope = this.snapshot().projects.find((entry) => projectKey(entry.path) === projectKey(row ? row.project : project));
     if (!scope) throw new Error("归档项目不存在");
     try {

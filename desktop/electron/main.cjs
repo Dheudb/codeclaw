@@ -84,17 +84,18 @@ function saveWorkspace() {
   const active = sessions.get(activeSessionId);
   saveSettings({
     ...settings(),
-    activeConversation: active ? { project: active.project, resumeId: active.resumeId } : null,
+    activeConversation: active ? { project: active.project, resumeId: active.resumeId, scope: active.scope } : null,
     workspace: [...sessions.entries()].map(([id, session]) => ({
       project: session.project,
       resumeId: session.resumeId,
+      scope: session.scope,
       active: id === activeSessionId,
     })),
   });
 }
-function latestSavedSession(project) {
+function latestSavedSession(project, scope = "project") {
   try {
-    return catalog.list(project).filter((row) => !row.archived && !row.error)
+    return catalog.list(project).filter((row) => row.scope === scope && !row.archived && !row.error)
       .sort((a, b) => b.updated - a.updated)[0]?.sessionId;
   } catch {
     return undefined;
@@ -111,13 +112,14 @@ async function restoreWorkspace() {
   const restored = [], errors = [];
   for (const entry of entries.slice(0, 8)) {
     try {
-      if (catalog.snapshot().projects.some((project) => projectKey(project.path) === projectKey(entry.project) && project.archived)) continue;
+      if (entry.scope !== "standalone" && catalog.snapshot().projects.some((project) => projectKey(project.path) === projectKey(entry.project) && project.archived)) continue;
       let resumeId = entry.resumeId;
       if (resumeId && (!/^[a-zA-Z0-9_-]+$/.test(resumeId) ||
         !fs.existsSync(path.join(entry.project, ".codeclaw", "sessions", resumeId + ".json"))))
-        resumeId = latestSavedSession(entry.project);
+        resumeId = latestSavedSession(entry.project, entry.scope || "project");
       if (resumeId && catalog.list(entry.project).find((row) => row.sessionId === resumeId)?.archived)
-        resumeId = latestSavedSession(entry.project);
+        resumeId = latestSavedSession(entry.project, entry.scope || "project");
+      if (!resumeId && entry.scope === "standalone") continue;
       const initial = await createSession(entry.project, resumeId);
       restored.push(initial);
       activeSessionId = initial.id;
@@ -174,13 +176,13 @@ async function createSession(project, resumeId) {
     project,
     onEvent: (event) => send(id, event),
   });
-  sessions.set(id, { transport, project, resumeId, busy: false, workers: new Map() });
+  sessions.set(id, { transport, project, resumeId, scope: row.scope, busy: false, workers: new Map() });
   try {
     const initial = await transport.request("initialize", {
       sessionId: resumeId,
       permissionMode: row.permissionMode,
     });
-    return { id, ...initial, title: row.title, savedDraft: row.draft || "" };
+    return { id, ...initial, scope: row.scope, title: row.title, savedDraft: row.draft || "" };
   } catch (error) {
     sessions.delete(id);
     await transport.close();
@@ -198,23 +200,23 @@ async function disposeSession(id) {
   if (window && !window.isDestroyed()) window.webContents.send("workbench:event", { type: "session_unloaded", session: id });
 }
 async function selectRow(row) {
-  if (row.archived || catalog.snapshot().projects.some((project) => projectKey(project.path) === projectKey(row.project) && project.archived))
+  if (row.archived || row.scope !== "standalone" && catalog.snapshot().projects.some((project) => projectKey(project.path) === projectKey(row.project) && project.archived))
     throw new Error("请先在设置的已归档会话页面恢复此会话");
-  catalog.updateProject(row.project, { open: true });
+  if (row.scope !== "standalone") catalog.updateProject(row.project, { open: true });
   const initial = await createSession(row.project, row.sessionId);
   activeSessionId = row.id;
   saveWorkspace();
   return { ...initial, activeId: row.id, catalog: broadcastCatalog() };
 }
-async function fallback(project, excluded = []) {
+async function fallback(project, excluded = [], scope = "project") {
   const snapshot = catalog.snapshot();
-  const eligible = snapshot.projects.filter((entry) => entry.open && !entry.archived)
-    .flatMap((entry) => entry.sessions).filter((row) => !row.archived && !row.error && !excluded.includes(row.id));
-  const next = eligible.filter((row) => projectKey(row.project) === projectKey(project))
+  const eligible = [...snapshot.standalone, ...snapshot.projects.filter((entry) => entry.open && !entry.archived)
+    .flatMap((entry) => entry.sessions)].filter((row) => !row.archived && !row.error && !excluded.includes(row.id));
+  const next = eligible.filter((row) => row.scope === scope && projectKey(row.project) === projectKey(project))
     .sort((a, b) => b.updated - a.updated)[0] || eligible.sort((a, b) => b.updated - a.updated)[0];
   if (next) return selectRow(next);
-  const scope = snapshot.projects.find((entry) => projectKey(entry.path) === projectKey(project) && entry.open && !entry.archived);
-  if (scope) return selectRow(catalog.create(scope.path));
+  const projectScope = snapshot.projects.find((entry) => projectKey(entry.path) === projectKey(project) && entry.open && !entry.archived);
+  if (projectScope && scope !== "standalone") return selectRow(catalog.create(projectScope.path));
   activeSessionId = undefined;
   saveWorkspace();
   return { activeId: "", catalog: broadcastCatalog() };
@@ -294,34 +296,33 @@ async function invoke(method, params) {
       throw new Error("项目已归档，请在设置的已归档会话页面恢复");
     project = catalog.addProject(project);
     const active = sessions.get(activeSessionId);
-    const resumeId = active && projectKey(active.project) === projectKey(project) ? active.resumeId : latestSavedSession(project);
+    const resumeId = active && active.scope !== "standalone" && projectKey(active.project) === projectKey(project) ? active.resumeId : latestSavedSession(project);
     return selectRow(resumeId ? catalog.find(sessionKey(project, resumeId)) : catalog.create(project));
   }
   if (method === "session.select") return selectRow(catalog.find(params.id));
   if (method === "session.open" || method === "session.new") {
     let project = params.path;
+    const scope = method === "session.new" && !project ? "standalone" : method === "session.open" ? sessions.get(params.session)?.scope || "project" : "project";
     if (method === "session.new" && !project) {
-      const directory = ensureWorkspace(workspaceSettings().defaultDirectory);
-      if (catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(directory) && entry.archived))
-        throw new Error("默认工作区已归档，请在设置中恢复或修改默认工作目录");
-      const known = catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(directory));
-      project = catalog.addProject(directory);
-      if (!known) catalog.updateProject(project, { name: "默认工作区" });
+      project = ensureWorkspace(workspaceSettings().defaultDirectory);
     }
     const source = method === "session.new" ? { project } : sessions.get(params.session);
-    if (!source || !catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project))) throw new Error("项目不存在");
-    if (catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project) && entry.archived))
+    if (!source || scope !== "standalone" && !catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project))) throw new Error("项目不存在");
+    if (scope !== "standalone" && catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project) && entry.archived))
       throw new Error("请先在设置的已归档会话页面恢复项目");
     if (params.resumeId) return selectRow(catalog.find(sessionKey(source.project, params.resumeId)));
-    const empty = catalog.list(source.project).find((row) => !row.archived && !row.error && !row.draft &&
+    const empty = catalog.list(source.project).find((row) => row.scope === scope && !row.archived && !row.error && !row.draft &&
       row.title === "新会话" && !running(sessions.get(row.id) || { busy: false, workers: new Map() }) &&
       JSON.parse(fs.readFileSync(catalog.file(row.project, row.sessionId), "utf8")).messages?.length === 0);
-    return selectRow(empty || catalog.create(source.project));
+    return selectRow(empty || (scope === "standalone" ? catalog.createStandalone(source.project) : catalog.create(source.project)));
   }
   if (method === "session.update") {
     const ids = [...new Set(params.ids || [params.id])];
     for (const id of ids) catalog.update(catalog.find(id), params.patch || {});
-    if (params.patch?.archived && ids.includes(activeSessionId)) return fallback(catalog.find(activeSessionId).project, ids);
+    if (params.patch?.archived && ids.includes(activeSessionId)) {
+      const active = catalog.find(activeSessionId);
+      return fallback(active.project, ids, active.scope);
+    }
     return { catalog: broadcastCatalog() };
   }
   if (method === "session.fork") {
@@ -337,7 +338,7 @@ async function invoke(method, params) {
     const wasActive = rows.find((row) => row.id === activeSessionId);
     for (const row of rows) await disposeSession(row.id);
     for (const row of rows) catalog.delete(row);
-    if (wasActive) return fallback(wasActive.project, rows.map((row) => row.id));
+    if (wasActive) return fallback(wasActive.project, rows.map((row) => row.id), wasActive.scope);
     saveWorkspace();
     return { catalog: broadcastCatalog() };
   }
@@ -346,11 +347,11 @@ async function invoke(method, params) {
     if (!project) throw new Error("项目不存在");
     if (method === "project.update") {
       catalog.updateProject(project.path, params.patch || {});
-      if (params.patch?.archived && sessions.get(activeSessionId)?.project === project.path) return fallback(project.path);
+      if (params.patch?.archived && sessions.get(activeSessionId)?.scope !== "standalone" && sessions.get(activeSessionId)?.project === project.path) return fallback(project.path);
       return { catalog: broadcastCatalog() };
     }
     if (["project.delete", "project.remove"].includes(method) && params.confirm !== true) throw new Error("请确认移除项目");
-    const live = [...sessions.entries()].filter(([, value]) => projectKey(value.project) === projectKey(project.path));
+    const live = [...sessions.entries()].filter(([, value]) => value.scope !== "standalone" && projectKey(value.project) === projectKey(project.path));
     if (!params.stop && live.some(([, source]) => running(source))) throw new Error("项目有运行中的任务，请先停止任务");
     const wasActive = live.some(([id]) => id === activeSessionId);
     for (const [id] of live) await disposeSession(id);

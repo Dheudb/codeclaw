@@ -191,7 +191,7 @@ export default function App() {
   async function openSession(resumeId?: string) {
     try {
       if (resumeId && active) await workspaceAction("session.open", { session: activeId, resumeId });
-      else await workspaceAction("session.new", active ? { path: active.project } : {});
+      else await workspaceAction("session.new", {});
     } catch (error) {
       onError(error);
     }
@@ -336,7 +336,7 @@ export default function App() {
               title={active?.project}
               onClick={() => active && invoke("project.reveal").catch(onError)}
             >
-              {active ? catalog.projects.find((project) => project.path.toLowerCase() === active.project.toLowerCase())?.name || basename(active.project) : "工作台"}
+              {active?.scope === "standalone" ? "独立会话" : active ? catalog.projects.find((project) => project.path.toLowerCase() === active.project.toLowerCase())?.name || basename(active.project) : "工作台"}
             </button>
             <ChevronRight size={13} />
             <span>{active ? title.slice(0, 35) : "开始"}</span>
@@ -375,10 +375,10 @@ export default function App() {
               </div>
               <div className="eyebrow">YOUR LOCAL AGENT WORKSPACE</div>
               <h1>
-                {active ? "今天想构建什么？" : "把想法变成可运行的代码。"}
+                {active?.scope === "standalone" ? "开始一个新会话。" : active ? "今天想构建什么？" : "把想法变成可运行的代码。"}
               </h1>
               <p>
-                {active
+                {active?.scope === "standalone" ? "直接开始对话；文件和命令任务使用默认工作目录。" : active
                   ? "描述你的任务，连接模型，让代理在这个项目里开始工作。"
                   : "连接模型即可开始；会话自动使用默认工作目录，也可以打开自己的项目。"}
               </p>
@@ -402,10 +402,10 @@ export default function App() {
                     {[
                       {
                         icon: Code2,
-                        title: "理解这个项目",
-                        text: "分析代码结构、技术栈和启动方式。",
+                        title: active.scope === "standalone" ? "梳理一个任务" : "理解这个项目",
+                        text: active.scope === "standalone" ? "明确目标、拆解步骤，开始推进。" : "分析代码结构、技术栈和启动方式。",
                         prompt:
-                          "请分析这个项目的代码结构、技术栈和启动方式，说明核心模块的职责。",
+                          active.scope === "standalone" ? "请帮我梳理要完成的任务，先确认我的目标和需求。" : "请分析这个项目的代码结构、技术栈和启动方式，说明核心模块的职责。",
                       },
                       {
                         icon: Puzzle,

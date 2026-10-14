@@ -27,6 +27,37 @@ test("one durable row per conversation; metadata survives CLI history writes", (
   catalog.update(row, { archived: false });
   assert.equal(catalog.list(project)[0].archived, false);
 });
+
+test("standalone sessions keep their scope even when their working directory is also a project", (t) => {
+  const { catalog, project } = fixture(t);
+  const projectRow = catalog.create(project);
+  const standalone = catalog.createStandalone(project);
+  assert.deepEqual(catalog.snapshot().projects[0].sessions.map((row) => row.id), [projectRow.id]);
+  assert.deepEqual(catalog.snapshot().standalone.map((row) => row.id), [standalone.id]);
+  catalog.update(standalone, { title: "独立任务", archived: true, draft: "keep draft" });
+  catalog.updateProject(project, { archived: true });
+  catalog.restoreArchive({ id: standalone.id });
+  assert(catalog.snapshot().projects[0].archived, "Restoring an independent conversation must not restore a project");
+  assert.equal(catalog.find(standalone.id).draft, "keep draft");
+  assert.equal(catalog.fork(catalog.find(standalone.id)).scope, "standalone");
+  catalog.removeProject(project);
+  assert.equal(catalog.snapshot().projects.length, 0);
+  assert.equal(catalog.snapshot().standalone.length, 2);
+  assert.equal(catalog.find(standalone.id).scope, "standalone");
+  assert(fs.existsSync(catalog.file(project, projectRow.sessionId)));
+});
+
+test("independent history spans default-directory changes without registering projects", (t) => {
+  const { catalog, root, project } = fixture(t);
+  catalog.removeProject(project);
+  const other = path.join(root, "other-default"); fs.mkdirSync(other);
+  const first = catalog.createStandalone(project), second = catalog.createStandalone(other);
+  const snapshot = catalog.snapshot();
+  assert.equal(snapshot.projects.length, 0);
+  assert.deepEqual(new Set(snapshot.standalone.map((row) => row.id)), new Set([first.id, second.id]));
+  catalog.delete(first);
+  assert.equal(catalog.find(second.id).scope, "standalone");
+});
 test("archive restoration reopens the project but preserves other archives and transcript bytes", (t) => {
   const { project, catalog } = fixture(t);
   const first = catalog.create(project), other = catalog.create(project);

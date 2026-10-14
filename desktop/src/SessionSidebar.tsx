@@ -48,7 +48,8 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
   }, [working]);
   useEffect(() => {
     const ids = new Set(catalog.projects.filter((entry) => !entry.archived)
-      .flatMap((entry) => entry.sessions.filter((row) => !row.archived).map((row) => row.id)));
+      .flatMap((entry) => entry.sessions.filter((row) => !row.archived).map((row) => row.id))
+      .concat((catalog.standalone || []).filter((row) => !row.archived).map((row) => row.id)));
     setSelected((previous) => previous.filter((id) => ids.has(id)));
   }, [catalog]);
   const busy = (id: string) => live.some((session) => session.id === id &&
@@ -72,7 +73,8 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
     return b.updated - a.updated;
   });
   const needle = query.trim().toLocaleLowerCase();
-  const allRows = catalog.projects.filter((entry) => !entry.archived).flatMap((entry) => entry.sessions.filter((row) => !row.archived));
+  const allRows = [...(catalog.standalone || []).filter((row) => !row.archived), ...catalog.projects.filter((entry) => !entry.archived).flatMap((entry) => entry.sessions.filter((row) => !row.archived))];
+  const standalone = sortRows((catalog.standalone || []).filter((row) => !row.archived && (!needle || row.title.toLocaleLowerCase().includes(needle))));
   const selectedRows = allRows.filter((row) => selected.includes(row.id));
   const projects = catalog.projects.filter((entry) => !entry.archived)
     .sort((a, b) => Number(b.pinned) - Number(a.pinned));
@@ -128,6 +130,19 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
       </>}
     </div>, document.body);
   }
+  function renderSession(row: CatalogSession) {
+    return <div className={"session-item " + (row.id === activeId ? "active " : "") + (row.archived ? "archived" : "")}
+      data-session-id={row.id} key={row.id} onContextMenu={(e) => openMenu(e, { kind: "session", row })}>
+      {choosing && <input type="checkbox" aria-label={"选择会话 " + row.title} disabled={opening} checked={selected.includes(row.id)} onChange={() => toggleSelected(row.id)} />}
+      <button className="session-select" title={row.error || row.title} disabled={opening} onClick={() => choosing ? toggleSelected(row.id) : run("session.select", { id: row.id })}>
+        {busy(row.id) ? <LoaderCircle size={14} className="spin" /> : <MessageSquare size={14} />}
+        <span><strong>{row.title}</strong><small>{row.error ? "读取失败" : row.draft ? "有草稿" : row.updated ? new Date(row.updated).toLocaleDateString("zh-CN") : ""}</small></span>
+        {row.pinned && <Pin size={11} />}{row.archived && <Archive size={11} />}
+      </button>
+      <button className="icon-button row-menu-trigger" aria-label={"会话操作 " + row.title} onClick={(e) => openMenu(e, { kind: "session", row })}><MoreHorizontal size={15} /></button>
+      {renderMenu({ kind: "session", row })}
+    </div>;
+  }
   return <>
     <div className="sidebar-catalog-toolbar">
       <label className="session-search"><Search size={14} /><input aria-label="搜索项目或会话" placeholder="搜索项目或会话" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
@@ -145,7 +160,10 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
       </div>}
     </div>
     <div className="sidebar-scroll catalog-scroll">
-      {!projects.length && <p className="sidebar-hint">打开项目后，会话会保存在对应项目下。</p>}
+      {!projects.length && !standalone.length && <p className="sidebar-hint">新建独立会话，或打开项目开始工作。</p>}
+      {!!standalone.length && <section className="standalone-group" aria-label="独立会话">
+        <div className="section-label">独立会话</div><div className="standalone-sessions">{standalone.map(renderSession)}</div>
+      </section>}
       {projects.map((project) => {
         const projectMatches = project.name.toLocaleLowerCase().includes(needle);
         const rows = sortRows(project.sessions.filter((row) => !row.archived &&
@@ -160,23 +178,14 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
               {project.open ? <FolderOpen size={14} /> : <Folder size={14} />}<span>{project.name}</span>
               {project.pinned && <Pin size={11} />}{project.archived && <Archive size={11} />}<small>{project.open ? rows.length : "已关闭"}</small>
             </button>
+            <button className="icon-button project-new" aria-label={"在项目 " + project.name + " 中新建会话"} title="在此项目中新建会话" disabled={opening} onClick={() => run("session.new", { path: project.path })}><Plus size={14} /></button>
             <button className="icon-button row-menu-trigger" aria-label={"项目操作 " + project.name} onClick={(e) => openMenu(e, { kind: "project", row: project })}><MoreHorizontal size={15} /></button>
             {renderMenu({ kind: "project", row: project })}
           </div>
           {project.error && <p className="sidebar-hint error">{project.error}</p>}
           {((project.open && !project.collapsed) || needle) && <div className="project-sessions">
             {!rows.length && <p className="sidebar-hint">{project.sessions.some((row) => row.archived) ? "归档会话可在设置中恢复。" : "还没有会话"}</p>}
-            {rows.map((row) => <div className={"session-item " + (row.id === activeId ? "active " : "") + (row.archived ? "archived" : "")}
-              data-session-id={row.id} key={row.id} onContextMenu={(e) => openMenu(e, { kind: "session", row })}>
-              {choosing && <input type="checkbox" aria-label={"选择会话 " + row.title} disabled={opening} checked={selected.includes(row.id)} onChange={() => toggleSelected(row.id)} />}
-              <button className="session-select" title={row.error || row.title} disabled={opening} onClick={() => choosing ? toggleSelected(row.id) : run("session.select", { id: row.id })}>
-                {busy(row.id) ? <LoaderCircle size={14} className="spin" /> : <MessageSquare size={14} />}
-                <span><strong>{row.title}</strong><small>{row.error ? "读取失败" : row.draft ? "有草稿" : row.updated ? new Date(row.updated).toLocaleDateString("zh-CN") : ""}</small></span>
-                {row.pinned && <Pin size={11} />}{row.archived && <Archive size={11} />}
-              </button>
-              <button className="icon-button row-menu-trigger" aria-label={"会话操作 " + row.title} onClick={(e) => openMenu(e, { kind: "session", row })}><MoreHorizontal size={15} /></button>
-              {renderMenu({ kind: "session", row })}
-            </div>)}
+            {rows.map(renderSession)}
           </div>}
         </section>;
       })}
