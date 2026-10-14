@@ -68,7 +68,7 @@ export type CatalogProject = {
 export type SessionCatalog = {
   revision?: number;
   projects: CatalogProject[];
-  view: { sort: "recent" | "oldest" | "name" | "created"; showArchived: boolean };
+  view: { sort: "recent" | "oldest" | "name" | "created" };
 };
 export type InitialSession = {
   id: string;

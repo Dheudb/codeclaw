@@ -3,7 +3,7 @@ import type { SessionCatalog } from "./types.ts";
 type ViewPatch = Partial<SessionCatalog["view"]>;
 
 // Keep the user's latest intent visible until its own write is acknowledged.
-// Refreshes and older IPC replies must not undo a newer checkbox click.
+// Refreshes and older IPC replies must not undo a newer sort selection.
 export class CatalogPreferences {
   private server: SessionCatalog;
   private pending = new Map<number, ViewPatch>();

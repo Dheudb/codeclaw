@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Copy, Folder, FolderOpen,
+import { Archive, ChevronDown, ChevronRight, Copy, Folder, FolderOpen,
   LoaderCircle, MessageSquare, MoreHorizontal, Pencil, Pin, Plus, RefreshCw, Search,
   Trash2, X, CheckSquare, LogOut } from "lucide-react";
 import type { CatalogProject, CatalogSession, SessionCatalog, SessionView } from "./types";
@@ -16,7 +16,6 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
   onError: (error: unknown) => void;
 }) {
   const [query, setQuery] = useState("");
-  const showArchived = catalog.view.showArchived;
   const [menu, setMenu] = useState<Menu | null>(null);
   const [armed, setArmed] = useState("");
   const [choosing, setChoosing] = useState(false);
@@ -48,7 +47,8 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
     return () => { document.removeEventListener("click", close); document.removeEventListener("keydown", escape); };
   }, [working]);
   useEffect(() => {
-    const ids = new Set(catalog.projects.flatMap((entry) => entry.sessions.map((row) => row.id)));
+    const ids = new Set(catalog.projects.filter((entry) => !entry.archived)
+      .flatMap((entry) => entry.sessions.filter((row) => !row.archived).map((row) => row.id)));
     setSelected((previous) => previous.filter((id) => ids.has(id)));
   }, [catalog]);
   const busy = (id: string) => live.some((session) => session.id === id &&
@@ -72,9 +72,9 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
     return b.updated - a.updated;
   });
   const needle = query.trim().toLocaleLowerCase();
-  const allRows = catalog.projects.flatMap((entry) => entry.sessions);
+  const allRows = catalog.projects.filter((entry) => !entry.archived).flatMap((entry) => entry.sessions.filter((row) => !row.archived));
   const selectedRows = allRows.filter((row) => selected.includes(row.id));
-  const projects = catalog.projects.filter((entry) => showArchived || !entry.archived)
+  const projects = catalog.projects.filter((entry) => !entry.archived)
     .sort((a, b) => Number(b.pinned) - Number(a.pinned));
   async function submitDialog() {
     setWorking(true); setError("");
@@ -112,8 +112,8 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
       {value.kind === "session" ? <>
         <button role="menuitem" onClick={() => { setRename(value); setName(value.row.title); setMenu(null); setError(""); }}><Pencil size={14} />重命名会话</button>
         <button role="menuitem" onClick={() => run("session.update", { id: value.row.id, patch: { pinned: !value.row.pinned } })}><Pin size={14} />{value.row.pinned ? "取消置顶" : "置顶会话"}</button>
-        <button role="menuitem" onClick={() => run("session.update", { id: value.row.id, patch: { archived: !value.row.archived } })}>
-          {value.row.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}{value.row.archived ? "恢复会话" : "归档会话"}</button>
+        <button role="menuitem" onClick={() => run("session.update", { id: value.row.id, patch: { archived: true } })}>
+          <Archive size={14} />归档会话</button>
         <button role="menuitem" disabled={busy(value.row.id)} onClick={() => run("session.fork", { id: value.row.id })}><Copy size={14} />复制为新会话</button>
         <button role="menuitem" className="danger" onClick={() => requestDelete([value.row])}><Trash2 size={14} />
           {armed === value.row.id ? (busy(value.row.id) ? "确认停止并删除" : "确认删除会话") : (busy(value.row.id) ? "停止并删除会话" : "删除会话")}</button>
@@ -121,7 +121,7 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
         <button role="menuitem" onClick={() => run("session.new", { path: value.row.path })}><Plus size={14} />新建会话</button>
         <button role="menuitem" onClick={() => { setRename(value); setName(value.row.name); setMenu(null); setError(""); }}><Pencil size={14} />重命名项目</button>
         <button role="menuitem" onClick={() => run("project.update", { path: value.row.path, patch: { pinned: !value.row.pinned } })}><Pin size={14} />{value.row.pinned ? "取消置顶" : "置顶项目"}</button>
-        <button role="menuitem" onClick={() => run("project.update", { path: value.row.path, patch: { archived: !value.row.archived } })}><Archive size={14} />{value.row.archived ? "恢复项目" : "归档项目"}</button>
+        <button role="menuitem" onClick={() => run("project.update", { path: value.row.path, patch: { archived: true } })}><Archive size={14} />归档项目</button>
         {value.row.open && <button role="menuitem" onClick={() => run("project.close", { path: value.row.path })}><LogOut size={14} />关闭项目</button>}
         <button role="menuitem" onClick={() => { setRemove({ row: value.row, deleteHistory: false }); setMenu(null); setError(""); }}><X size={14} />从列表移除项目</button>
         <button role="menuitem" className="danger" onClick={() => { setRemove({ row: value.row, deleteHistory: true }); setMenu(null); setError(""); }}><Trash2 size={14} />删除项目会话记录</button>
@@ -138,9 +138,6 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
         <button className={"icon-button " + (choosing ? "selected" : "")} aria-label="选择多个会话" title="批量管理" onClick={() => { setChoosing(!choosing); setSelected([]); }}><CheckSquare size={15} /></button>
         <button className="icon-button" aria-label="刷新会话列表" onClick={() => run("catalog.refresh", {})}><RefreshCw size={14} /></button>
       </div>
-      <label className="archive-toggle"><input type="checkbox" checked={showArchived} onChange={(e) => {
-        action("catalog.view", { showArchived: e.target.checked }).catch(onError);
-      }} />显示已归档</label>
       {choosing && selectedRows.length > 0 && <div className="batch-actions" onClick={(event) => event.stopPropagation()}>
         <span>已选 {selectedRows.length} 项</span>
         <button aria-label="归档选中会话" disabled={opening} onClick={() => run("session.update", { ids: selected, patch: { archived: true } })}><Archive size={14} /></button>
@@ -151,7 +148,7 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
       {!projects.length && <p className="sidebar-hint">打开项目后，会话会保存在对应项目下。</p>}
       {projects.map((project) => {
         const projectMatches = project.name.toLocaleLowerCase().includes(needle);
-        const rows = sortRows(project.sessions.filter((row) => (showArchived || !row.archived) &&
+        const rows = sortRows(project.sessions.filter((row) => !row.archived &&
           (!needle || projectMatches || row.title.toLocaleLowerCase().includes(needle))));
         if (needle && !projectMatches && !rows.length) return null;
         return <section className={"project-group " + (!project.open ? "closed" : "")} key={project.path} data-project={project.path}>
@@ -168,7 +165,7 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
           </div>
           {project.error && <p className="sidebar-hint error">{project.error}</p>}
           {((project.open && !project.collapsed) || needle) && <div className="project-sessions">
-            {!rows.length && <p className="sidebar-hint">{project.sessions.some((row) => row.archived) ? "会话已归档，可勾选上方显示。" : "还没有会话"}</p>}
+            {!rows.length && <p className="sidebar-hint">{project.sessions.some((row) => row.archived) ? "归档会话可在设置中恢复。" : "还没有会话"}</p>}
             {rows.map((row) => <div className={"session-item " + (row.id === activeId ? "active " : "") + (row.archived ? "archived" : "")}
               data-session-id={row.id} key={row.id} onContextMenu={(e) => openMenu(e, { kind: "session", row })}>
               {choosing && <input type="checkbox" aria-label={"选择会话 " + row.title} disabled={opening} checked={selected.includes(row.id)} onChange={() => toggleSelected(row.id)} />}

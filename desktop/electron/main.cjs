@@ -110,9 +110,12 @@ async function restoreWorkspace() {
   const restored = [], errors = [];
   for (const entry of entries.slice(0, 8)) {
     try {
+      if (catalog.snapshot().projects.some((project) => projectKey(project.path) === projectKey(entry.project) && project.archived)) continue;
       let resumeId = entry.resumeId;
       if (resumeId && (!/^[a-zA-Z0-9_-]+$/.test(resumeId) ||
         !fs.existsSync(path.join(entry.project, ".codeclaw", "sessions", resumeId + ".json"))))
+        resumeId = latestSavedSession(entry.project);
+      if (resumeId && catalog.list(entry.project).find((row) => row.sessionId === resumeId)?.archived)
         resumeId = latestSavedSession(entry.project);
       const initial = await createSession(entry.project, resumeId);
       restored.push(initial);
@@ -193,6 +196,8 @@ async function disposeSession(id) {
   if (window && !window.isDestroyed()) window.webContents.send("workbench:event", { type: "session_unloaded", session: id });
 }
 async function selectRow(row) {
+  if (row.archived || catalog.snapshot().projects.some((project) => projectKey(project.path) === projectKey(row.project) && project.archived))
+    throw new Error("请先在设置的已归档会话页面恢复此会话");
   catalog.updateProject(row.project, { open: true });
   const initial = await createSession(row.project, row.sessionId);
   activeSessionId = row.id;
@@ -245,6 +250,11 @@ async function invoke(method, params) {
     return result.canceled ? null : result.filePaths[0];
   }
   if (method === "catalog.refresh") return broadcastCatalog();
+  if (method === "archive.restore") {
+    if ((typeof params.id === "string") === (typeof params.path === "string")) throw new Error("请选择要恢复的会话或项目");
+    catalog.restoreArchive(params);
+    return { catalog: broadcastCatalog() };
+  }
   if (method === "catalog.view") {
     catalog.setView(params);
     return broadcastCatalog();
@@ -269,6 +279,8 @@ async function invoke(method, params) {
       if (result.canceled) return null;
       project = result.filePaths[0];
     }
+    if (catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(fs.realpathSync(project)) && entry.archived))
+      throw new Error("项目已归档，请在设置的已归档会话页面恢复");
     project = catalog.addProject(project);
     const active = sessions.get(activeSessionId);
     const resumeId = active && projectKey(active.project) === projectKey(project) ? active.resumeId : latestSavedSession(project);
@@ -279,12 +291,16 @@ async function invoke(method, params) {
     let project = params.path;
     if (method === "session.new" && !project) {
       const directory = ensureWorkspace(workspaceSettings().defaultDirectory);
+      if (catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(directory) && entry.archived))
+        throw new Error("默认工作区已归档，请在设置中恢复或修改默认工作目录");
       const known = catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(directory));
       project = catalog.addProject(directory);
       if (!known) catalog.updateProject(project, { name: "默认工作区" });
     }
     const source = method === "session.new" ? { project } : sessions.get(params.session);
     if (!source || !catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project))) throw new Error("项目不存在");
+    if (catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project) && entry.archived))
+      throw new Error("请先在设置的已归档会话页面恢复项目");
     if (params.resumeId) return selectRow(catalog.find(sessionKey(source.project, params.resumeId)));
     const empty = catalog.list(source.project).find((row) => !row.archived && !row.error && !row.draft &&
       row.title === "新会话" && !running(sessions.get(row.id) || { busy: false, workers: new Map() }) &&
@@ -413,7 +429,7 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
-    if (/^(app\.initialize|workspace\.save|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;

@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { X, KeyRound, Check, FolderOpen } from "lucide-react";
-import type { EngineEvent, ModelConfig } from "./types";
+import { useEffect, useRef, useState } from "react";
+import { X, KeyRound, Check, FolderOpen, Archive } from "lucide-react";
+import type { EngineEvent, ModelConfig, SessionCatalog } from "./types";
 import Markdown from "./Markdown";
+import ArchivePanel from "./ArchivePanel";
 
 export function SettingsDialog({
   config,
@@ -10,6 +11,8 @@ export function SettingsDialog({
   defaultDirectory,
   chooseDirectory,
   saveDirectory,
+  catalog,
+  workspaceAction,
 }: {
   config?: ModelConfig;
   close: () => void;
@@ -17,7 +20,11 @@ export function SettingsDialog({
   defaultDirectory: string;
   chooseDirectory: () => Promise<string | null>;
   saveDirectory: (value: string) => Promise<string>;
+  catalog: SessionCatalog;
+  workspaceAction: (method: string, params: Record<string, unknown>) => Promise<void>;
 }) {
+  const [tab, setTab] = useState("model");
+  const dialogRef = useRef<HTMLElement>(null);
   const [directory, setDirectory] = useState(defaultDirectory);
   const [directoryBusy, setDirectoryBusy] = useState(false);
   const [directorySaved, setDirectorySaved] = useState(false);
@@ -31,6 +38,15 @@ export function SettingsDialog({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    dialogRef.current?.querySelector<HTMLButtonElement>("[role=tab]")?.focus();
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close(); }
+    };
+    window.addEventListener("keydown", escape, true);
+    return () => { window.removeEventListener("keydown", escape, true); previous?.focus(); };
+  }, []);
   async function submit() {
     setSaving(true);
     setError("");
@@ -49,19 +65,42 @@ export function SettingsDialog({
         role="dialog"
         aria-modal="true"
         aria-label="工作台设置"
-        className="dialog"
+        className="dialog settings-dialog"
+        ref={dialogRef}
+        onKeyDown={(event) => {
+          if (event.key !== "Tab") return;
+          const buttons = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled)") || [])
+            .filter((element) => element.tabIndex >= 0 && !!element.getClientRects().length);
+          const first = buttons[0], last = buttons[buttons.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         <header>
           <div>
             <span className="eyebrow">WORKBENCH SETTINGS</span>
-            <h2>配置你的工作台</h2>
+            <h2>设置</h2>
           </div>
           <button className="icon-button" aria-label="关闭设置" onClick={close}>
             <X size={18} />
           </button>
         </header>
-        <div className="form-section">
+        <div className="settings-layout">
+          <nav role="tablist" aria-label="设置分类" className="settings-nav" aria-orientation="vertical"
+            onKeyDown={(event) => {
+              if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=tab]"));
+              const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+              buttons[event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowUp" ? -1 : 1) + buttons.length) % buttons.length]?.click();
+            }}>
+            {[{ id: "model", label: "模型连接", icon: KeyRound }, { id: "workspace", label: "工作区", icon: FolderOpen }, { id: "archives", label: "已归档会话", icon: Archive }].map(({ id, label, icon: Icon }) =>
+              <button key={id} role="tab" id={"settings-tab-" + id} aria-selected={tab === id} aria-controls={"settings-panel-" + id} tabIndex={tab === id ? 0 : -1}
+                onClick={(event) => { setTab(id); setError(""); event.currentTarget.focus(); }}><Icon size={16} />{label}</button>)}
+          </nav>
+          <div className="settings-content">
+        <div className="form-section" role="tabpanel" id="settings-panel-model" aria-labelledby="settings-tab-model" hidden={tab !== "model"}>
           <h3>
             <KeyRound size={16} /> 模型连接
           </h3>
@@ -131,8 +170,13 @@ export function SettingsDialog({
           <p className="fine-print">
             沿用 CodeClaw 本机配置；密钥不会返回聊天界面。
           </p>
+        {error && tab === "model" && <p role="alert" className="error">{error}</p>}
+        <footer>
+          <button onClick={close}>取消</button>
+          <button className="primary" disabled={saving || !form.model.trim()} onClick={submit}><Check size={15} />{saving ? "保存中…" : "保存配置"}</button>
+        </footer>
         </div>
-        <div className="form-section">
+        <div className="form-section" role="tabpanel" id="settings-panel-workspace" aria-labelledby="settings-tab-workspace" hidden={tab !== "workspace"}>
           <h3><FolderOpen size={16} /> 默认工作目录</h3>
           <p className="fine-print">按当前系统和用户自动设置。未选择项目时，新会话使用此目录；已有项目和历史不会移动。</p>
           <label>目录路径
@@ -151,23 +195,11 @@ export function SettingsDialog({
             }}>{directoryBusy ? "处理中…" : "保存默认目录"}</button>
             {directorySaved && <span role="status">默认目录已保存</span>}
           </div>
+          {error && tab === "workspace" && <p role="alert" className="error">{error}</p>}
         </div>
-        {error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )}
-        <footer>
-          <button onClick={close}>取消</button>
-          <button
-            className="primary"
-            disabled={saving || !form.model.trim()}
-            onClick={submit}
-          >
-            <Check size={15} />
-            {saving ? "保存中…" : "保存配置"}
-          </button>
-        </footer>
+        {tab === "archives" && <div role="tabpanel" id="settings-panel-archives" aria-labelledby="settings-tab-archives"><ArchivePanel catalog={catalog} action={workspaceAction} /></div>}
+          </div>
+        </div>
       </section>
     </div>
   );

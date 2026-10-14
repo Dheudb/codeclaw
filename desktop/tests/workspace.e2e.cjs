@@ -27,7 +27,7 @@ const readSettings = () => JSON.parse(fs.readFileSync(workbench, "utf8"));
 async function launch() {
   app = await electron.launch(options); page = await app.firstWindow(); page.setDefaultTimeout(45000);
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.waitForFunction(() => !document.querySelector(".new-task")?.disabled);
+  await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }
 async function main() {
   try {
@@ -46,10 +46,11 @@ async function main() {
     const defaultId = await page.locator(".session-item.active").getAttribute("data-session-id");
     assert(fs.existsSync(path.join(defaultDirectory, ".codeclaw/sessions", defaultId.split(":")[1] + ".json")));
     await page.getByRole("button", { name: "设置与模型", exact: true }).click();
-    assertPath(await page.getByLabel("默认工作目录", { exact: true }).inputValue(), defaultDirectory);
     // Directory configuration works independently of the model configuration.
     await page.getByLabel("模型 ID", { exact: true }).fill("");
     assert(await page.getByRole("button", { name: "保存配置", exact: true }).isDisabled());
+    await page.getByRole("tab", { name: "工作区", exact: true }).click();
+    assertPath(await page.getByLabel("默认工作目录", { exact: true }).inputValue(), defaultDirectory);
     await page.getByLabel("默认工作目录", { exact: true }).fill("relative-directory");
     await page.getByRole("button", { name: "保存默认目录", exact: true }).click();
     await page.getByRole("alert").filter({ hasText: "绝对路径" }).waitFor();
@@ -86,53 +87,10 @@ async function main() {
     assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(custom));
     assert(fs.existsSync(path.join(defaultDirectory, ".codeclaw/sessions", defaultId.split(":")[1] + ".json")), "Default directory changes preserve old histories");
 
-    // Seed one archived row through the real backend, keeping the current session active.
-    const archived = "archived-fixture";
-    atomicJSON(path.join(custom, ".codeclaw/sessions", archived + ".json"), { messages: [{ role: "user", content: "归档测试记录" }], metadata: {} });
-    const snapshot = await page.evaluate(() => window.codeclaw.invoke("catalog.refresh"));
-    const archivedRow = snapshot.projects.flatMap((p) => p.sessions).find((row) => row.sessionId === archived);
-    await page.evaluate((id) => window.codeclaw.invoke("session.update", { id, patch: { archived: true } }), archivedRow.id);
-    let checkbox = page.getByLabel("显示已归档", { exact: true });
-    // Delay replies outside the main-process write queue to force reversed acknowledgements.
-    await app.evaluate(({ ipcMain }) => {
-      const original = ipcMain._invokeHandlers.get("workbench:invoke");
-      let calls = 0;
-      ipcMain.removeHandler("workbench:invoke");
-      ipcMain.handle("workbench:invoke", async (...args) => {
-        const ordinal = args[1] === "catalog.view" ? ++calls : 0;
-        const result = await original(...args);
-        if (ordinal) await new Promise((resolve) => setTimeout(resolve, ordinal % 2 ? 900 : 100));
-        return result;
-      });
-    });
-    await checkbox.check(); await checkbox.uncheck();
-    await page.getByRole("button", { name: "刷新会话列表", exact: true }).click();
-    await page.waitForTimeout(1200);
-    assert.equal(await checkbox.isChecked(), false);
-    assert.equal(await page.getByText("归档测试记录", { exact: true }).count(), 0);
-    for (let i = 0; i < 5; i++) {
-      await page.locator(".archive-toggle").click();
-      assert.equal(await checkbox.isChecked(), true);
-      await checkbox.focus(); await page.keyboard.press("Space");
-      assert.equal(await checkbox.isChecked(), false);
-    }
-    await page.waitForTimeout(1200);
-    assert.equal(await checkbox.isChecked(), false);
-    assert.equal(readSettings().sidebar.showArchived, false);
-    await checkbox.check(); await page.waitForTimeout(1200);
-    await page.getByText("归档测试记录", { exact: true }).waitFor();
     await app.close(); await launch();
-    checkbox = page.getByLabel("显示已归档", { exact: true });
-    assert.equal(await checkbox.isChecked(), true);
-    await checkbox.uncheck(); await page.waitForTimeout(150);
-    assert.equal(readSettings().sidebar.showArchived, false);
-    await app.close(); await launch();
-    checkbox = page.getByLabel("显示已归档", { exact: true });
-    assert.equal(await checkbox.isChecked(), false);
-    assert.equal(await page.getByText("归档测试记录", { exact: true }).count(), 0);
     assertPath(await page.locator(".project-context span").getAttribute("title"), fs.realpathSync(custom));
     assert.deepEqual(errors, []);
-    console.log("Workspace E2E passed: per-user default, no folder chooser, independent save, explicit project, restart, rapid archive toggles and reversed replies");
+    console.log("Workspace E2E passed: per-user default, no folder chooser, independent save, explicit project and restart");
   } finally { if (app) await app.close().catch(() => {}); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

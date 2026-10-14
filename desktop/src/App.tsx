@@ -35,7 +35,7 @@ const basename = (value: string) =>
 export default function App() {
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [activeId, setActiveId] = useState("");
-  const [catalog, setCatalog] = useState<SessionCatalog>({ projects: [], view: { sort: "recent", showArchived: false } });
+  const [catalog, setCatalog] = useState<SessionCatalog>({ projects: [], view: { sort: "recent" } });
   const preferences = useRef(new CatalogPreferences(catalog));
   const [defaultDirectory, setDefaultDirectory] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -107,7 +107,7 @@ export default function App() {
     const handler = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        if (!opening) openSession();
+        if (!opening && !settingsOpen && !mcpOpen) openSession();
       }
     };
     window.addEventListener("keydown", handler);
@@ -135,7 +135,7 @@ export default function App() {
   async function workspaceAction(method: string, params: Record<string, unknown>) {
     const preferenceWrite = method === "catalog.view" ? preferences.current.begin(params as Partial<SessionCatalog["view"]>) : undefined;
     if (preferenceWrite) setCatalog(preferenceWrite.catalog);
-    const changesSelection = !method.startsWith("catalog.") &&
+    const changesSelection = !method.startsWith("catalog.") && !method.startsWith("archive.") &&
       (method !== "session.update" || !!(params.patch as { archived?: boolean } | undefined)?.archived) &&
       (method !== "project.update" || !!(params.patch as { archived?: boolean } | undefined)?.archived);
     const intent = changesSelection ? ++navigation.current : navigation.current;
@@ -623,6 +623,8 @@ export default function App() {
         <SettingsDialog
           key={activeId}
           config={globalModel || active?.config}
+          catalog={catalog}
+          workspaceAction={workspaceAction}
           defaultDirectory={defaultDirectory}
           chooseDirectory={() => window.codeclaw.invoke("workspace.choose")}
           saveDirectory={async (directory) => {

@@ -95,7 +95,8 @@ class SessionCatalog {
           pinned: !!meta.pinned, archived: !!meta.archived, sessions: [], error: error.message };
       }
     });
-    return { projects, view: { sort: "recent", showArchived: false, ...settings.sidebar } };
+    const sort = settings.sidebar?.sort;
+    return { projects, view: { sort: ["recent", "oldest", "name", "created"].includes(sort) ? sort : "recent" } };
   }
   find(id) {
     const row = this.snapshot().projects.flatMap((project) => project.sessions).find((row) => row.id === id);
@@ -180,10 +181,19 @@ class SessionCatalog {
   }
   setView(patch) {
     const settings = this.readSettings();
-    const view = { ...settings.sidebar };
+    const view = { sort: this.snapshot().view.sort };
     if (patch.sort && ["recent", "oldest", "name", "created"].includes(patch.sort)) view.sort = patch.sort;
-    if ("showArchived" in patch) view.showArchived = !!patch.showArchived;
     this.writeSettings({ ...settings, sidebar: view });
+  }
+  restoreArchive({ id, path: project }) {
+    const row = id ? this.find(id) : null;
+    const scope = this.snapshot().projects.find((entry) => projectKey(entry.path) === projectKey(row ? row.project : project));
+    if (!scope) throw new Error("归档项目不存在");
+    try {
+      if (!fs.statSync(scope.path).isDirectory()) throw new Error("not a directory");
+    } catch { throw new Error("项目目录不存在或无法访问，请恢复目录后再试"); }
+    if (row) this.update(row, { archived: false });
+    this.updateProject(scope.path, { archived: false, open: true, collapsed: false });
   }
 }
 module.exports = { SessionCatalog, projectKey, sessionKey, atomicJSON };

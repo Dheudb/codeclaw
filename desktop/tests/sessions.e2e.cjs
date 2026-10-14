@@ -79,9 +79,11 @@ async function main() {
     await row("重命名后的会话").waitFor({ state: "hidden" });
     assert(fs.existsSync(historyFile(project, "first")));
     assert.equal(await activeId(), sessionKey(project, "second"));
-    await page.getByLabel("显示已归档").check();
-    await menu("重命名后的会话"); await page.getByRole("menuitem", { name: "恢复会话" }).click();
-    await page.getByLabel("显示已归档").uncheck();
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    await page.getByRole("tab", { name: "已归档会话", exact: true }).click();
+    await page.getByRole("button", { name: "恢复会话 重命名后的会话", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "已恢复会话" }).waitFor();
+    await page.getByRole("button", { name: "关闭设置", exact: true }).click();
     await row("重命名后的会话").locator(".session-select").click();
     await menu("重命名后的会话"); await page.getByRole("menuitem", { name: "复制为新会话" }).click();
     const copyTitle = "重命名后的会话（副本）";
@@ -152,7 +154,13 @@ async function main() {
     await page.getByRole("button", { name: "归档选中会话" }).click();
     await row("第二条历史").waitFor({ state: "hidden" });
     await row("重命名后的会话").waitFor({ state: "hidden" });
-    await page.getByLabel("显示已归档").check();
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    await page.getByRole("tab", { name: "已归档会话", exact: true }).click();
+    for (const name of ["第二条历史", "重命名后的会话"]) {
+      await page.getByRole("button", { name: "恢复会话 " + name, exact: true }).click();
+      await page.getByRole("status").filter({ hasText: "已恢复会话：" + name }).waitFor();
+    }
+    await page.getByRole("button", { name: "关闭设置", exact: true }).click();
     await page.getByLabel("选择会话 第二条历史", { exact: true }).check();
     await page.getByLabel("选择会话 重命名后的会话", { exact: true }).check();
     await page.getByRole("button", { name: "删除选中会话", exact: true }).click();

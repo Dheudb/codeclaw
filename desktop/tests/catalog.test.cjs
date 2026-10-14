@@ -27,6 +27,31 @@ test("one durable row per conversation; metadata survives CLI history writes", (
   catalog.update(row, { archived: false });
   assert.equal(catalog.list(project)[0].archived, false);
 });
+test("archive restoration reopens the project but preserves other archives and transcript bytes", (t) => {
+  const { project, catalog } = fixture(t);
+  const first = catalog.create(project), other = catalog.create(project);
+  catalog.update(first, { archived: true, draft: "保留草稿", pinned: true });
+  catalog.update(other, { archived: true });
+  catalog.updateProject(project, { archived: true, collapsed: true, open: false });
+  const original = fs.readFileSync(catalog.file(project, first.sessionId));
+  catalog.restoreArchive({ id: first.id });
+  assert.deepEqual(fs.readFileSync(catalog.file(project, first.sessionId)), original);
+  const scope = catalog.snapshot().projects[0];
+  assert(scope.open && !scope.archived && !scope.collapsed);
+  const restored = catalog.find(first.id);
+  assert(!restored.archived && restored.pinned);
+  assert.equal(restored.draft, "保留草稿");
+  assert(catalog.find(other.id).archived);
+  catalog.restoreArchive({ path: project });
+  assert(catalog.find(other.id).archived);
+});
+test("legacy archive visibility is discarded and cannot be enabled by preferences", (t) => {
+  const { catalog } = fixture(t);
+  catalog.writeSettings({ ...catalog.readSettings(), sidebar: { showArchived: true, sort: "name" } });
+  assert.deepEqual(catalog.snapshot().view, { sort: "name" });
+  catalog.setView({ showArchived: true, sort: "oldest" });
+  assert.deepEqual(catalog.readSettings().sidebar, { sort: "oldest" });
+});
 test("delete removes parent and owned child transcripts, preserves other histories and project files", (t) => {
   const { project, catalog } = fixture(t);
   const a = catalog.create(project), b = catalog.create(project);
