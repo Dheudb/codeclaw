@@ -361,11 +361,17 @@ class QueryEngine:
         self.fallback_model = self._resolve_fallback_model(None)
         if api_base_url is not None:
             self.api_base_url = api_base_url
-        if api_key:
-            if self.model_provider == "openai":
-                os.environ["OPENAI_API_KEY"] = api_key
+            base_variable = self.model_provider.upper() + "_BASE_URL"
+            if api_base_url:
+                os.environ[base_variable] = api_base_url
             else:
-                os.environ["ANTHROPIC_API_KEY"] = api_key
+                os.environ.pop(base_variable, None)
+        if api_key is not None:
+            key_variable = self.model_provider.upper() + "_API_KEY"
+            if api_key:
+                os.environ[key_variable] = api_key
+            else:
+                os.environ.pop(key_variable, None)
 
         self.client = self._build_model_client()
         self.compactor = MemoryCompactor(

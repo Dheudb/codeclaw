@@ -38,12 +38,17 @@ export type Capabilities = {
   };
 };
 export type ModelConfig = {
+  connectionId?: string;
+  connectionName?: string;
   provider: string;
   model: string;
   baseUrl: string;
   hasKey: boolean;
   networkMode?: "direct" | "system";
+  models?: string[];
+  connections?: ModelConnection[];
 };
+export type ModelConnection = Omit<ModelConfig, "connections"> & { connectionId: string; connectionName: string; models: string[] };
 export type HistoryItem = { role: "user" | "assistant"; text: string };
 export type SavedSession = { id: string; title: string; updated: number };
 export type CatalogSession = SavedSession & {

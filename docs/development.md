@@ -41,6 +41,7 @@ npm run test:e2e
 npm run test:sessions
 npm run test:workspace
 npm run test:archives
+npm run test:models
 npm run test:mcp
 ```
 
@@ -50,6 +51,7 @@ MCP 安装与连接、凭据保留和停用重连。会话测试另覆盖重命�
 草稿和重启恢复、项目关闭/移除、能力配置说明与示例。截图保存在 `desktop/test-results/`。
 工作区测试覆盖首次启动无需选目录、默认目录独立保存与重启恢复、显式项目优先。
 归档测试覆盖设置内集中恢复、旧开关迁移、同名会话、搜索、恢复失败重试、缺失目录、项目恢复、草稿保留、反复关闭及重启。
+模型测试覆盖一个 API 共用 Key 的多个模型、读取模型列表、跨 API 凭据隔离、切换后保留历史和草稿、运行期间保护以及重启恢复。
 本地模型质量、真实搜索源可用性和第三方服务账户权限需要单独验证。
 
 ## Windows 便携包

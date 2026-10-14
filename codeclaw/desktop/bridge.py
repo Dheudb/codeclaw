@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from codeclaw.core.config import load_config, load_config_into_env, save_config, normalize_api_base_url
+from codeclaw.core.model_catalog import public_config, active_connection, save_connection, select_model, discover_models, apply_connection_env
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.protocols.mcp_config import MCPConfigStore
@@ -101,20 +102,17 @@ class DesktopBridge:
             raise ValueError("Wait for running tasks or stop them before changing this session")
 
     def config(self):
-        cfg = load_config()
-        provider = cfg.get("model_provider") or os.environ.get("CODECLAW_MODEL_PROVIDER", "anthropic")
-        prefix = "openai" if provider == "openai" else "anthropic"
-        return {"provider": provider, "model": cfg.get(prefix + "_model") or os.environ.get(prefix.upper() + "_MODEL", ""), "baseUrl": cfg.get(prefix + "_base_url") or os.environ.get(prefix.upper() + "_BASE_URL", ""), "hasKey": bool(cfg.get(prefix + "_api_key") or os.environ.get(prefix.upper() + "_API_KEY")), "networkMode": cfg.get("network_mode", "direct")}
+        return public_config(load_config())
 
     async def sync_model(self, engine, force=False):
-        config = self.config()
         cfg = load_config()
+        config = public_config(cfg)
         provider = config["provider"]
-        key = cfg.get(provider + "_api_key") or os.environ.get(provider.upper() + "_API_KEY", "")
+        key = active_connection(cfg).get("api_key", "")
         signature = (provider, config["model"], config["baseUrl"], key, config["networkMode"])
         if not config["model"] or (not force and signature == self.model_signature):
             return
-        os.environ["CODECLAW_NETWORK_MODE"] = config["networkMode"]
+        apply_connection_env(active_connection(cfg))
         previous_client, previous_compactor = engine.client, engine.compactor
         engine.switch_model_runtime(provider=provider, model=config["model"], api_base_url=config["baseUrl"], api_key=key)
         await previous_client.close()
@@ -273,6 +271,8 @@ class DesktopBridge:
     async def dispatch(self, method, params):
         if method == "config.get":
             return self.config()
+        if method == "config.models":
+            return await discover_models(load_config(), params)
         if method == "mcp.list":
             return self.mcp_snapshot()
         if method == "mcp.market":
@@ -404,22 +404,10 @@ class DesktopBridge:
             if not self.engine:
                 raise ValueError("No active engine")
             return await self.engine.tool_context["subagent_tasks"].cancel(params["agentId"])
-        if method == "config.save":
+        if method in {"config.save", "config.select"}:
             self.require_idle()
-            provider = params.get("provider")
-            if provider not in {"anthropic", "openai"}:
-                raise ValueError("Unsupported protocol")
-            model = str(params.get("model", "")).strip()
-            if not model:
-                raise ValueError("Model ID is required")
-            base_url = normalize_api_base_url(provider, params.get("baseUrl", ""))
-            network_mode = params.get("networkMode", "direct")
-            if network_mode not in {"direct", "system"}:
-                raise ValueError("Unknown network mode")
-            cfg = load_config()
-            cfg.update(model_provider=provider, network_mode=network_mode, **{provider + "_model": model, provider + "_base_url": base_url})
-            if params.get("apiKey"):
-                cfg[provider + "_api_key"] = params["apiKey"]
+            cfg = save_connection(load_config(), params) if method == "config.save" else select_model(load_config(), params.get("connectionId"), params.get("model"))
+            provider, network_mode = cfg["model_provider"], cfg["network_mode"]
             save_config(cfg)
             for suffix in ("model", "base_url", "api_key"):
                 value = cfg.get(provider + "_" + suffix, "")
@@ -431,7 +419,7 @@ class DesktopBridge:
             os.environ["CODECLAW_NETWORK_MODE"] = network_mode
             if self.engine:
                 await self.sync_model(self.engine)
-            return self.config()
+            return public_config(cfg)
         if method == "changes":
             async def git(*args):
                 process = await asyncio.create_subprocess_exec("git", "-c", "core.quotepath=false", *args, cwd=str(self.cwd), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)

@@ -27,6 +27,7 @@ const engineMethods = new Set([
   "agents.read",
   "agents.cancel",
   "config.save",
+  "config.select",
   "mcp.list",
   "mcp.market",
   "mcp.install",
@@ -267,8 +268,9 @@ async function invoke(method, params) {
     return true;
   }
   if (method === "config.get") return globalConfig().request("config.get");
-  if (method === "config.save" && !params.session)
-    return globalConfig().request("config.save", params);
+  if (method === "config.models") return globalConfig().request(method, params);
+  if (["config.save", "config.select"].includes(method) && !params.session)
+    return globalConfig().request(method, params);
   if (method === "project.open") {
     let project = params.path;
     if (!project) {
@@ -429,7 +431,7 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
-    if (/^(app\.initialize|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;

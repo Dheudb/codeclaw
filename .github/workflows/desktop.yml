@@ -48,6 +48,7 @@ jobs:
       - run: npm run test:sessions
       - run: npm run test:workspace
       - run: npm run test:archives
+      - run: npm run test:models
       - run: npm run test:mcp
         env:
           CODECLAW_PYTHON: python
@@ -64,6 +65,9 @@ jobs:
         env:
           CODECLAW_TEST_EXECUTABLE: ${{ github.workspace }}\desktop\release\CodeClaw-win32-x64\CodeClaw.exe
       - run: npm run test:archives
+        env:
+          CODECLAW_TEST_EXECUTABLE: ${{ github.workspace }}\desktop\release\CodeClaw-win32-x64\CodeClaw.exe
+      - run: npm run test:models
         env:
           CODECLAW_TEST_EXECUTABLE: ${{ github.workspace }}\desktop\release\CodeClaw-win32-x64\CodeClaw.exe
       - uses: actions/upload-artifact@v4

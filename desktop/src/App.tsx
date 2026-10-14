@@ -40,6 +40,7 @@ export default function App() {
   const [defaultDirectory, setDefaultDirectory] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [globalModel, setGlobalModel] = useState<ModelConfig>();
+  const [modelChanging, setModelChanging] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelTab, setPanelTab] = useState("skills");
@@ -185,7 +186,7 @@ export default function App() {
     if (active) update({ capabilities: await invoke("capabilities.list") });
   }
   async function send() {
-    if (opening || !active || active.busy || !active.draft.trim()) return;
+    if (opening || modelChanging || !active || active.busy || !active.draft.trim()) return;
     const id = active.id,
       text = active.draft.trim(),
       selected = active.selected,
@@ -217,7 +218,18 @@ export default function App() {
   async function saveModel(value: ModelConfig & { apiKey: string }) {
     const config = await invoke("config.save", value);
     setGlobalModel(config);
-    if (active) update({ config });
+    setSessions((previous) => previous.map((session) => session.busy ? session : { ...session, config }));
+  }
+  async function selectModel(value: string) {
+    if (modelChanging) return;
+    setModelChanging(true);
+    try {
+      const [connectionId, model] = JSON.parse(value);
+      const config = await invoke("config.select", { connectionId, model });
+      setGlobalModel(config);
+      setSessions((previous) => previous.map((session) => session.busy ? session : { ...session, config }));
+    } catch (error) { onError(error); }
+    finally { setModelChanging(false); }
   }
   async function openSettings() {
     try {
@@ -548,15 +560,17 @@ export default function App() {
                   <option value="plan">Plan</option>
                 </select>
                 <span className="toolbar-divider" />
-                <button className="model-button" onClick={openSettings}>
-                  <span
-                    className={
-                      active?.config.model ? "model-dot connected" : "model-dot"
-                    }
-                  />
-                  <span>{active?.config.model || "连接模型"}</span>
-                  <ChevronRight size={12} />
-                </button>
+                {globalModel?.connections?.some((connection) => connection.models.length) ? <select
+                  className="model-picker" aria-label="选择模型" title="切换 API 与模型"
+                  disabled={opening || modelChanging || active?.busy || !!runningWorkers}
+                  value={JSON.stringify([globalModel.connectionId, globalModel.model])}
+                  onChange={(event) => void selectModel(event.target.value)}>
+                  {globalModel.connections.filter((connection) => connection.models.length).map((connection) =>
+                    <optgroup key={connection.connectionId} label={connection.connectionName}>
+                      {connection.models.map((model) => <option key={model} value={JSON.stringify([connection.connectionId, model])}>{model}</option>)}
+                    </optgroup>)}
+                </select> : <button className="model-button" onClick={openSettings}>连接模型<ChevronRight size={12} /></button>}
+                <button className="icon-button" aria-label="管理 API 与模型" title="管理 API 与模型" onClick={openSettings}><Settings2 size={13} /></button>
               </div>
               <div className="send-options">
                 {active?.loaded.length ? (
@@ -580,7 +594,7 @@ export default function App() {
                   <button
                     className="send-button"
                     aria-label="发送任务"
-                    disabled={opening || !active?.draft.trim()}
+                    disabled={opening || modelChanging || !active?.draft.trim()}
                     onClick={send}
                   >
                     <ArrowUp size={19} />
@@ -634,6 +648,7 @@ export default function App() {
           }}
           close={() => setSettingsOpen(false)}
           save={saveModel}
+          discoverModels={(value) => window.codeclaw.invoke("config.models", value)}
         />
       )}
       {mcpOpen && active && (

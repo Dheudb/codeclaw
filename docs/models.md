@@ -5,6 +5,37 @@
 配置文件中的 Key 以本地明文保存；界面读取配置时只收到 `hasKey` 标记。
 已保存的 Key 在输入框中显示遮罩和“已保存”提示，留空保存会保留原值。
 
+## 一个 API 使用多个模型
+
+“设置与模型 → 模型连接”中可为每个 API 填写连接名称、协议、地址和 Key，并在“可选模型列表”中每行填写一个模型 ID。
+当前“模型 ID”会自动加入列表。点击“从 API 获取模型”可读取该服务的 `/models` 列表，合并到输入框；点击“保存配置”后才生效。
+模型是否可用、是否支持工具调用，以及免费额度由提供方决定；列出模型本身不会发起聊天请求。
+
+聊天输入框旁的模型选择器按 API 分组，切换后沿用当前会话、历史和草稿。运行中的任务和子代理需完成或停止后再切换。
+“新增 API”可保存另一组独立的地址、Key 和模型列表，切换 API 时凭据随连接切换。
+CLI 使用 `/model list` 查看同一份模型列表，`/model use 2` 选择编号；原有 `/model` 配置向导仍然可用。
+
+配置结构如下（示例 Key 需替换，实际密钥仅保存在本机）：
+
+```json
+{
+  "active_model_connection": "my-api",
+  "model_connections": [{
+    "id": "my-api",
+    "name": "我的 API",
+    "provider": "openai",
+    "base_url": "http://localhost:8000/v1",
+    "api_key": "local-placeholder",
+    "model": "model-a",
+    "models": ["model-a", "model-b", "model-c"],
+    "network_mode": "direct"
+  }]
+}
+```
+
+界面保存/切换时还会同步 `model_provider`、`openai_model`/`anthropic_model` 等原有字段，兼容 CLI 启动和旧配置。
+旧单模型配置首次保存时自动迁移，无需重新填写 Key。
+
 ## 支持的接口
 
 | 接口 | 当前实现 |

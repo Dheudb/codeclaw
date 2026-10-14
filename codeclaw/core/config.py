@@ -8,6 +8,7 @@ written back when /model changes them.
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -59,7 +60,15 @@ def load_config() -> dict:
 def save_config(cfg: dict):
     """Write config dict to disk."""
     _ensure_dir()
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=CONFIG_DIR, prefix=".config-", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(json.dumps(cfg, indent=2, ensure_ascii=False))
+        os.replace(temporary, CONFIG_FILE)
+    finally:
+        if temporary and temporary.exists():
+            temporary.unlink()
 
 
 def load_config_into_env():
@@ -68,6 +77,9 @@ def load_config_into_env():
     already set by the user's shell, inject the saved value.
     """
     cfg = load_config()
+    if cfg.get("model_connections"):
+        from codeclaw.core.model_catalog import active_connection, connections, project_active
+        cfg = project_active(dict(cfg), active_connection(cfg), connections(cfg))
     for cfg_key, env_key in _PERSISTED_KEYS.items():
         val = cfg.get(cfg_key, "")
         if val and not os.environ.get(env_key):
@@ -86,6 +98,9 @@ def save_current_env_to_config():
             cfg[cfg_key] = val
         else:
             cfg.pop(cfg_key, None)
+    if cfg.get(cfg.get("model_provider", "anthropic") + "_model"):
+        from codeclaw.core.model_catalog import sync_legacy_connection
+        cfg = sync_legacy_connection(cfg)
     save_config(cfg)
 
 

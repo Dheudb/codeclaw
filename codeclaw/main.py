@@ -13,7 +13,8 @@ from rich.table import Table
 from rich.text import Text
 
 from codeclaw.core.engine import QueryEngine
-from codeclaw.core.config import load_config_into_env, save_current_env_to_config
+from codeclaw.core.config import load_config_into_env, save_current_env_to_config, load_config, save_config
+from codeclaw.core.model_catalog import connections, select_model, active_connection, apply_connection_env
 
 console = Console()
 
@@ -581,7 +582,9 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                     "  /status           View runtime status\n\n"
                     "[bold white]Model & Provider[/bold white]\n"
                     "  /model            Interactive model/provider switch\n"
-                    "  /model status     Show current model runtime\n\n"
+                    "  /model status     Show current model runtime\n"
+                    "  /model list       List saved API models\n"
+                    "  /model use 2      Switch to a saved model\n\n"
                     "[bold white]Other[/bold white]\n"
                     "  /palette          Open command palette\n"
                     "  /quit             Exit CLI\n"
@@ -745,6 +748,37 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                     key_name = "OPENAI_API_KEY" if engine.model_provider == "openai" else "ANTHROPIC_API_KEY"
                     info.add_row("API Key", "✓ set" if os.environ.get(key_name) else "✗ not set")
                     console.print(info)
+                elif arg == "list" or arg.startswith("use "):
+                    cfg = load_config()
+                    choices = [(connection, model) for connection in connections(cfg) for model in connection.get("models", [])]
+                    if arg == "list":
+                        table = Table(title="Saved API Models", border_style="cyan")
+                        for heading in ("#", "API", "Model"):
+                            table.add_column(heading)
+                        for index, (connection, model) in enumerate(choices, 1):
+                            table.add_row(str(index), connection.get("name", connection["id"]), model)
+                        console.print(table)
+                        console.print("[dim]Use /model use <number> to switch; /model configures an API.[/dim]")
+                    else:
+                        number = raw.split(maxsplit=2)[2].strip()
+                        if not number.isdigit() or not 1 <= int(number) <= len(choices):
+                            console.print("[red]Choose a valid number from /model list.[/red]")
+                            continue
+                        if any(not task.done() for task in engine.tool_context["subagent_tasks"].tasks.values()):
+                            console.print("[yellow]Wait for background agents or stop them before switching.[/yellow]")
+                            continue
+                        connection, model = choices[int(number) - 1]
+                        cfg = select_model(cfg, connection["id"], model)
+                        selected = active_connection(cfg)
+                        apply_connection_env(selected)
+                        previous_client, previous_compactor = engine.client, engine.compactor
+                        engine.switch_model_runtime(provider=selected["provider"], model=model,
+                            api_base_url=selected.get("base_url", ""), api_key=selected.get("api_key", ""))
+                        await previous_client.close()
+                        if previous_compactor.client:
+                            await previous_compactor.client.close()
+                        save_config(cfg)
+                        console.print(f"[green]Model switched to {model}.[/green]")
                 else:
                     await _interactive_model_switch(engine, tui)
                 continue

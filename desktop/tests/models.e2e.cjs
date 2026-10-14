@@ -1,0 +1,126 @@
+const { _electron: electron } = require("playwright");
+const fs = require("node:fs");
+const path = require("node:path");
+const os = require("node:os");
+const http = require("node:http");
+const assert = require("node:assert/strict");
+const { atomicJSON } = require("../electron/catalog.cjs");
+const root = path.resolve(__dirname, "..");
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-models-e2e-"));
+const data = path.join(fixture, "profile"), config = path.join(fixture, "config"), project = path.join(fixture, "project");
+for (const directory of [data, config, project]) fs.mkdirSync(directory);
+atomicJSON(path.join(data, "workbench.json"), { projects: [], activeConversation: null, defaultDirectory: project });
+const requests = [];
+function server(name, key, models) {
+  return http.createServer((req, res) => {
+    assert.equal(req.headers.authorization, "Bearer " + key, "API credentials must stay with their connection");
+    if (req.url === "/v1/models") {
+      requests.push({ server: name, list: true });
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ data: models.map((id) => ({ id, type: "chat" })) })); return;
+    }
+    let raw = ""; req.on("data", (chunk) => raw += chunk);
+    req.on("end", () => {
+      const body = JSON.parse(raw); requests.push({ server: name, body });
+      const last = [...body.messages].reverse().find((message) => message.role === "user")?.content || "";
+      if (!body.stream) { res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ id: "memory", choices: [{ message: { role: "assistant", content: "memory" } }] })); return; }
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "test", model: body.model, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
+      chunk({ role: "assistant", content: "模型回复：" + body.model });
+      if (!String(last).trim().endsWith("slow-task")) { chunk({}, "stop"); res.end("data: [DONE]\n\n"); }
+    });
+  });
+}
+const first = server("first", "first-fixture-key", ["one", "two", "three"]), second = server("second", "second-fixture-key", ["other", "another"]);
+let app, page;
+const errors = [];
+async function launch() {
+  const env = { ...process.env, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  page = await app.firstWindow(); page.setDefaultTimeout(60000); page.on("pageerror", (error) => errors.push(error.message));
+  await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
+}
+const readConfig = () => JSON.parse(fs.readFileSync(path.join(config, "config.json"), "utf8"));
+async function settings() { await page.getByRole("button", { name: "设置与模型", exact: true }).click(); }
+async function save() { await page.getByRole("button", { name: "保存配置", exact: true }).click(); await page.getByRole("dialog", { name: "工作台设置" }).waitFor({ state: "hidden" }); }
+async function select(connection, model) {
+  await page.getByLabel("选择模型", { exact: true }).selectOption(JSON.stringify([connection, model]));
+  await page.waitForFunction(() => !document.querySelector(".model-picker").disabled);
+}
+async function send(text, model) {
+  await page.getByRole("textbox", { name: "任务输入" }).fill(text);
+  await page.getByRole("button", { name: "发送任务", exact: true }).click();
+  await page.getByText("模型回复：" + model, { exact: true }).last().waitFor();
+  await page.waitForFunction(() => !document.querySelector(".send-button.stop"));
+}
+async function main() {
+  try {
+    await Promise.all([new Promise((resolve) => first.listen(0, "127.0.0.1", resolve)), new Promise((resolve) => second.listen(0, "127.0.0.1", resolve))]);
+    const firstUrl = `http://127.0.0.1:${first.address().port}/v1`, secondUrl = `http://127.0.0.1:${second.address().port}/v1`;
+    atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "one", openai_base_url: firstUrl, openai_api_key: "first-fixture-key" });
+    await launch(); await settings();
+    await page.getByLabel("连接名称", { exact: true }).fill("第一个 API");
+    await page.getByLabel("可选模型列表", { exact: true }).fill("one\ntwo\ntwo"); await save();
+    assert.deepEqual(readConfig().openai_models, ["one", "two"]);
+    await settings();
+    const unchanged = fs.readFileSync(path.join(config, "config.json"), "utf8");
+    await page.getByRole("button", { name: "从 API 获取模型", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "已读取 3 个模型" }).waitFor();
+    assert.equal(await page.getByLabel("可选模型列表").inputValue(), "one\ntwo\nthree");
+    assert.equal(fs.readFileSync(path.join(config, "config.json"), "utf8"), unchanged, "Discovery does not save or change the active model");
+    await save();
+    await page.locator(".new-task").click(); await page.locator(".session-item.active").waitFor();
+    const session = await page.locator(".session-item.active").getAttribute("data-session-id");
+    await send("第一次消息", "one");
+    await page.getByRole("textbox", { name: "任务输入" }).fill("保留草稿");
+    await select("legacy-openai", "two");
+    assert.equal(await page.getByRole("textbox", { name: "任务输入" }).inputValue(), "保留草稿");
+    assert.equal(await page.locator(".session-item.active").getAttribute("data-session-id"), session);
+    await send("第二次消息", "two");
+    const two = requests.find((request) => request.body?.model === "two");
+    assert(two.body.messages.some((message) => message.role === "user" && message.content === "第一次消息"));
+    await settings(); await page.getByRole("button", { name: "新增 API", exact: true }).click();
+    await page.getByLabel("连接名称", { exact: true }).fill("第二个 API");
+    await page.getByLabel("API 地址", { exact: true }).fill(secondUrl);
+    await page.getByLabel("API Key", { exact: true }).fill("second-fixture-key");
+    await page.getByRole("button", { name: "从 API 获取模型", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "已读取 2 个模型" }).waitFor();
+    await save();
+    const secondId = readConfig().active_model_connection;
+    assert.equal(readConfig().model_connections.length, 2);
+    await send("切到另一个 API", "other");
+    assert(requests.some((request) => request.server === "second" && request.body?.model === "other"));
+    const publicConfig = await page.evaluate(() => window.codeclaw.invoke("config.get"));
+    assert(!JSON.stringify(publicConfig).includes("fixture-key"));
+    await select("legacy-openai", "three");
+    await send("返回第一个 API", "three");
+    await page.getByRole("textbox", { name: "任务输入" }).fill("slow-task");
+    await page.getByRole("button", { name: "发送任务", exact: true }).click();
+    await page.getByRole("button", { name: "停止任务", exact: true }).waitFor();
+    assert(await page.getByLabel("选择模型", { exact: true }).isDisabled());
+    const refused = await page.evaluate(async ([session, connectionId]) => {
+      try { await window.codeclaw.invoke("config.select", { session, connectionId, model: "another" }); return false; } catch { return true; }
+    }, [session, secondId]);
+    assert(refused, "Switching a running session must be refused");
+    await page.getByRole("button", { name: "停止任务", exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector(".model-picker").disabled);
+    await select(secondId, "another");
+    await send("停止后切换", "another");
+    await app.close(); await launch();
+    assert.equal(await page.getByLabel("选择模型", { exact: true }).inputValue(), JSON.stringify([secondId, "another"]));
+    assert.equal(await page.locator(".session-item.active").getAttribute("data-session-id"), session);
+    await settings();
+    assert.equal(await page.getByLabel("可选模型列表", { exact: true }).inputValue(), "other\nanother");
+    assert.equal(await page.getByLabel("API Key", { exact: true }).inputValue(), "");
+    const screenshot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString("base64"));
+    fs.mkdirSync(path.join(root, "test-results"), { recursive: true }); fs.writeFileSync(path.join(root, "test-results/models-settings.png"), Buffer.from(screenshot, "base64"));
+    await page.getByRole("button", { name: "关闭设置", exact: true }).click();
+    await send("重启后继续", "another");
+    assert.deepEqual(errors, []);
+    console.log("Model E2E passed: shared API model list, discovery, distinct API keys, hot switching, retained conversation/draft, running guard and restart");
+  } finally {
+    if (app) await app.close().catch(() => {});
+    first.closeAllConnections(); first.close(); second.closeAllConnections(); second.close();
+  }
+}
+main().catch((error) => { console.error(error); process.exitCode = 1; });

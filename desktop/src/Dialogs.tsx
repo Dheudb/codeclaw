@@ -13,6 +13,7 @@ export function SettingsDialog({
   saveDirectory,
   catalog,
   workspaceAction,
+  discoverModels,
 }: {
   config?: ModelConfig;
   close: () => void;
@@ -22,6 +23,7 @@ export function SettingsDialog({
   saveDirectory: (value: string) => Promise<string>;
   catalog: SessionCatalog;
   workspaceAction: (method: string, params: Record<string, unknown>) => Promise<void>;
+  discoverModels: (value: Record<string, unknown>) => Promise<{ models: string[] }>;
 }) {
   const [tab, setTab] = useState("model");
   const dialogRef = useRef<HTMLElement>(null);
@@ -29,6 +31,8 @@ export function SettingsDialog({
   const [directoryBusy, setDirectoryBusy] = useState(false);
   const [directorySaved, setDirectorySaved] = useState(false);
   const [form, setForm] = useState({
+    connectionId: config?.connectionId || "legacy-openai",
+    connectionName: config?.connectionName || "我的 API",
     provider: config?.provider || "openai",
     model: config?.model || "",
     baseUrl: config?.baseUrl || "",
@@ -36,6 +40,9 @@ export function SettingsDialog({
     apiKey: "",
     networkMode: config?.networkMode || "direct",
   });
+  const [modelsText, setModelsText] = useState((config?.models || (config?.model ? [config.model] : [])).join("\n"));
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryStatus, setDiscoveryStatus] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -51,7 +58,7 @@ export function SettingsDialog({
     setSaving(true);
     setError("");
     try {
-      await save(form);
+      await save({ ...form, models: modelsText.split(/[\n,，]/).map((name) => name.trim()).filter(Boolean) });
       close();
     } catch (e) {
       setError(String(e));
@@ -101,30 +108,60 @@ export function SettingsDialog({
           </nav>
           <div className="settings-content">
         <div className="form-section" role="tabpanel" id="settings-panel-model" aria-labelledby="settings-tab-model" hidden={tab !== "model"}>
+          <fieldset disabled={saving || discovering}>
           <h3>
             <KeyRound size={16} /> 模型连接
           </h3>
           <p className="notice">保存模型连接后，新建会话即可使用。</p>
+          <div className="api-connection-row"><label>API 连接
+            <select aria-label="API 连接" disabled={discovering || saving} value={form.connectionId} onChange={(event) => {
+              const connection = config?.connections?.find((item) => item.connectionId === event.target.value);
+              if (connection) { setForm({ ...connection, apiKey: "", networkMode: connection.networkMode || "direct" }); setModelsText(connection.models.join("\n")); setDiscoveryStatus(""); setError(""); }
+            }}>
+              {(config?.connections || []).map((connection) => <option key={connection.connectionId} value={connection.connectionId}>{connection.connectionName}</option>)}
+              {!config?.connections?.some((connection) => connection.connectionId === form.connectionId) && <option value={form.connectionId}>{form.connectionName}</option>}
+            </select></label>
+            <button disabled={discovering || saving} onClick={() => {
+              setForm({ connectionId: crypto.randomUUID(), connectionName: "新 API", provider: "openai", model: "", baseUrl: "", hasKey: false, apiKey: "", networkMode: "direct" });
+              setModelsText(""); setDiscoveryStatus(""); setError("");
+            }}>新增 API</button>
+          </div>
+          <label>连接名称<input aria-label="连接名称" value={form.connectionName} onChange={(event) => setForm({ ...form, connectionName: event.target.value })} /></label>
           <label>
             API 协议
             <select
               aria-label="API 协议"
               value={form.provider}
               onChange={(e) =>
-                setForm({
+                { setForm({
                   ...form,
                   provider: e.target.value,
                   model: "",
                   baseUrl: "",
                   hasKey: false,
                   apiKey: "",
-                })
+                }); setModelsText(""); setDiscoveryStatus(""); }
               }
             >
               <option value="openai">OpenAI / 兼容 API / 本地模型</option>
               <option value="anthropic">Anthropic</option>
             </select>
           </label>
+          <label>可选模型（每行一个 ID）
+            <textarea aria-label="可选模型列表" rows={5} value={modelsText} placeholder="model-a\nmodel-b\nmodel-c" onChange={(event) => setModelsText(event.target.value)} />
+          </label>
+          <div className="model-discovery-actions"><button disabled={discovering || saving} onClick={async () => {
+            setDiscovering(true); setDiscoveryStatus(""); setError("");
+            try {
+              const value = await discoverModels(form);
+              const models = [...new Set([...modelsText.split(/[\n,，]/).map((name) => name.trim()).filter(Boolean), ...value.models])];
+              setModelsText(models.join("\n"));
+              if (!form.model && models.length) setForm((previous) => ({ ...previous, model: models[0] }));
+              setDiscoveryStatus(`已读取 ${value.models.length} 个模型；点击保存配置后可切换。`);
+            } catch (e) { setError(String(e)); } finally { setDiscovering(false); }
+          }}>{discovering ? "正在获取…" : "从 API 获取模型"}</button>
+          {discoveryStatus && <span role="status">{discoveryStatus}</span>}</div>
+          <p className="fine-print">同一 API 的这些模型共用地址和 Key。当前模型会自动加入列表；可用列表和免费额度由提供方决定。</p>
           <label>
             模型 ID
             <input
@@ -173,8 +210,9 @@ export function SettingsDialog({
         {error && tab === "model" && <p role="alert" className="error">{error}</p>}
         <footer>
           <button onClick={close}>取消</button>
-          <button className="primary" disabled={saving || !form.model.trim()} onClick={submit}><Check size={15} />{saving ? "保存中…" : "保存配置"}</button>
+          <button className="primary" disabled={saving || discovering || !form.model.trim()} onClick={submit}><Check size={15} />{saving ? "保存中…" : "保存配置"}</button>
         </footer>
+          </fieldset>
         </div>
         <div className="form-section" role="tabpanel" id="settings-panel-workspace" aria-labelledby="settings-tab-workspace" hidden={tab !== "workspace"}>
           <h3><FolderOpen size={16} /> 默认工作目录</h3>
