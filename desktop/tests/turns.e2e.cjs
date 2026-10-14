@@ -66,6 +66,9 @@ async function main() {
     await send("TRACE_SECOND"); await finished();
     assert.equal(await page.locator(".turn-process").count(), 2);
     assert.equal(await page.locator(".turn-process").nth(1).locator(".turn-tool").count(), 0);
+    assert.equal(await page.locator(".turn-process").nth(1).evaluate((element) => element.tagName), "DIV");
+    assert.equal(await page.locator(".turn-process").nth(1).locator("summary,svg,.turn-process-content").count(), 0);
+    assert.match(await page.locator(".turn-process").nth(1).innerText(), /用时/);
     await send("TRACE_CANCEL"); await page.getByRole("button", { name: "允许一次", exact: true }).waitFor();
     await page.getByRole("button", { name: "停止任务", exact: true }).click(); await finished();
     assert.equal(await page.locator(".turn-process").nth(2).getAttribute("data-turn-status"), "cancelled");
@@ -77,6 +80,7 @@ async function main() {
     await app.close(); await launch();
     assert.equal(await page.locator(".turn-process").count(), 4);
     assert.equal(await page.locator(".turn-process[open]").count(), 0);
+    assert.equal(await page.locator(".turn-process-time").count(), 1);
     assert.equal(await page.locator(".turn-process").first().locator(":scope > summary").innerText(), summary);
     await page.locator(".turn-process").first().locator(":scope > summary").click();
     assert.equal(await page.locator(".turn-process").first().locator(".turn-commentary").count(), 2);

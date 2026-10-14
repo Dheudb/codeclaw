@@ -23,13 +23,16 @@ export default function TurnProcess({ trace }: { trace: TurnTrace }) {
   const elapsed = trace.elapsedMs ?? (trace.startedAt && (trace.finishedAt || (running ? now : 0))
     ? Math.max(0, (trace.finishedAt || now) - trace.startedAt) : undefined);
   const state = running ? "执行中" : trace.status === "cancelled" ? "已停止" : ["error", "interrupted"].includes(trace.status) ? "已中断" : "";
+  const label = <span>{state}{state && elapsed !== undefined ? " · " : ""}{elapsed !== undefined ? `${trace.approximate ? "约" : ""}用时 ${durationText(elapsed)}` : state ? "" : "执行过程"}</span>;
+  if (!trace.steps.some((step) => step.kind === "tool")) {
+    return elapsed === undefined && !state ? null : <div className="turn-process turn-process-time" data-turn-status={trace.status}>{label}</div>;
+  }
   return <details className="turn-process" open={open} onToggle={(event) => setOpen(event.currentTarget.open)} data-turn-status={trace.status}>
     <summary aria-label="查看本轮执行过程">
-      <span>{state}{state && elapsed !== undefined ? " · " : ""}{elapsed !== undefined ? `${trace.approximate ? "约" : ""}用时 ${durationText(elapsed)}` : state ? "" : "执行过程"}</span>
+      {label}
       <ChevronDown size={14} /><span className="turn-step-count">{trace.steps.length ? `${trace.steps.length} 项过程` : ""}</span>
     </summary>
     <div className="turn-process-content">
-      {!trace.steps.length && <span className="muted">{running ? "正在等待模型返回…" : "本轮没有工具操作或中间过程消息。"}</span>}
       {trace.steps.map((step, index) => step.kind === "text"
         ? <div className="turn-commentary markdown" key={index}><Markdown text={step.text} /></div>
         : <details className="turn-tool" key={index}>

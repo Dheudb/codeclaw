@@ -1735,6 +1735,7 @@ body.panel-resizing, body.panel-resizing * { cursor: col-resize !important; user
 }
 
 .turn-process { margin: 2px 0 18px; min-width: 0; }
+.turn-process-time { padding: 8px 0; color: var(--muted); font-size: 13px; }
 .turn-process > summary { display: flex; align-items: center; gap: 7px; padding: 8px 0; color: var(--text-muted, #8a8c83); font-size: 13px; cursor: pointer; list-style: none; border-bottom: 1px solid var(--border, #e8e9e2); }
 .turn-process > summary::-webkit-details-marker { display: none; }
 .turn-process[open] > summary > svg { transform: rotate(180deg); }
