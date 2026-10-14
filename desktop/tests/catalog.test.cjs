@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { SessionCatalog, sessionKey, atomicJSON } = require("../electron/catalog.cjs");
+const { moveSession } = require("../electron/session-move.cjs");
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-catalog-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -13,6 +14,62 @@ function fixture(t) {
   catalog.addProject(project);
   return { root, project, catalog, settings: () => settings };
 }
+
+test("moving an independent conversation changes its directory and preserves history, traces, draft and owned child results", (t) => {
+  const { catalog, root, project } = fixture(t);
+  const target = path.join(root, "target"); fs.mkdirSync(target); catalog.addProject(target);
+  const row = catalog.createStandalone(project);
+  catalog.update(row, { title: "待迁移", draft: "unfinished", pinned: true, permissionMode: "full" });
+  const payload = { messages: [{ role: "user", content: "old history" }, { role: "assistant", content: "answer" }], metadata: {
+    turn_traces: [{ id: "turn", elapsedMs: 1234 }], subagents: [{ agent_id: "owned", status: "completed", result: "child answer" }],
+    memory_files: { cwd: project }, incremental_write_queue: { pending: ["old-write"] }, permissions: { always_allow_tools: ["bash_tool"] },
+  } };
+  atomicJSON(catalog.file(project, row.sessionId), payload);
+  const child = path.join(catalog.directory(project), "subagents/owned.json"), unrelated = path.join(catalog.directory(project), "subagents/other.json");
+  atomicJSON(child, { session_id: row.sessionId, messages: [{ role: "assistant", content: "child answer" }] });
+  atomicJSON(unrelated, { session_id: "another", messages: [] });
+  const proof = path.join(project, ".codeclaw/tool-results", row.sessionId, "result.txt");
+  fs.mkdirSync(path.dirname(proof), { recursive: true }); fs.writeFileSync(proof, "large tool output");
+  fs.writeFileSync(path.join(project, "source.py"), "keep source code");
+  const moved = moveSession(catalog, catalog.find(row.id), target);
+  assert.equal(moved.id, sessionKey(target, row.sessionId)); assert.equal(moved.scope, "project");
+  assert.equal(moved.draft, "unfinished"); assert.equal(moved.title, "待迁移"); assert(moved.pinned); assert.equal(moved.permissionMode, "full");
+  const saved = JSON.parse(fs.readFileSync(catalog.file(target, row.sessionId)));
+  assert.deepEqual(saved.messages, payload.messages); assert.deepEqual(saved.metadata.turn_traces, payload.metadata.turn_traces);
+  assert.deepEqual(saved.metadata.subagents, payload.metadata.subagents);
+  assert.equal(saved.metadata.memory_files, undefined); assert.equal(saved.metadata.incremental_write_queue, undefined); assert.equal(saved.metadata.permissions, undefined);
+  assert.equal(saved.metadata.workspace_moves[0].to, fs.realpathSync(target));
+  assert(!fs.existsSync(catalog.file(project, row.sessionId))); assert(!fs.existsSync(child)); assert(fs.existsSync(unrelated));
+  assert(fs.existsSync(path.join(catalog.directory(target), "subagents/owned.json")));
+  assert.equal(fs.readFileSync(path.join(target, ".codeclaw/tool-results", row.sessionId, "result.txt"), "utf8"), "large tool output");
+  assert.equal(fs.readFileSync(path.join(project, "source.py"), "utf8"), "keep source code");
+  assert.equal(catalog.snapshot().standalone.length, 0); assert.throws(() => catalog.find(row.id));
+});
+
+test("same-directory independent-to-project conversion preserves transcript bytes", (t) => {
+  const { catalog, project } = fixture(t), row = catalog.createStandalone(project);
+  const file = catalog.file(project, row.sessionId), bytes = fs.readFileSync(file);
+  const moved = moveSession(catalog, row, project);
+  assert.equal(moved.id, row.id); assert.equal(moved.scope, "project");
+  assert.deepEqual(fs.readFileSync(file), bytes); assert.equal(catalog.snapshot().standalone.length, 0);
+});
+
+test("move collisions and partial failures preserve original records and target histories", (t) => {
+  const { catalog, root, project } = fixture(t);
+  const target = path.join(root, "target"); fs.mkdirSync(target); catalog.addProject(target);
+  const row = catalog.create(project); catalog.update(row, { title: "keep me", draft: "keep draft" });
+  const original = fs.readFileSync(catalog.file(project, row.sessionId));
+  const collision = catalog.file(target, row.sessionId); atomicJSON(collision, { messages: [{ role: "user", content: "unrelated target" }] });
+  const otherBytes = fs.readFileSync(collision);
+  assert.throws(() => moveSession(catalog, row, target), /相同 ID/);
+  assert.deepEqual(fs.readFileSync(collision), otherBytes); fs.unlinkSync(collision);
+  const unlink = fs.unlinkSync;
+  fs.unlinkSync = (file) => { if (file === catalog.file(project, row.sessionId)) throw new Error("fixture deletion failure"); return unlink(file); };
+  try { assert.throws(() => moveSession(catalog, row, target), /fixture deletion failure/); }
+  finally { fs.unlinkSync = unlink; }
+  assert.deepEqual(fs.readFileSync(catalog.file(project, row.sessionId)), original);
+  assert.equal(catalog.find(row.id).draft, "keep draft"); assert(!fs.existsSync(collision)); assert.equal(catalog.list(target).length, 0);
+});
 test("one durable row per conversation; metadata survives CLI history writes", (t) => {
   const { project, catalog } = fixture(t);
   const row = catalog.create(project);

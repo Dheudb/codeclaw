@@ -52,20 +52,6 @@ export default function CapabilityPanel({
       onError(e);
     }
   }
-  async function toggle(skill: Skill) {
-    try {
-      const capabilities = await invoke("capabilities.toggle", {
-        id: skill.id,
-        enabled: !skill.enabled,
-      });
-      update({
-        capabilities,
-        selected: session?.selected.filter((name) => name !== skill.name) || [],
-      });
-    } catch (e) {
-      onError(e);
-    }
-  }
   async function read(skill: Skill) {
     try {
       setPreview({
@@ -164,16 +150,6 @@ export default function CapabilityPanel({
                     <div className="card-heading">
                       <Puzzle size={15} />
                       <strong>{skill.name}</strong>
-                      <button
-                        role="switch"
-                        aria-checked={skill.enabled}
-                        aria-label={"启用技能 " + skill.name}
-                        className={"switch " + (skill.enabled ? "on" : "")}
-                        disabled={!skill.valid || session.busy}
-                        onClick={() => toggle(skill)}
-                      >
-                        <span />
-                      </button>
                     </div>
                     <p>{skill.description || skill.error}</p>
                     <div className="card-meta">
@@ -185,11 +161,11 @@ export default function CapabilityPanel({
                           ? "格式错误"
                           : skill.shadowed
                             ? "被同名技能覆盖"
-                            : !skill.enabled
-                              ? "已停用"
+                            : session.selected.includes(skill.name)
+                              ? "已选择"
                               : session.loaded.includes(skill.name)
                                 ? "本会话已加载"
-                                : "可用"}
+                                : ""}
                       </span>
                     </div>
                     {skill.compatibility && (
@@ -218,7 +194,7 @@ export default function CapabilityPanel({
                         >
                           {session.selected.includes(skill.name)
                             ? "已选择"
-                            : "用于下次任务"}
+                            : "选择使用"}
                         </button>
                       </div>
                     )}
@@ -233,7 +209,7 @@ export default function CapabilityPanel({
                   </summary>
                   <p>
                     项目 .codeclaw → .agents → .claude → 导入目录 → 环境目录 →
-                    全局目录 → 内置目录。首个有效且启用的同名技能优先。
+                    全局目录 → 内置目录。同名技能以首个格式正确的目录为准。
                   </p>
                 </details>
               </div>

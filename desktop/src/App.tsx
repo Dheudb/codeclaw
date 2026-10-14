@@ -101,11 +101,11 @@ export default function App() {
     return () => window.removeEventListener("resize", resize);
   }, []);
   useEffect(() => {
-    if (!active) return;
+    if (!active || opening) return;
     const id = active.id, draft = active.draft;
     const timer = setTimeout(() => window.codeclaw.invoke("session.update", { id, patch: { draft } }).catch(onError), 500);
     return () => clearTimeout(timer);
-  }, [activeId, active?.draft]);
+  }, [activeId, active?.draft, opening]);
   useEffect(() => {
     if (activeId) window.codeclaw.invoke("session.activate", { session: activeId }).catch(onError);
   }, [activeId]);
@@ -158,7 +158,7 @@ export default function App() {
     if (changesSelection) setOpening(true);
     setNotice("");
     try {
-      if (active?.draft && ["project.open", "session.new", "session.open", "session.select"].includes(method))
+      if (active?.draft && ["project.open", "session.new", "session.open", "session.select", "session.move"].includes(method))
         await window.codeclaw.invoke("session.update", { id: active.id, patch: { draft: active.draft } });
       const result = await window.codeclaw.invoke(method, params);
       if (!result) return;
@@ -166,7 +166,7 @@ export default function App() {
       else if (result.catalog) receiveCatalog(result.catalog);
       else if (method.startsWith("catalog.")) receiveCatalog(result);
       if (result.id) {
-        setSessions((previous) => [...previous.filter((session) => session.id !== result.id), createSession(result)]);
+        setSessions((previous) => [...previous.filter((session) => session.id !== result.id && session.id !== result.movedFrom), createSession(result)]);
       }
       if (changesSelection && intent === navigation.current) {
         if ("activeId" in result) setActiveId(result.activeId);

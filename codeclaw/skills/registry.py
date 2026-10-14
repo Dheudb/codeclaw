@@ -61,7 +61,6 @@ class SkillRegistry:
                 yield root, scope
 
     def discover(self):
-        disabled = set(self.settings().get("disabled_skills", []))
         entries, seen_paths, active_names = [], set(), set()
         for root, scope in self.roots():
             if not root.is_dir():
@@ -75,7 +74,7 @@ class SkillRegistry:
                 if identity in seen_paths:
                     continue
                 seen_paths.add(identity)
-                entry = {"id": identity, "name": path.parent.name, "description": "", "path": str(path), "root": str(path.parent), "scope": scope, "valid": True, "error": "", "enabled": identity not in disabled, "shadowed": False, "compatibility": ""}
+                entry = {"id": identity, "name": path.parent.name, "description": "", "path": str(path), "root": str(path.parent), "scope": scope, "valid": True, "error": "", "enabled": True, "shadowed": False, "compatibility": ""}
                 try:
                     metadata, _ = read_frontmatter(path)
                     name, description = metadata.get("name"), metadata.get("description")
@@ -100,7 +99,7 @@ class SkillRegistry:
     def resolve(self, name):
         matches = [s for s in self.active() if name in (s["name"], s["id"])]
         if not matches:
-            raise ValueError("Skill is missing, disabled, invalid or shadowed: " + str(name))
+            raise ValueError("Skill is missing, invalid or shadowed: " + str(name))
         return matches[0]
 
     def read(self, name):

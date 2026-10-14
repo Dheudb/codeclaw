@@ -1180,6 +1180,11 @@ class QueryEngine:
             "Do not use the question tool to duplicate tool approval requests.")]
         if self.tool_context.get("agent_system_prompt"):
             sections.append("# Assigned agent role\n" + self.tool_context["agent_system_prompt"])
+        if self.tool_context.get("workspace_moves"):
+            sections.append("# Conversation working directory\nThis conversation has moved between projects. "
+                            "Its current working directory is " + self.session_cwd + ". "
+                            "Historical paths and project instructions may belong to earlier locations. "
+                            "Use the current directory and its project instructions for new tasks; do not reuse old project paths by default.")
         for name, tool in self.available_tools.items():
             prompt_builder = getattr(tool, "prompt", None)
             if not callable(prompt_builder):
@@ -2778,6 +2783,7 @@ class QueryEngine:
             self.messages = msgs
             self._sync_message_context()
             metadata = state.get("metadata", {})
+            self.tool_context["workspace_moves"] = metadata.get("workspace_moves", [])
             self.turn_traces = metadata.get("turn_traces", [])
             model_runtime = metadata.get("model_runtime", {}) or {}
             if model_runtime:
@@ -2866,6 +2872,7 @@ class QueryEngine:
 
     def _build_session_metadata(self) -> dict:
         return {
+            "workspace_moves": self.tool_context.get("workspace_moves", []),
             "todos": self.todo_manager.export(),
             "plan": self.plan_manager.export(),
             "sandbox": self.sandbox_manager.export_state(),

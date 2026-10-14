@@ -313,13 +313,13 @@ async function main() {
       .click();
     await page.getByRole("heading", { name: "今天想构建什么？" }).waitFor();
     await page.getByText("project-review", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "查看指令" }).click();
+    await page.locator(".capability-card").filter({ has: page.getByText("project-review", { exact: true }) }).getByRole("button", { name: "查看指令", exact: true }).click();
     await page
       .getByRole("dialog", { name: "技能指令" })
       .getByText(/DESKTOP_SKILL_PROOF/)
       .waitFor();
     await page.getByRole("button", { name: "关闭技能预览" }).click();
-    await page.getByRole("button", { name: "用于下次任务" }).click();
+    await page.locator(".capability-card").filter({ has: page.getByText("project-review", { exact: true }) }).getByRole("button", { name: "选择使用" }).click();
     await page
       .getByRole("textbox", { name: "任务输入" })
       .fill("验收技能：请分析这个项目。");
@@ -394,9 +394,9 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     await page.getByRole("button", { name: "代理", exact: true }).click();
-    await page.getByText("已完成", { exact: true }).first().waitFor();
+    await page.locator(".inspector").getByText("已完成", { exact: true }).first().waitFor();
     assert.equal(
-      await page.getByText("已完成", { exact: true }).count(),
+      await page.locator(".inspector").getByText("已完成", { exact: true }).count(),
       2,
       "Both background workers must complete",
     );
@@ -414,7 +414,9 @@ async function main() {
     await page
       .getByRole("button", { name: "打开项目 another-project", exact: true })
       .click();
-    await page.getByText("添加第一个 Skill", { exact: true }).waitFor();
+    await page.locator(".capability-card strong").filter({ hasText: /^project-review$/ }).waitFor({ state: "hidden" });
+    await page.getByText("code-review", { exact: true }).waitFor();
+    assert.equal(await page.locator(".capability-card").count(), 3, "Another project has the bundled skills but not the first project's skill");
     await page
       .getByRole("textbox", { name: "任务输入" })
       .fill("第二个项目的独立会话");

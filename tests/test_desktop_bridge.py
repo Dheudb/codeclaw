@@ -130,17 +130,18 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(".codeclaw", attachment["content"])
         self.assertIn("app.py", attachment["content"])
 
-    async def test_capability_import_toggle_and_disabled_read(self):
+    async def test_imported_skills_are_available_without_enable_step(self):
         directory = self.root / "external" / "audit"
         directory.mkdir(parents=True)
         (directory / "SKILL.md").write_text("---\nname: audit\ndescription: Audit the project\n---\nCheck tests", encoding="utf-8")
         snapshot = await self.bridge.dispatch("capabilities.import", {"kind": "skills", "path": str(directory)})
         skill = snapshot["skills"][0]
-        await self.bridge.dispatch("capabilities.toggle", {"id": skill["id"], "enabled": False})
         with self.assertRaises(ValueError):
-            await self.bridge.dispatch("skills.read", {"name": "audit"})
+            await self.bridge.dispatch("capabilities.toggle", {"id": skill["id"], "enabled": False})
+        self.bridge.skills.update(disabled_skills=[skill["id"]])
+        self.assertIn("Check tests", await self.bridge.dispatch("skills.read", {"name": "audit"}))
         restored = DesktopBridge(self.events.append, self.root)
-        self.assertFalse(restored.skills.discover()[0]["enabled"])
+        self.assertTrue(restored.skills.resolve("audit")["enabled"])
 
     async def test_plan_cannot_transition_until_approved(self):
         manager = PlanManager("desktop-plan-test")

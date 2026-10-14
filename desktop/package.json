@@ -21,6 +21,7 @@
     "test:turns": "node tests/turns.e2e.cjs",
     "test:links": "node tests/links.e2e.cjs",
     "test:skills": "node tests/skills.e2e.cjs",
+    "test:moves": "node tests/moves.e2e.cjs",
     "test:mcp": "node tests/mcp.e2e.cjs",
     "pack": "npm run build && node scripts/pack.cjs"
   },

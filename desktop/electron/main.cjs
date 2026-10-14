@@ -5,6 +5,7 @@ const { SessionCatalog, projectKey, sessionKey, atomicJSON } = require("./catalo
 const { EngineTransport } = require("./transport.cjs");
 const { resolveEnginePython } = require("./runtime.cjs");
 const { defaultWorkspace } = require("./workspace.cjs");
+const { prepareMove, moveSession } = require("./session-move.cjs");
 if (process.env.CODECLAW_USER_DATA)
   app.setPath("userData", process.env.CODECLAW_USER_DATA);
 const sessions = new Map();
@@ -330,6 +331,34 @@ async function invoke(method, params) {
     if (sessions.has(row.id) && running(sessions.get(row.id))) throw new Error("先停止当前任务，再复制会话");
     return selectRow(catalog.fork(row));
   }
+  if (method === "session.move") {
+    const row = catalog.find(params.id), source = sessions.get(row.id);
+    if (source && running(source)) throw new Error("请先停止会话和子代理任务，再移动到其他项目");
+    const prepared = prepareMove(catalog, row, params.path);
+    if (prepared.sameDirectory && row.scope !== "standalone") return selectRow(row);
+    if (typeof params.draft === "string") catalog.update(row, { draft: params.draft });
+    if (source) {
+      source.moving = true;
+      await source.transport.close();
+      sessions.delete(row.id);
+    }
+    let moved;
+    try { moved = moveSession(catalog, catalog.find(row.id), params.path); }
+    catch (error) {
+      if (source) await createSession(row.project, row.sessionId);
+      saveWorkspace(); broadcastCatalog(); throw error;
+    }
+    if (window && !window.isDestroyed()) window.webContents.send("workbench:event", { type: "session_unloaded", session: row.id });
+    catalog.updateProject(moved.project, { open: true, collapsed: false });
+    try { return { ...await selectRow(moved), movedFrom: row.id }; }
+    catch (error) {
+      activeSessionId = undefined;
+      saveWorkspace();
+      saveSettings({ ...settings(), activeConversation: { project: moved.project, resumeId: moved.sessionId, scope: "project" } });
+      broadcastCatalog();
+      throw new Error("会话记录已移动到目标项目，但引擎打开失败，请重新打开此会话。" + error.message);
+    }
+  }
   if (method === "session.delete") {
     if (params.confirm !== true) throw new Error("请确认删除会话");
     const rows = [...new Set(params.ids || [params.id])].map((id) => catalog.find(id));
@@ -373,6 +402,7 @@ async function invoke(method, params) {
   }
   const source = sessions.get(params.session);
   if (!source) throw new Error("请先打开项目");
+  if (source.moving) throw new Error("会话正在移动，请稍候");
   if (method === "permissions.set") {
     if (!["ask", "full"].includes(params.mode)) throw new Error("请选择请求批准或完全访问");
     const row = catalog.find(params.session), previous = row.permissionMode;
@@ -457,7 +487,7 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
-    if (/^(app\.initialize|layout\.save|permissions\.set|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|layout\.save|permissions\.set|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;

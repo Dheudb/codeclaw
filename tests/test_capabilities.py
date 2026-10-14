@@ -30,13 +30,13 @@ class RegistryTests(unittest.TestCase):
         (directory / "SKILL.md").write_text("---\nname: " + name + "\ndescription: Review code carefully\n---\n" + body, encoding="utf-8")
         return directory
 
-    def test_project_precedence_and_disabled_fallback(self):
+    def test_project_precedence_ignores_legacy_disabled_flags(self):
         project = self.skill(self.project / ".codeclaw" / "skills")
         self.skill(self.home / ".codeclaw" / "skills")
         self.assertEqual(self.registry.resolve("review")["root"], str(project.resolve()))
         self.assertEqual(sum(s["shadowed"] for s in self.registry.discover()), 1)
         self.registry.update(disabled_skills=[self.registry.resolve("review")["id"]])
-        self.assertEqual(self.registry.resolve("review")["scope"], "global")
+        self.assertEqual(self.registry.resolve("review")["scope"], "project")
 
     def test_invalid_frontmatter_is_visible_and_not_active(self):
         root = self.skill(self.project / ".codeclaw" / "skills")
@@ -57,7 +57,7 @@ class RegistryTests(unittest.TestCase):
             self.registry.read_resource("review", "../../secret.txt")
 
     def test_custom_agent_and_required_skills(self):
-        self.skill(self.project / ".codeclaw" / "skills")
+        skill = self.skill(self.project / ".codeclaw" / "skills")
         agents = self.project / ".codeclaw" / "agents"
         agents.mkdir()
         (agents / "reviewer.md").write_text("---\nname: reviewer\ndescription: Review implementation\ntools: Read, Grep, Glob, Skill\nmodel: local-review-model\nskills: [review]\n---\nOnly review, never edit.", encoding="utf-8")
@@ -65,7 +65,7 @@ class RegistryTests(unittest.TestCase):
         definition = registry.resolve("reviewer")
         self.assertIn("file_read_tool", definition["allowed_tools"])
         self.assertEqual(definition["model"], "local-review-model")
-        self.registry.update(disabled_skills=[self.registry.resolve("review")["id"]])
+        (skill / "SKILL.md").unlink()
         self.assertFalse(registry.discover()[0]["valid"])
         with self.assertRaises(ValueError):
             registry.resolve("reviewer")
@@ -83,17 +83,18 @@ class RegistryTests(unittest.TestCase):
             self.assertIn("Project directory: " + str(self.project.resolve()), self.registry.read(skill["name"]))
         self.assertFalse(any(scope == "builtin" for _, scope in self.registry.roots("agents")))
 
-    def test_custom_skill_overrides_builtin_and_disable_restores_fallback(self):
-        self.skill(self.project / ".codeclaw" / "skills", name="code-review", body="CUSTOM_REVIEW_INSTRUCTIONS")
+    def test_custom_skill_overrides_builtin_and_removal_restores_fallback(self):
+        directory = self.skill(self.project / ".codeclaw" / "skills", name="code-review", body="CUSTOM_REVIEW_INSTRUCTIONS")
         custom = self.registry.resolve("code-review")
         self.assertEqual(custom["scope"], "project")
         self.assertIn("CUSTOM_REVIEW_INSTRUCTIONS", self.registry.read("code-review"))
         self.registry.update(disabled_skills=[custom["id"]])
+        self.assertEqual(self.registry.resolve("code-review")["scope"], "project")
+        (directory / "SKILL.md").unlink()
         builtin = self.registry.resolve("code-review")
         self.assertEqual(builtin["scope"], "builtin")
         self.registry.update(disabled_skills=[custom["id"], builtin["id"]])
-        with self.assertRaises(ValueError):
-            self.registry.read("code-review")
+        self.assertIn("Skill: code-review", self.registry.read("code-review"))
 
 
 class TaskTests(unittest.IsolatedAsyncioTestCase):

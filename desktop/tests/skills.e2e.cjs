@@ -14,7 +14,7 @@ function skill(parent, name, description, body = "FIXTURE_" + name) {
 const local = path.join(project, ".codeclaw/skills");
 skill(local, "project-check", "检查当前项目的真实目录技能", "PROJECT_BODY_PROOF");
 skill(local, "code-review", "当前项目覆盖内置审查", "CUSTOM_REVIEW_BODY_PROOF");
-const disabled = skill(local, "disabled-skill", "禁用技能不应显示");
+const disabled = skill(local, "disabled-skill", "旧停用配置中的技能仍可直接选择");
 const invalid = skill(local, "invalid-skill", "格式错误不应显示");
 fs.writeFileSync(path.join(invalid, "SKILL.md"), "not frontmatter", "utf8");
 const imported = skill(path.join(fixture, "mounted"), "imported-check", "挂载目录的技能");
@@ -60,9 +60,11 @@ async function main() {
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "skill-fixture", openai_api_key: "fixture-key", openai_base_url: `http://127.0.0.1:${server.address().port}/v1` });
     await launch(); await page.locator(".new-task").click(); await page.locator(".session-item.active").waitFor();
     const input = await picker();
-    assert.equal(await page.locator("#skill-options").getByRole("option").count(), 6); // project 2 + import 1 + global 1 + unshadowed builtins 2
+    assert.equal(await page.locator("#skill-options").getByRole("option").count(), 7); // valid skills remain available despite legacy disabled flags
+    assert.equal(await page.getByRole("switch", { name: /启用技能/ }).count(), 0);
+    assert.equal(await page.locator("#skill-options").getByRole("option", { name: /disabled-skill/ }).count(), 1);
     assert.equal(await page.locator("#skill-options").getByRole("option", { name: /code-review/ }).count(), 1);
-    for (const name of ["disabled-skill", "invalid-skill", "other-project"]) assert.equal(await page.locator("#skill-options").getByRole("option", { name: new RegExp(name) }).count(), 0);
+    for (const name of ["invalid-skill", "other-project"]) assert.equal(await page.locator("#skill-options").getByRole("option", { name: new RegExp(name) }).count(), 0);
     assert.match(await page.locator("#skill-options").getByRole("option", { name: /code-review/ }).innerText(), /项目/);
     await input.press("ArrowDown"); assert.equal(await page.locator("#skill-options").getByRole("option", { selected: true }).getAttribute("id"), "skill-option-1");
     await input.press("ArrowUp"); assert.equal(await page.locator("#skill-options").getByRole("option", { selected: true }).getAttribute("id"), "skill-option-0");
@@ -123,7 +125,7 @@ async function main() {
     await page.locator(".session-item.active").waitFor(); await picker("$other");
     assert.equal(await page.locator("#skill-options").getByRole("option", { name: /other-project/ }).count(), 1);
     assert.deepEqual(errors, []);
-    console.log("Skill E2E passed: actual project/import/global/bundled directories, shadowing/disabled/invalid filters, keyboard/mouse/multiple selection, fresh files, caret/task preservation, full instructions reaching model, project isolation and restart");
+    console.log("Skill E2E passed: actual directories, default availability with no switches, legacy flag compatibility, shadowing/invalid filters, keyboard/mouse/multiple selection, fresh files, caret/task preservation, full instructions reaching model, project isolation and restart");
   } finally { if (app) await app.close().catch(() => {}); server.closeAllConnections(); server.close(); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

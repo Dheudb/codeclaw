@@ -391,14 +391,7 @@ class DesktopBridge:
                 self.skills.update(**{key: roots + [str(path)]})
             return self.capabilities()
         if method == "capabilities.toggle":
-            self.require_idle()
-            skill = next((s for s in self.skills.discover() if s["id"] == params["id"]), None)
-            if skill is None:
-                raise ValueError("Unknown skill")
-            disabled = set(self.skills.settings().get("disabled_skills", []))
-            disabled.discard(skill["id"]) if params.get("enabled") else disabled.add(skill["id"])
-            self.skills.update(disabled_skills=sorted(disabled))
-            return self.capabilities()
+            raise ValueError("Skills are available automatically; select a skill to use it")
         if method == "skills.read":
             return self.skills.read(params["name"])
         if method == "agents.read":

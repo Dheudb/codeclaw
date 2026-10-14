@@ -683,6 +683,10 @@ a,
   max-width: 780px;
   margin: auto;
 }
+.session-item.dragging { opacity: .45; }
+.session-item[draggable="true"] { cursor: grab; }
+.project-group.drop-target { outline: 2px solid #a7b496; outline-offset: -2px; border-radius: 8px; background: #f0f4eb; }
+.project-drop-hint { padding: 7px 12px; color: #65834d; font-size: 11px; line-height: 1.6; }
 .composer:focus-within {
   border-color: #c6cbbd;
   box-shadow: 0 3px 18px #31382009;
