@@ -488,7 +488,8 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
             console.print(result.get("content", "Auto-commit failed."))
         tui.pending_auto_commit = False
 
-    engine = QueryEngine(permission_handler=permission_prompt)
+    from codeclaw.security.permissions import ApprovalPolicy
+    engine = QueryEngine(permission_handler=permission_prompt, approval_policy=ApprovalPolicy("full" if auto_approve else "ask"))
 
     if not engine.is_configured:
         console.print(

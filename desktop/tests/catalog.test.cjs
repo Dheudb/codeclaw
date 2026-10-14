@@ -52,6 +52,17 @@ test("legacy archive visibility is discarded and cannot be enabled by preference
   catalog.setView({ showArchived: true, sort: "oldest" });
   assert.deepEqual(catalog.readSettings().sidebar, { sort: "oldest" });
 });
+test("permission mode is durable per conversation and forks start with approval", (t) => {
+  const { catalog, project } = fixture(t);
+  const first = catalog.create(project), second = catalog.create(project);
+  assert.equal(first.permissionMode, "ask");
+  catalog.update(first, { permissionMode: "full" });
+  assert.equal(catalog.find(first.id).permissionMode, "full");
+  assert.equal(catalog.find(second.id).permissionMode, "ask");
+  assert.equal(catalog.fork(catalog.find(first.id)).permissionMode, "ask");
+  assert.throws(() => catalog.update(first, { permissionMode: "auto" }), /请求批准或完全访问/);
+  assert.equal(catalog.find(first.id).permissionMode, "full");
+});
 test("delete removes parent and owned child transcripts, preserves other histories and project files", (t) => {
   const { project, catalog } = fixture(t);
   const a = catalog.create(project), b = catalog.create(project);

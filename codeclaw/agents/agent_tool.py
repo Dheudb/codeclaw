@@ -219,6 +219,7 @@ Terse command-style prompts produce shallow, generic work."""
         # Child agents keep the same approval UX, but start with a clean
         # permission memory so parent session-wide allow rules do not leak.
         sub_engine.permission_manager.always_allow_tools = set()
+        sub_engine.permission_manager.approval_policy = parent_permission_manager.approval_policy
         sub_engine.tool_context["permission_manager"] = sub_engine.permission_manager
         sub_engine.tool_context["permission_handler"] = self.context.get("permission_handler")
 

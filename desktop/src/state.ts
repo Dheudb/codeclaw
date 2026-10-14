@@ -3,6 +3,7 @@ import type { EngineEvent, InitialSession, SessionView } from "./types.ts";
 export function createSession(initial: InitialSession): SessionView {
   return {
     ...initial,
+    permissionMode: initial.permissionMode || "ask",
     busy: false,
     error: "",
     messages: initial.history,
@@ -39,6 +40,8 @@ export function applyEvent(
 ): SessionView {
   if (event.session !== session.id) return session;
   switch (event.type) {
+    case "permission_mode_changed":
+      return ["ask", "full"].includes(event.permissionMode) ? { ...session, permissionMode: event.permissionMode } : session;
     case "session_started":
       return {
         ...session,

@@ -17,6 +17,16 @@ test("a failed request removes its empty assistant placeholder and Rich tags", a
   assert.deepEqual(session.messages, [{ role: "user", text: "hello" }]);
   assert.equal(session.error, "API Loop Exception: Connection error.");
 });
+test("permission changes preserve the active draft and other session state", async () => {
+  const { createSession, applyEvent } = await state;
+  const session = { ...createSession(initial), draft: "keep", busy: true };
+  assert.equal(session.permissionMode, "ask");
+  const changed = applyEvent(session, { session: "one", type: "permission_mode_changed", permissionMode: "full" });
+  assert.equal(changed.permissionMode, "full");
+  assert.equal(changed.draft, "keep");
+  assert.equal(changed.busy, true);
+  assert.equal(applyEvent(changed, { session: "one", type: "permission_mode_changed", permissionMode: "invalid" }), changed);
+});
 test("events cannot alter another project session", async () => {
   const { createSession, applyEvent } = await state;
   const session = createSession(initial);

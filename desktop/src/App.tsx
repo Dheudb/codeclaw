@@ -20,7 +20,7 @@ import {
   X,
   Store,
 } from "lucide-react";
-import type { SessionView, ModelConfig, SessionCatalog } from "./types";
+import type { SessionView, ModelConfig, SessionCatalog, PermissionMode } from "./types";
 import { applyEvent, beginTurn, createSession } from "./state";
 import CapabilityPanel from "./CapabilityPanel";
 import { InteractionCard, SettingsDialog } from "./Dialogs";
@@ -41,6 +41,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [globalModel, setGlobalModel] = useState<ModelConfig>();
   const [modelChanging, setModelChanging] = useState(false);
+  const [permissionChanging, setPermissionChanging] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelTab, setPanelTab] = useState("skills");
@@ -186,7 +187,7 @@ export default function App() {
     if (active) update({ capabilities: await invoke("capabilities.list") });
   }
   async function send() {
-    if (opening || modelChanging || !active || active.busy || !active.draft.trim()) return;
+    if (opening || modelChanging || permissionChanging || !active || active.busy || !active.draft.trim()) return;
     const id = active.id,
       text = active.draft.trim(),
       selected = active.selected,
@@ -230,6 +231,16 @@ export default function App() {
       setSessions((previous) => previous.map((session) => session.busy ? session : { ...session, config }));
     } catch (error) { onError(error); }
     finally { setModelChanging(false); }
+  }
+  async function setPermissionMode(mode: PermissionMode) {
+    if (!active || permissionChanging) return;
+    const id = active.id;
+    setPermissionChanging(true);
+    try {
+      const result = await window.codeclaw.invoke("permissions.set", { session: id, mode });
+      update({ permissionMode: result.permissionMode }, id);
+    } catch (error) { onError(error); }
+    finally { setPermissionChanging(false); }
   }
   async function openSettings() {
     try {
@@ -559,6 +570,12 @@ export default function App() {
                   <option value="normal">Agent</option>
                   <option value="plan">Plan</option>
                 </select>
+                <select className={"permission-picker " + (active?.permissionMode === "full" ? "full-access" : "")} aria-label="访问权限"
+                  title={active?.permissionMode === "full" ? "本会话的主代理和子代理执行工具时无需批准" : "文件修改、命令和需要审批的外部工具会请求批准"}
+                  disabled={opening || !active || permissionChanging} value={active?.permissionMode || "ask"}
+                  onChange={(event) => void setPermissionMode(event.target.value as PermissionMode)}>
+                  <option value="ask">请求批准</option><option value="full">完全访问</option>
+                </select>
                 <span className="toolbar-divider" />
                 {globalModel?.connections?.some((connection) => connection.models.length) ? <select
                   className="model-picker" aria-label="选择模型" title="切换 API 与模型"
@@ -594,7 +611,7 @@ export default function App() {
                   <button
                     className="send-button"
                     aria-label="发送任务"
-                    disabled={opening || modelChanging || !active?.draft.trim()}
+                    disabled={opening || modelChanging || permissionChanging || !active?.draft.trim()}
                     onClick={send}
                   >
                     <ArrowUp size={19} />
@@ -606,7 +623,7 @@ export default function App() {
           <div className="composer-caption">
             <span>
               <ShieldCheck size={12} />
-              工具执行遵循会话权限
+              {active?.permissionMode === "full" ? "完全访问：工具执行无需批准" : "请求批准：需要审批的工具会先确认"}
             </span>
             <span>
               {enabledSkills.length} Skills 可用 ·{" "}

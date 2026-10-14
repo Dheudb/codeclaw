@@ -131,6 +131,7 @@ async def run_verification_agent(
             model_provider=getattr(parent_engine, "model_provider", "anthropic"),
             api_base_url=getattr(parent_engine, "api_base_url", None),
             local_tokenizer_path=getattr(parent_engine, "local_tokenizer_path", None),
+            approval_policy=getattr(getattr(parent_engine, "permission_manager", None), "approval_policy", None),
         )
 
         sub_engine._max_turns_override = VERIFIER_MAX_TURNS

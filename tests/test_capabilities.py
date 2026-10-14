@@ -132,6 +132,7 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                 child_models, child_tools, child_teams = [], [], []
                 gate = asyncio.Event()
                 async def child_run(child, user_input, sys_print_callback):
+                    self.assertIs(child.permission_manager.approval_policy, engine.permission_manager.approval_policy)
                     child_models.append(child.primary_model)
                     child_tools.append(set(child.available_tools))
                     child_teams.append(child.team_manager)

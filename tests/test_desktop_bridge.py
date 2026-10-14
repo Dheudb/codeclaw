@@ -13,6 +13,23 @@ from unittest.mock import patch, AsyncMock, Mock
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_full_access_resolves_approvals_but_keeps_user_questions(self):
+        permission = asyncio.create_task(self.bridge.ask("permission", {"request": {"tool_name": "file_write_tool"}}))
+        plan = asyncio.create_task(self.bridge.ask("plan_approval", {"content": "plan"}))
+        question = asyncio.create_task(self.bridge.ask("questions", {"questions": []}))
+        await asyncio.sleep(0)
+        result = await self.bridge.dispatch("permissions.set", {"mode": "full"})
+        self.assertEqual(result["permissionMode"], "full")
+        self.assertEqual(await permission, "allow")
+        self.assertEqual(await plan, "allow")
+        self.assertFalse(question.done())
+        self.assertEqual(await self.bridge.ask("permission", {}), "allow")
+        await self.bridge.dispatch("permissions.set", {"mode": "ask"})
+        self.assertEqual((await self.bridge.dispatch("permissions.get", {}))["permissionMode"], "ask")
+        question.cancel()
+        await asyncio.gather(question, return_exceptions=True)
+        self.assertEqual(self.bridge.pending_kinds, {})
+
     async def test_capability_examples_are_valid_and_never_overwrite_existing_files(self):
         with patch.dict(os.environ, {"CODECLAW_SKILLS_PATHS": ""}):
             result = await self.bridge.dispatch("capabilities.example", {})

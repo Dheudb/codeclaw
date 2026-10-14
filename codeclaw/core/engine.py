@@ -124,6 +124,7 @@ class QueryEngine:
         api_base_url: str = None,
         local_tokenizer_path: str = None,
         cwd: Optional[str] = None,
+        approval_policy=None,
     ):
         self.session_cwd = cwd or os.getcwd()
         self.model_provider = self._resolve_model_provider(model_provider, model)
@@ -172,6 +173,7 @@ class QueryEngine:
             state_change_callback=self.persist_session_state,
             classifier_manager=self.security_classifier,
             session_id_getter=lambda: self.session_id,
+            approval_policy=approval_policy,
         )
         self.todo_manager = TodoManager()
         self.subagent_registry = []
@@ -1168,7 +1170,13 @@ class QueryEngine:
             _logger.warning("Failed to inject turn attachments (turn=%d): %s", turn_count, exc, exc_info=True)
 
     def _build_tool_prompt_summary(self) -> str:
-        sections = []
+        policy = self.permission_manager.approval_policy.mode
+        sections = ["# Tool approval policy\n" + (
+            "Full access: tool execution is authorized for this conversation. Do not ask for tool approval. "
+            "Agent role and Plan mode tool limits still apply. Ask questions only for missing task information."
+            if policy == "full" else
+            "Request approval: the tool permission system will request user confirmation when needed. "
+            "Do not use the question tool to duplicate tool approval requests.")]
         if self.tool_context.get("agent_system_prompt"):
             sections.append("# Assigned agent role\n" + self.tool_context["agent_system_prompt"])
         for name, tool in self.available_tools.items():
@@ -1263,6 +1271,7 @@ class QueryEngine:
             model_provider=self.model_provider,
             api_base_url=self.api_base_url,
             local_tokenizer_path=self.local_tokenizer_path,
+            approval_policy=self.permission_manager.approval_policy,
         )
         if forced_mode:
             sub.set_mode(forced_mode)

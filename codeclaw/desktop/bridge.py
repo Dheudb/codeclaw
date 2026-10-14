@@ -10,6 +10,7 @@ from pathlib import Path
 
 from codeclaw.core.config import load_config, load_config_into_env, save_config, normalize_api_base_url
 from codeclaw.core.model_catalog import public_config, active_connection, save_connection, select_model, discover_models, apply_connection_env
+from codeclaw.security.permissions import ApprovalPolicy
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.protocols.mcp_config import MCPConfigStore
@@ -51,6 +52,8 @@ class DesktopBridge:
         self.engine = None
         self.turn_task = None
         self.pending = {}
+        self.pending_kinds = {}
+        self.approval_policy = ApprovalPolicy()
         self.resume_id = None
         self.loaded_skills = []
         self.protocol_task = None
@@ -157,14 +160,18 @@ class DesktopBridge:
         return items
 
     async def ask(self, kind, payload):
+        if kind in {"permission", "plan_approval"} and self.approval_policy.mode == "full":
+            return "allow"
         request_id = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
+        self.pending_kinds[request_id] = kind
         self.emit({"type": kind, "requestId": request_id, **payload})
         try:
             return await future
         finally:
             self.pending.pop(request_id, None)
+            self.pending_kinds.pop(request_id, None)
             self.emit({"type": "interaction_resolved", "requestId": request_id})
 
     async def permission(self, request):
@@ -182,7 +189,7 @@ class DesktopBridge:
         from codeclaw.core.engine import QueryEngine
         from codeclaw.tools.lsp_tool import LspTool
         from codeclaw.protocols.lsp_manager import LSPManager
-        engine = QueryEngine(cwd=str(self.cwd), permission_handler=self.permission)
+        engine = QueryEngine(cwd=str(self.cwd), permission_handler=self.permission, approval_policy=self.approval_policy)
         if self.resume_id and not engine.load_session(self.resume_id):
             await engine.client.close()
             raise ValueError("Session could not be resumed")
@@ -271,6 +278,19 @@ class DesktopBridge:
     async def dispatch(self, method, params):
         if method == "config.get":
             return self.config()
+        if method == "permissions.get":
+            return {"permissionMode": self.approval_policy.mode}
+        if method == "permissions.set":
+            self.approval_policy.set_mode(params.get("mode"))
+            if self.engine and self.approval_policy.mode == "ask":
+                self.engine.permission_manager.always_allow_tools.clear()
+                self.engine.persist_session_state()
+            if self.approval_policy.mode == "full":
+                for request_id, future in list(self.pending.items()):
+                    if self.pending_kinds.get(request_id) in {"permission", "plan_approval"} and not future.done():
+                        future.set_result("allow")
+            self.emit({"type": "permission_mode_changed", "permissionMode": self.approval_policy.mode})
+            return {"permissionMode": self.approval_policy.mode}
         if method == "config.models":
             return await discover_models(load_config(), params)
         if method == "mcp.list":
@@ -308,6 +328,7 @@ class DesktopBridge:
                     self.mcp_testing = False
             return self.mcp_snapshot()
         if method == "initialize":
+            self.approval_policy.set_mode(params.get("permissionMode", "ask"))
             sid = params.get("sessionId")
             if sid and not re.fullmatch(r"[a-zA-Z0-9_-]+", sid):
                 raise ValueError("Invalid session ID")
@@ -316,7 +337,7 @@ class DesktopBridge:
             if sid:
                 raw = json.loads((self.cwd / ".codeclaw" / "sessions" / (sid + ".json")).read_text(encoding="utf-8"))
                 messages = raw if isinstance(raw, list) else raw.get("messages", [])
-            return {"project": str(self.cwd), "persistedId": sid, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages)}
+            return {"project": str(self.cwd), "persistedId": sid, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages)}
         if method == "capabilities.list":
             return self.capabilities()
         if method == "capabilities.directory":

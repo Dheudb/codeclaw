@@ -11,6 +11,23 @@ from codeclaw.features.plans import is_session_plan_file
 
 
 @dataclass
+class ApprovalPolicy:
+    mode: str = "ask"
+    revision: int = 0
+
+    def __post_init__(self):
+        if self.mode not in {"ask", "full"}:
+            raise ValueError("权限模式必须是 ask 或 full")
+
+    def set_mode(self, mode):
+        if mode not in {"ask", "full"}:
+            raise ValueError("权限模式必须是 ask 或 full")
+        if mode != self.mode:
+            self.mode = mode
+            self.revision += 1
+
+
+@dataclass
 class PermissionRequest:
     tool_name: str
     summary: str
@@ -47,6 +64,7 @@ class PermissionManager:
         classifier_manager=None,
         config_path: str = ".codeclaw/permissions.json",
         session_id_getter: Optional[Callable[[], str]] = None,
+        approval_policy: Optional[ApprovalPolicy] = None,
     ):
         self.prompt_handler = prompt_handler
         self.mode_getter = mode_getter
@@ -54,6 +72,8 @@ class PermissionManager:
         self.classifier_manager = classifier_manager
         self.config_path = config_path
         self.session_id_getter = session_id_getter
+        self.approval_policy = approval_policy or ApprovalPolicy()
+        self._approval_revision = self.approval_policy.revision
         self.always_allow_tools = set()
         self.always_deny_tools = set()
         self.always_ask_tools = set()
@@ -111,6 +131,9 @@ class PermissionManager:
         input_payload: Dict[str, Any],
         context: Optional[Dict[str, Any]] = None,
     ) -> PermissionDecision:
+        if self._approval_revision != self.approval_policy.revision:
+            self.always_allow_tools.clear()
+            self._approval_revision = self.approval_policy.revision
         tool_name = getattr(tool, "name", tool.__class__.__name__)
         current_mode = self.mode_getter() if callable(self.mode_getter) else "normal"
         risk_level = self._get_risk_level(tool, input_payload)
@@ -135,6 +158,13 @@ class PermissionManager:
             ),
             denial_count=int(self.consecutive_denials.get(tool_name, 0) or 0),
         )
+
+        plan_decision = self._plan_decision(request)
+        if plan_decision:
+            return self._finalize_permission_decision(tool_name, plan_decision, request)
+        if self.approval_policy.mode == "full":
+            return self._finalize_permission_decision(tool_name, PermissionDecision(
+                "allow", "Full access selected for this conversation.", source="full_access"), request)
 
         forced_prompt_reasons = []
 
@@ -161,31 +191,6 @@ class PermissionManager:
                 forced_prompt_reasons.append(finalized_classifier.reason or "Automatic security classifier requested approval.")
             else:
                 return finalized_classifier
-
-        if current_mode == "plan" and tool_name not in self.plan_mode_allowlist and not is_read_only:
-            return self._finalize_permission_decision(tool_name, PermissionDecision(
-                "deny",
-                "Plan mode is active. Use exit_plan_mode to return to normal mode before making changes.",
-                source="plan_mode",
-            ), request)
-
-        if current_mode == "plan" and tool_name in {"file_write_tool", "file_edit_tool"}:
-            file_path = input_payload.get("file_path", "")
-            if file_path:
-                abs_path = os.path.abspath(file_path)
-                session_id = self.session_id_getter() if callable(self.session_id_getter) else ""
-                if session_id and is_session_plan_file(abs_path, session_id):
-                    return self._finalize_permission_decision(tool_name, PermissionDecision(
-                        "allow",
-                        "Plan file write auto-approved in plan mode.",
-                        source="plan_file_auto_allow",
-                    ), request)
-            return self._finalize_permission_decision(tool_name, PermissionDecision(
-                "deny",
-                f"Plan mode is active. You can only edit the plan file. "
-                f"Use exit_plan_mode to return to normal mode before editing other files.",
-                source="plan_mode_non_plan_file",
-            ), request)
 
         if self._should_escalate_denial(tool_name):
             return self._finalize_permission_decision(tool_name, PermissionDecision(
@@ -252,6 +257,19 @@ class PermissionManager:
             "Denied by user.",
             source="prompt",
         ), request)
+
+    def _plan_decision(self, request):
+        if request.mode != "plan":
+            return None
+        if request.tool_name not in self.plan_mode_allowlist and not request.is_read_only:
+            return PermissionDecision("deny", "Plan mode is active. Exit plan mode before making changes.", source="plan_mode")
+        if request.tool_name in {"file_write_tool", "file_edit_tool"}:
+            file_path = request.input_payload.get("file_path", "")
+            session_id = self.session_id_getter() if callable(self.session_id_getter) else ""
+            if file_path and session_id and is_session_plan_file(os.path.abspath(file_path), session_id):
+                return PermissionDecision("allow", "Plan file write auto-approved in plan mode.", source="plan_file_auto_allow")
+            return PermissionDecision("deny", "Plan mode only allows editing the plan file. Exit plan mode before editing other files.", source="plan_mode_non_plan_file")
+        return None
 
     def _is_read_only(self, tool: Any, input_payload: Dict[str, Any]) -> bool:
         inspector = getattr(tool, "is_read_only_call", None)

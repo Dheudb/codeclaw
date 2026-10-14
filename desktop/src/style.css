@@ -1204,6 +1204,8 @@ a,
 .model-discovery-actions button { font-size: 11px; padding: 8px 12px; }
 .model-discovery-actions span { font-size: 11px; color: #71865d; }
 .composer-options select.model-picker { max-width: 260px; min-width: 100px; text-overflow: ellipsis; }
+.composer-options select.permission-picker { width: 91px; flex-shrink: 0; }
+.composer-options select.full-access { color: #bc6549; background: #fff0e8; border-radius: 6px; }
 .settings-content .form-section h3, .settings-section-heading h3 { font-size: 16px; color: #414a38; font-weight: 600; margin: 0 0 12px; }
 .settings-section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .settings-section-heading p { color: #8b9283; font-size: 12px; line-height: 1.7; margin: 0 0 18px; }

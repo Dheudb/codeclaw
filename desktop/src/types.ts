@@ -52,6 +52,7 @@ export type ModelConnection = Omit<ModelConfig, "connections"> & { connectionId:
 export type HistoryItem = { role: "user" | "assistant"; text: string };
 export type SavedSession = { id: string; title: string; updated: number };
 export type CatalogSession = SavedSession & {
+  permissionMode: PermissionMode;
   sessionId: string;
   project: string;
   created: number;
@@ -76,6 +77,7 @@ export type SessionCatalog = {
   view: { sort: "recent" | "oldest" | "name" | "created" };
 };
 export type InitialSession = {
+  permissionMode?: PermissionMode;
   id: string;
   persistedId?: string;
   project: string;
@@ -103,6 +105,7 @@ export type ToolActivity = {
   result?: string;
 };
 export type SessionView = InitialSession & {
+  permissionMode: PermissionMode;
   persistedId?: string;
   busy: boolean;
   error: string;
@@ -117,6 +120,7 @@ export type SessionView = InitialSession & {
   mode: string;
   draft: string;
 };
+export type PermissionMode = "ask" | "full";
 declare global {
   interface Window {
     codeclaw: {

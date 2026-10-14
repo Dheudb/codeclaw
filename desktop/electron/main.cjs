@@ -178,6 +178,7 @@ async function createSession(project, resumeId) {
   try {
     const initial = await transport.request("initialize", {
       sessionId: resumeId,
+      permissionMode: row.permissionMode,
     });
     return { id, ...initial, title: row.title, savedDraft: row.draft || "" };
   } catch (error) {
@@ -363,6 +364,22 @@ async function invoke(method, params) {
   }
   const source = sessions.get(params.session);
   if (!source) throw new Error("请先打开项目");
+  if (method === "permissions.set") {
+    if (!["ask", "full"].includes(params.mode)) throw new Error("请选择请求批准或完全访问");
+    const row = catalog.find(params.session), previous = row.permissionMode;
+    catalog.update(row, { permissionMode: params.mode });
+    try {
+      const result = await source.transport.request(method, { mode: params.mode });
+      broadcastCatalog();
+      return result;
+    } catch {
+      // A lost reply must never leave a hidden full-access engine running.
+      await disposeSession(params.session);
+      catalog.update(row, { permissionMode: previous });
+      broadcastCatalog();
+      throw new Error("切换权限失败，当前会话引擎已停止，请重新打开会话");
+    }
+  }
   if (method === "project.reveal") {
     await shell.openPath(source.project);
     return true;
@@ -431,7 +448,7 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
-    if (/^(app\.initialize|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|permissions\.set|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;
