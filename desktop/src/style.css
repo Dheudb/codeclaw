@@ -88,6 +88,8 @@ a,
 .markdown-link {
   color: #b7543b;
 }
+.markdown-link { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.markdown-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .muted,
 .fine-print {
   color: var(--muted);

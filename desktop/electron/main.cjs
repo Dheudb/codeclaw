@@ -222,8 +222,8 @@ async function fallback(project, excluded = []) {
 async function invoke(method, params) {
   if (method === "external.open") {
     const url = new URL(params.url);
-    if (url.protocol !== "https:" || url.username || url.password)
-      throw new Error("只支持 HTTPS 文档链接");
+    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password)
+      throw new Error("只支持 HTTP/HTTPS 网页链接");
     await shell.openExternal(url.href);
     return true;
   }
