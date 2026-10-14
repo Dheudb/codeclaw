@@ -28,6 +28,8 @@ import Markdown from "./Markdown";
 import McpDialog from "./McpDialog";
 import SessionSidebar from "./SessionSidebar";
 import { CatalogPreferences } from "./catalog-preferences";
+import PanelResizer from "./PanelResizer";
+import { clampPanelWidth, DEFAULT_PANEL_WIDTH } from "./panel-width";
 
 const basename = (value: string) =>
   value.split(/[\\/]/).filter(Boolean).pop() || value;
@@ -45,6 +47,8 @@ export default function App() {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelTab, setPanelTab] = useState("skills");
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [viewport, setViewport] = useState(window.innerWidth);
   const [opening, setOpening] = useState(true);
   const [notice, setNotice] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
@@ -65,6 +69,7 @@ export default function App() {
       .then((value) => {
         setGlobalModel(value.config);
         setDefaultDirectory(value.workspaceSettings.defaultDirectory);
+        if (Number.isFinite(value.layout?.inspectorWidth)) setPanelWidth(value.layout.inspectorWidth);
         receiveCatalog(value.catalog);
         setSessions((value.restored || []).map(createSession));
         setActiveId(value.activeId || "");
@@ -85,6 +90,11 @@ export default function App() {
         previous.map((session) => applyEvent(session, event)),
       );
     });
+  }, []);
+  useEffect(() => {
+    const resize = () => setViewport(window.innerWidth);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
   }, []);
   useEffect(() => {
     if (!active) return;
@@ -264,7 +274,7 @@ export default function App() {
     active?.workers.filter((worker) => worker.status === "running").length || 0;
 
   return (
-    <div className={"workbench " + (!panelOpen ? "panel-hidden" : "")}>
+    <div className={"workbench " + (!panelOpen ? "panel-hidden" : "")} style={{ "--inspector-width": clampPanelWidth(panelWidth, viewport) + "px" } as React.CSSProperties}>
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">
@@ -639,6 +649,9 @@ export default function App() {
         </div>
       </main>
       {panelOpen && (
+        <div className="inspector-shell">
+        <PanelResizer width={clampPanelWidth(panelWidth, viewport)} viewport={viewport} change={setPanelWidth}
+          save={(inspectorWidth) => { void window.codeclaw.invoke("layout.save", { inspectorWidth }).catch(onError); }} />
         <CapabilityPanel
           key={activeId || "empty"}
           session={active}
@@ -649,6 +662,7 @@ export default function App() {
           update={update}
           onError={onError}
         />
+        </div>
       )}
       {settingsOpen && (
         <SettingsDialog

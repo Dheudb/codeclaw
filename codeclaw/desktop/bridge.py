@@ -11,6 +11,7 @@ from pathlib import Path
 from codeclaw.core.config import load_config, load_config_into_env, save_config, normalize_api_base_url
 from codeclaw.core.model_catalog import public_config, active_connection, save_connection, select_model, discover_models, apply_connection_env
 from codeclaw.security.permissions import ApprovalPolicy
+from codeclaw.desktop.activity import restore_activity
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.protocols.mcp_config import MCPConfigStore
@@ -334,10 +335,12 @@ class DesktopBridge:
                 raise ValueError("Invalid session ID")
             self.resume_id = sid
             messages = []
+            raw = {"messages": []}
             if sid:
                 raw = json.loads((self.cwd / ".codeclaw" / "sessions" / (sid + ".json")).read_text(encoding="utf-8"))
                 messages = raw if isinstance(raw, list) else raw.get("messages", [])
-            return {"project": str(self.cwd), "persistedId": sid, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages)}
+            activity, workers = restore_activity(raw, self.cwd)
+            return {"project": str(self.cwd), "persistedId": sid, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages), "activity": activity, "workers": workers}
         if method == "capabilities.list":
             return self.capabilities()
         if method == "capabilities.directory":

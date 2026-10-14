@@ -17,6 +17,7 @@
     "test:models": "node tests/models.e2e.cjs",
     "test:permissions": "node tests/permissions.e2e.cjs",
     "test:subagents": "node tests/subagents.e2e.cjs",
+    "test:activity": "node tests/activity.e2e.cjs",
     "test:mcp": "node tests/mcp.e2e.cjs",
     "pack": "npm run build && node scripts/pack.cjs"
   },

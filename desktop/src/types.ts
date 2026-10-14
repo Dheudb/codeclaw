@@ -87,6 +87,8 @@ export type InitialSession = {
   capabilities: Capabilities;
   sessions: SavedSession[];
   history: HistoryItem[];
+  activity?: ToolActivity[];
+  workers?: Worker[];
 };
 export type EngineEvent = { session: string; type: string; [key: string]: any };
 export type Worker = {
@@ -104,6 +106,12 @@ export type ToolActivity = {
   name: string;
   status: string;
   result?: string;
+  input?: Record<string, any>;
+  agentId?: string;
+  agentRole?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  waitingRequestId?: string;
 };
 export type SessionView = InitialSession & {
   permissionMode: PermissionMode;

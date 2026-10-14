@@ -239,6 +239,13 @@ async function invoke(method, params) {
     };
   }
   if (method === "workspace.get") return workspaceSettings();
+  if (method === "layout.save") {
+    if (!Number.isFinite(params.inspectorWidth) || params.inspectorWidth < 280 || params.inspectorWidth > 760)
+      throw new Error("右侧面板宽度必须在 280 到 760 之间");
+    const layout = { inspectorWidth: Math.round(params.inspectorWidth) };
+    saveSettings({ ...settings(), layout });
+    return layout;
+  }
   if (method === "workspace.save") {
     const defaultDirectory = ensureWorkspace(params.defaultDirectory);
     saveSettings({ ...settings(), defaultDirectory });
@@ -448,7 +455,7 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
-    if (/^(app\.initialize|permissions\.set|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|layout\.save|permissions\.set|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;

@@ -15,6 +15,7 @@ import {
 import type { SessionView, Skill } from "./types";
 import Markdown from "./Markdown";
 import CapabilityGuide from "./CapabilityGuide";
+import ActivityPanel from "./ActivityPanel";
 
 export default function CapabilityPanel({
   session,
@@ -373,39 +374,7 @@ export default function CapabilityPanel({
             </>
           )}
           {tab === "activity" && (
-            <>
-              <div className="panel-title">
-                <div>
-                  <h3>执行活动</h3>
-                  <p>工具调用与引擎日志</p>
-                </div>
-                <Activity size={17} />
-              </div>
-              <div className="panel-scroll">
-                {!session.tools.length && !session.logs.length && (
-                  <div className="instruction-empty">
-                    <Activity size={26} />
-                    <p>开始任务后，执行过程会显示在这里。</p>
-                  </div>
-                )}
-                {session.tools.map((tool, i) => (
-                  <details className="tool-row" key={tool.id + i}>
-                    <summary>
-                      <span className={"status-dot " + tool.status} />
-                      <code>{tool.name}</code>
-                      <ChevronDown size={12} />
-                    </summary>
-                    {tool.result && <pre>{tool.result}</pre>}
-                  </details>
-                ))}
-                {session.logs.length > 0 && (
-                  <details className="engine-logs">
-                    <summary>引擎日志 · {session.logs.length}</summary>
-                    <pre>{session.logs.join("\n")}</pre>
-                  </details>
-                )}
-              </div>
-            </>
+            <ActivityPanel session={session} />
           )}
           {tab === "changes" && (
             <>

@@ -8,8 +8,8 @@ export function createSession(initial: InitialSession): SessionView {
     error: "",
     messages: initial.history,
     streamIndex: null,
-    tools: [],
-    workers: [],
+    tools: initial.activity || [],
+    workers: initial.workers || [],
     interactions: [],
     loaded: [],
     logs: [],
@@ -72,6 +72,7 @@ export function applyEvent(
         busy: false,
         error: "任务已停止，已收到的内容保留。",
         interactions: [],
+        tools: settleTools(session, "cancelled"),
       };
     case "turn_error":
     case "engine_exit":
@@ -83,17 +84,22 @@ export function applyEvent(
           index !== session.streamIndex || !!message.text.trim()),
         error: (event.message || "引擎发生错误").replace(/\[\/?bold red\]/g, ""),
         interactions: [],
+        tools: settleTools(session, "interrupted", event.type === "engine_exit"),
       };
     case "permission":
     case "questions":
     case "plan_approval":
-      return { ...session, interactions: [...session.interactions, event] };
+      return { ...session, interactions: [...session.interactions, event],
+        tools: event.type === "permission" ? session.tools.map((tool) =>
+          tool.id === `${event.request?.classifier_input?.agent_id && event.request.classifier_input.agent_role !== "main" ? event.request.classifier_input.agent_id : "main"}:${event.request?.classifier_input?.tool_use_id}`
+            ? { ...tool, status: "waiting", waitingRequestId: event.requestId } : tool) : session.tools };
     case "interaction_resolved":
       return {
         ...session,
         interactions: session.interactions.filter(
           (item) => item.requestId !== event.requestId,
         ),
+        tools: session.tools.map((tool) => tool.status === "waiting" && tool.waitingRequestId === event.requestId ? { ...tool, status: "running", waitingRequestId: undefined } : tool),
       };
     case "skill_loaded":
       return {
@@ -104,52 +110,57 @@ export function applyEvent(
       const previous = session.workers.find(
         (item) => item.agent_id === event.agent.agent_id,
       );
+      const worker = { ...previous, ...event.agent };
+      const tools = upsertTool(session.tools, { id: "agent:" + worker.agent_id, name: "subagent",
+        status: worker.status, agentId: worker.agent_id, agentRole: worker.agent_role || worker.agent_type,
+        input: { description: worker.description, prompt: worker.task }, result: worker.result,
+        ...(worker.status === "running" ? { startedAt: Date.now() } : { finishedAt: Date.now() }) });
       return {
         ...session,
         workers: [
           ...session.workers.filter(
             (item) => item.agent_id !== event.agent.agent_id,
           ),
-          { ...previous, ...event.agent },
+          worker,
         ],
+        tools: tools.map((tool) => tool.agentId === worker.agent_id && worker.status !== "running" && ["running", "waiting", "queued"].includes(tool.status)
+          ? { ...tool, status: worker.status === "cancelled" ? "cancelled" : "interrupted", finishedAt: Date.now() } : tool),
       };
     }
     case "tool_scheduled":
-      return {
-        ...session,
-        tools: [
-          ...session.tools,
-          {
-            id: event.tool_use_id || event.id || String(session.tools.length),
-            name: event.tool_name || event.name || "tool",
-            status: "running",
-          },
-        ].slice(-80),
-      };
+    case "tool_started": {
+      const id = `${event.agent_id || "main"}:${event.tool_use_id || event.id}`;
+      const previous = session.tools.find((tool) => tool.id === id);
+      return { ...session, tools: upsertTool(session.tools, { id, name: event.tool_name || event.name || "tool",
+        status: event.type === "tool_scheduled" ? previous?.status || "queued" : "running",
+        agentId: event.agent_id, agentRole: event.agent_role,
+        ...(event.input ? { input: event.input } : {}),
+        startedAt: previous?.startedAt || event.timestamp || Date.now() }) };
+    }
     case "tool_result":
-      return {
-        ...session,
-        tools: session.tools.map((tool) =>
-          tool.id === event.tool_use_id
-            ? {
-                ...tool,
-                status: event.is_error ? "error" : "completed",
-                result:
-                  typeof event.result === "string"
-                    ? event.result
-                    : JSON.stringify(event.result || event.content || ""),
-              }
-            : tool,
-        ),
-      };
+      return { ...session, tools: upsertTool(session.tools, {
+        id: `${event.agent_id || "main"}:${event.tool_use_id}`, name: event.tool_name || session.tools.find((tool) => tool.id === `${event.agent_id || "main"}:${event.tool_use_id}`)?.name || "tool",
+        agentId: event.agent_id, agentRole: event.agent_role,
+        status: event.status === "cancelled" ? "cancelled" : event.is_error ? "error" : "completed", finishedAt: event.timestamp || Date.now(),
+        result: typeof (event.result ?? event.content) === "string" ? event.result ?? event.content : JSON.stringify(event.result ?? event.content ?? ""),
+      }) };
     case "log":
       return {
         ...session,
-        logs: [...session.logs, String(event.text)].slice(-80),
+        logs: [...session.logs, String(event.text).replace(/\[\/?(?:bold|dim|red|green|yellow|cyan|magenta|blue)(?:[ a-z]*)\]/g, "")].slice(-200),
       };
     case "sessions_changed":
       return { ...session, sessions: event.sessions };
     default:
       return session;
   }
+}
+
+function upsertTool(tools: SessionView["tools"], value: SessionView["tools"][number]) {
+  const previous = tools.find((tool) => tool.id === value.id);
+  return (previous ? tools.map((tool) => tool.id === value.id ? { ...tool, ...value } : tool) : [...tools, value]).slice(-200);
+}
+function settleTools(session: SessionView, status: string, includeChildren = true) {
+  return session.tools.map((tool) => (includeChildren || !tool.agentId) && ["running", "queued", "waiting"].includes(tool.status)
+    ? { ...tool, status, finishedAt: Date.now() } : tool);
 }

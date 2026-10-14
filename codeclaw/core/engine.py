@@ -1729,6 +1729,7 @@ class QueryEngine:
             "input_preview": str(tool_inputs)[:220],
         }
         self._sync_message_context()
+        self._emit_tool_activity("tool_started", tool_name, tool_use_id, input=copy.deepcopy(tool_inputs))
 
     def _record_tool_completion(self, tool_name: str, tool_use_id: str, result_preview: str, status: str):
         self.attachment_collector.track_tool_use(tool_name)
@@ -1744,6 +1745,14 @@ class QueryEngine:
         self.recent_tool_activity = self.recent_tool_activity[:12]
         self.session_memory_manager.record_tool_call()
         self._sync_message_context()
+        self._emit_tool_activity("tool_result", tool_name, tool_use_id, result=str(result_preview)[:16000], is_error=status == "error", status=status)
+
+    def _emit_tool_activity(self, kind, tool_name, tool_use_id, **payload):
+        callback = self.tool_context.get("capability_event")
+        if callback:
+            callback({"type": kind, "tool_name": tool_name, "tool_use_id": tool_use_id,
+                      "agent_id": self.agent_id if self.agent_depth else None,
+                      "agent_role": self.agent_role, "timestamp": int(time.time() * 1000), **payload})
 
     def inherit_state_from_parent(
         self,
@@ -2260,13 +2269,16 @@ class QueryEngine:
                         artifact_dir=os.path.join(".codeclaw", "tool-results", self.session_id),
                         spill_recorder=spill_recorder,
                     )
+            except asyncio.CancelledError:
+                self._record_tool_completion(tool_name, tool_id, "操作已取消。", "cancelled")
+                raise
             except Exception as e:
                 res_text = f"Tool Exception Caught: {str(e)}"
 
         if before_tool_prefix:
             res_text = before_tool_prefix + str(res_text)
 
-        status = "error" if str(res_text).startswith("Permission denied") or "Status: error" in str(res_text) or "Tool Exception Caught" in str(res_text) else "ok"
+        status = "error" if str(res_text).lstrip().startswith(("Permission denied", "Error:", "Error reading file:", "Sub-agent spawn denied:")) or "Status: error" in str(res_text) or "Tool Exception Caught" in str(res_text) else "ok"
         self._record_tool_completion(tool_name, tool_id, res_text, status)
         sys_print_callback(f"    [dim]{tool_name} -> {status}[/dim]")
 
