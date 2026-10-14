@@ -183,6 +183,8 @@ class QueryEngine:
         self.loop_transition_history = []
         self.token_usage_history = []
         self.post_sampling_history = []
+        self.turn_traces = []
+        self.active_turn_trace = None
         self.session_token_usage = {
             "input_tokens": 0,
             "output_tokens": 0,
@@ -2778,6 +2780,7 @@ class QueryEngine:
             self.messages = msgs
             self._sync_message_context()
             metadata = state.get("metadata", {})
+            self.turn_traces = metadata.get("turn_traces", [])
             model_runtime = metadata.get("model_runtime", {}) or {}
             if model_runtime:
                 self.model_provider = self._resolve_model_provider(
@@ -2885,6 +2888,7 @@ class QueryEngine:
                 "mode_overrides": self.mode_thinking_overrides,
             },
             "subagents": self.subagent_registry,
+            "turn_traces": self.turn_traces,
             "team": self.team_manager.export_state(),
             "ultraplan": self.ultraplan_manager.export_state(),
             "coordinator_mode": self.coordinator_mode,
@@ -3945,6 +3949,8 @@ class QueryEngine:
         run_started_at = time.time()
         auto_commit_git_baseline = self._capture_auto_commit_baseline()
         user_msg = create_user_message(user_input, origin="human")
+        if self.active_turn_trace is not None:
+            self.active_turn_trace["userMessageId"] = get_msg_uuid(user_msg)
         self.messages.append(user_msg)
         self._sync_message_context()
 

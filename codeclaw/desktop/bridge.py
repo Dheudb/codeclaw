@@ -1,5 +1,6 @@
 """JSON-lines RPC over stdio. One process owns one project session."""
 import asyncio
+import copy
 import dataclasses
 import json
 import os
@@ -12,7 +13,7 @@ from codeclaw.core.config import load_config, load_config_into_env, save_config,
 from codeclaw.core.model_catalog import public_config, active_connection, save_connection, select_model, discover_models, apply_connection_env
 from codeclaw.security.permissions import ApprovalPolicy
 from codeclaw.desktop.activity import restore_activity
-from codeclaw.protocols.dsml import marker_position
+from codeclaw.desktop.turns import TurnRecorder, conversation_history
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.protocols.mcp_config import MCPConfigStore
@@ -47,7 +48,8 @@ def pipe_reader(fd):
 
 class DesktopBridge:
     def __init__(self, emit, cwd=None):
-        self.emit = emit
+        self.output = emit
+        self.recorder = None
         self.cwd = Path(cwd or os.getcwd()).resolve()
         self.skills = SkillRegistry(self.cwd)
         self.agents = AgentRegistry(self.cwd)
@@ -68,6 +70,13 @@ class DesktopBridge:
         self.mcp_stamp = None
         self.mcp_testing = False
         self.model_signature = None
+
+    def emit(self, event):
+        if self.recorder and self.recorder.accept(event):
+            # Deliver the settled trace before turn_finished clears the UI's
+            # active response index. Snapshots never enter model messages.
+            self.output({"type": "turn_trace", "trace": copy.deepcopy(self.recorder.record)})
+        self.output(event)
 
     def config_stamp(self):
         try:
@@ -147,23 +156,8 @@ class DesktopBridge:
         return items
 
     @staticmethod
-    def history(messages):
-        items = []
-        for message in messages:
-            if message.get("_is_meta") or message.get("role") not in {"user", "assistant"}:
-                continue
-            if message.get("_origin") in {"team", "subagent"}:
-                continue
-            content = message.get("content", "")
-            text = content if isinstance(content, str) else "\n".join(block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text")
-            text = text.split("\n\n<selected-skills>")[0]
-            position = marker_position(text) if message.get("role") == "assistant" else None
-            has_calls = isinstance(content, list) and any(isinstance(block, dict) and block.get("type") == "tool_use" for block in content)
-            if position is not None and not has_calls:
-                text = text[:position].rstrip() + "\n\n上次回复中的工具调用未执行，请重新发送任务。"
-            if text.strip():
-                items.append({"role": message["role"], "text": text})
-        return items
+    def history(messages, traces=()):
+        return conversation_history(messages, traces)
 
     async def ask(self, kind, payload):
         if kind in {"permission", "plan_approval"} and self.approval_policy.mode == "full":
@@ -259,10 +253,14 @@ class DesktopBridge:
                 await engine.mcp_bridge.cleanup()
 
     async def turn(self, text, selected_skills, mode):
+        self.recorder = TurnRecorder()
+        self.emit({"type": "turn_started"})
         try:
             # Validate all selections before creating a turn or emitting loaded events.
             selections = [(name, self.skills.read(name)) for name in selected_skills]
             engine = await self.ensure_engine()
+            engine.turn_traces.append(self.recorder.record)
+            engine.active_turn_trace = self.recorder.record
             engine.set_mode(mode)
             if selections:
                 text += "\n\n<selected-skills>\n" + "\n\n".join(body for _, body in selections) + "\n</selected-skills>"
@@ -280,6 +278,10 @@ class DesktopBridge:
             self.emit({"type": "turn_error", "message": str(exc)})
         finally:
             self.emit({"type": "turn_finished"})
+            if self.engine:
+                self.engine.active_turn_trace = None
+                self.engine.persist_session_state()
+            self.recorder = None
 
     async def dispatch(self, method, params):
         if method == "config.get":
@@ -345,7 +347,8 @@ class DesktopBridge:
                 raw = json.loads((self.cwd / ".codeclaw" / "sessions" / (sid + ".json")).read_text(encoding="utf-8"))
                 messages = raw if isinstance(raw, list) else raw.get("messages", [])
             activity, workers = restore_activity(raw, self.cwd)
-            return {"project": str(self.cwd), "persistedId": sid, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages), "activity": activity, "workers": workers}
+            traces = raw.get("metadata", {}).get("turn_traces", []) if isinstance(raw, dict) else []
+            return {"project": str(self.cwd), "persistedId": sid, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages, traces), "activity": activity, "workers": workers}
         if method == "capabilities.list":
             return self.capabilities()
         if method == "capabilities.directory":

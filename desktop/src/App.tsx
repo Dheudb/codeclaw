@@ -29,6 +29,7 @@ import McpDialog from "./McpDialog";
 import SessionSidebar from "./SessionSidebar";
 import { CatalogPreferences } from "./catalog-preferences";
 import PanelResizer from "./PanelResizer";
+import TurnProcess from "./TurnProcess";
 import { clampPanelWidth, DEFAULT_PANEL_WIDTH } from "./panel-width";
 
 const basename = (value: string) =>
@@ -474,18 +475,19 @@ export default function App() {
                           </span>
                         )}
                     </div>
+                    {message.trace && <TurnProcess trace={message.trace} />}
                     <div className="markdown">
                       {message.text ? (
                         <Markdown text={message.text} />
-                      ) : active.busy ? (
+                      ) : active.busy && index === active.streamIndex ? (
                         <div className="thinking">
                           <span />
                           <span />
                           <span />
                         </div>
-                      ) : (
+                      ) : !message.trace ? (
                         <span className="muted">此次任务未返回文本。</span>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 </article>

@@ -1733,3 +1733,19 @@ body.panel-resizing, body.panel-resizing * { cursor: col-resize !important; user
     scroll-behavior: auto !important;
   }
 }
+
+.turn-process { margin: 2px 0 18px; min-width: 0; }
+.turn-process > summary { display: flex; align-items: center; gap: 7px; padding: 8px 0; color: var(--text-muted, #8a8c83); font-size: 13px; cursor: pointer; list-style: none; border-bottom: 1px solid var(--border, #e8e9e2); }
+.turn-process > summary::-webkit-details-marker { display: none; }
+.turn-process[open] > summary > svg { transform: rotate(180deg); }
+.turn-step-count { margin-left: auto; font-size: 11px; }
+.turn-process-content { padding: 12px 0 3px; display: grid; gap: 14px; min-width: 0; }
+.turn-commentary { font-size: 14px; line-height: 1.75; }
+.turn-commentary > :first-child { margin-top: 0; }
+.turn-commentary > :last-child { margin-bottom: 0; }
+.turn-tool { color: var(--text-muted, #8a8c83); min-width: 0; font-size: 12px; }
+.turn-tool > summary { display: flex; gap: 8px; align-items: center; cursor: pointer; list-style: none; padding: 4px 0; }
+.turn-tool-status { margin-left: auto; font-size: 11px; }
+.turn-tool-brief { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-tool > summary > svg, .turn-tool-status { flex-shrink: 0; }
+.turn-tool pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow-y: auto; background: #f5f5f1; padding: 10px; border-radius: 8px; font-size: 11px; }

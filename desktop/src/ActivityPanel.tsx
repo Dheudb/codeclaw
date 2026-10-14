@@ -2,8 +2,8 @@ import { useState } from "react";
 import { Activity, ChevronDown } from "lucide-react";
 import type { SessionView, ToolActivity } from "./types";
 
-const statusText: Record<string, string> = { queued: "准备中", running: "执行中", waiting: "等待批准", completed: "已完成", error: "失败", crashed: "异常", cancelled: "已取消", interrupted: "已中断" };
-const names: Record<string, string> = { agent_tool: "分配子代理任务", subagent: "子代理任务", bash_tool: "执行命令", file_read_tool: "读取文件", file_write_tool: "写入文件", file_edit_tool: "编辑文件", grep_tool: "搜索内容", glob_tool: "查找文件", tool_search_tool: "查找工具", web_search_tool: "搜索网页", web_fetch_tool: "读取网页", skill_tool: "加载技能" };
+export const statusText: Record<string, string> = { queued: "准备中", running: "执行中", waiting: "等待批准", completed: "已完成", error: "失败", crashed: "异常", cancelled: "已取消", interrupted: "已中断" };
+export const names: Record<string, string> = { agent_tool: "分配子代理任务", subagent: "子代理任务", bash_tool: "执行命令", file_read_tool: "读取文件", file_write_tool: "写入文件", file_edit_tool: "编辑文件", grep_tool: "搜索内容", glob_tool: "查找文件", tool_search_tool: "查找工具", web_search_tool: "搜索网页", web_fetch_tool: "读取网页", skill_tool: "加载技能" };
 const pending = (tool: ToolActivity) => ["running", "queued", "waiting"].includes(tool.status);
 const clip = (value: string) => value.length > 16000 ? value.slice(0, 16000) + "\n…内容较长，展示前 16000 个字符。" : value;
 const resultPreview = (value: string) => value.includes("\nContent:\n") ? value.slice(value.indexOf("\nContent:\n") + 10) : value;

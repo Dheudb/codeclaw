@@ -49,7 +49,18 @@ export type ModelConfig = {
   connections?: ModelConnection[];
 };
 export type ModelConnection = Omit<ModelConfig, "connections"> & { connectionId: string; connectionName: string; models: string[] };
-export type HistoryItem = { role: "user" | "assistant"; text: string };
+export type TurnTrace = {
+  id: string;
+  status: string;
+  startedAt?: number;
+  finishedAt?: number;
+  elapsedMs?: number;
+  approximate?: boolean;
+  answer?: string;
+  pendingText?: string;
+  steps: ({ kind: "text"; text: string } | { kind: "tool"; tool: ToolActivity })[];
+};
+export type HistoryItem = { role: "user" | "assistant"; text: string; trace?: TurnTrace };
 export type SavedSession = { id: string; title: string; updated: number };
 export type CatalogSession = SavedSession & {
   permissionMode: PermissionMode;

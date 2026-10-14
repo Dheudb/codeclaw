@@ -29,7 +29,7 @@ export function beginTurn(session: SessionView, text: string): SessionView {
     messages: [
       ...session.messages,
       { role: "user", text },
-      { role: "assistant", text: "" },
+      { role: "assistant", text: "", trace: { id: "pending", startedAt: Date.now(), status: "running", steps: [] } },
     ],
   };
 }
@@ -48,6 +48,9 @@ export function applyEvent(
         persistedId: event.sessionId,
         config: { ...session.config, model: event.model },
       };
+    case "turn_trace":
+      return session.streamIndex === null ? session : { ...session, messages: session.messages.map((message, index) =>
+        index === session.streamIndex ? { ...message, trace: event.trace, text: event.trace.answer || event.trace.pendingText || "" } : message) };
     case "text_delta":
     case "final": {
       if (session.streamIndex === null) return session;
@@ -65,11 +68,12 @@ export function applyEvent(
       return { ...session, messages };
     }
     case "turn_finished":
-      return { ...session, busy: false, streamIndex: null };
+      return { ...session, busy: false, streamIndex: null, messages: finishTrace(session, "completed") };
     case "turn_cancelled":
       return {
         ...session,
         busy: false,
+        messages: finishTrace(session, "cancelled"),
         error: "任务已停止，已收到的内容保留。",
         interactions: [],
         tools: settleTools(session, "cancelled"),
@@ -80,8 +84,8 @@ export function applyEvent(
         ...session,
         busy: false,
         streamIndex: null,
-        messages: session.messages.filter((message, index) =>
-          index !== session.streamIndex || !!message.text.trim()),
+        messages: finishTrace(session, event.type === "engine_exit" ? "interrupted" : "error").filter((message, index) =>
+          index !== session.streamIndex || !!message.text.trim() || !!message.trace?.steps.length || !!message.trace && message.trace.id !== "pending"),
         error: (event.message || "引擎发生错误").replace(/\[\/?bold red\]/g, ""),
         interactions: [],
         tools: settleTools(session, "interrupted", event.type === "engine_exit"),
@@ -155,6 +159,10 @@ export function applyEvent(
 function upsertTool(tools: SessionView["tools"], value: SessionView["tools"][number]) {
   const previous = tools.find((tool) => tool.id === value.id);
   return (previous ? tools.map((tool) => tool.id === value.id ? { ...tool, ...value } : tool) : [...tools, value]).slice(-200);
+}
+function finishTrace(session: SessionView, status: string) {
+  return session.messages.map((message, index) => index === session.streamIndex && message.trace?.status === "running"
+    ? { ...message, trace: { ...message.trace, status, finishedAt: Date.now(), elapsedMs: Date.now() - (message.trace.startedAt || Date.now()) } } : message);
 }
 function settleTools(session: SessionView, status: string, includeChildren = true) {
   return session.tools.map((tool) => (includeChildren || !tool.agentId) && ["running", "queued", "waiting"].includes(tool.status)

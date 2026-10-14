@@ -142,3 +142,17 @@ test("only the resolved approval changes its activity state", async () => {
   session = applyEvent(session, { session: "one", type: "interaction_resolved", requestId: "a" });
   assert.deepEqual(session.tools.map((tool) => tool.status), ["running", "waiting"]);
 });
+
+test("settled turn traces survive final replacement and remain isolated per question", async () => {
+  const { createSession, beginTurn, applyEvent } = await state;
+  let session = beginTurn(createSession(initial), "first");
+  session = applyEvent(session, { session: "one", type: "text_delta", text: "working" });
+  const trace = { id: "first", status: "completed", elapsedMs: 8000, steps: [{ kind: "text", text: "working" }], answer: "done" };
+  session = applyEvent(session, { session: "one", type: "turn_trace", trace });
+  session = applyEvent(session, { session: "one", type: "final", text: "done" });
+  session = applyEvent(session, { session: "one", type: "turn_finished" });
+  assert.equal(session.messages[1].trace.elapsedMs, 8000);
+  session = beginTurn(session, "second");
+  assert.deepEqual(session.messages[1].trace, trace);
+  assert.deepEqual(session.messages[3].trace.steps, []);
+});
