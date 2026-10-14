@@ -13,7 +13,8 @@ import {
   Activity,
   X,
 } from "lucide-react";
-import type { SessionView, Skill } from "./types";
+import type { SessionView, Skill, FileChange } from "./types";
+import ChangesPanel from "./ChangesPanel";
 import Markdown from "./Markdown";
 import CapabilityGuide from "./CapabilityGuide";
 import ActivityPanel from "./ActivityPanel";
@@ -26,6 +27,7 @@ export default function CapabilityPanel({
   refresh,
   update,
   onError,
+  onOpenFile,
 }: {
   session?: SessionView;
   tab: string;
@@ -34,15 +36,11 @@ export default function CapabilityPanel({
   refresh: () => Promise<void>;
   update: (patch: Partial<SessionView>) => void;
   onError: (e: unknown) => void;
+  onOpenFile: (path: string, change?: FileChange) => void;
 }) {
   const [preview, setPreview] = useState<{ name: string; text: string; kind?: "agent" } | null>(
     null,
   );
-  const [changes, setChanges] = useState<{
-    status: string;
-    diff: string;
-  } | null>(null);
-  const [loading, setLoading] = useState(false);
   const [guide, setGuide] = useState<"skills" | "agents" | null>(null);
   async function importDirectory(kind: string) {
     try {
@@ -60,16 +58,6 @@ export default function CapabilityPanel({
       });
     } catch (e) {
       onError(e);
-    }
-  }
-  async function loadChanges() {
-    setLoading(true);
-    try {
-      setChanges(await invoke("changes"));
-    } catch (e) {
-      onError(e);
-    } finally {
-      setLoading(false);
     }
   }
   const active =
@@ -350,49 +338,7 @@ export default function CapabilityPanel({
           {tab === "activity" && (
             <ActivityPanel session={session} />
           )}
-          {tab === "changes" && (
-            <>
-              <div className="panel-title">
-                <div>
-                  <h3>工作区变更</h3>
-                  <p>Git 状态与当前差异</p>
-                </div>
-                <button
-                  aria-label="刷新变更"
-                  className="icon-button"
-                  disabled={loading}
-                  onClick={loadChanges}
-                >
-                  <RefreshCw size={15} />
-                </button>
-              </div>
-              <button
-                className="import-button"
-                disabled={loading}
-                onClick={loadChanges}
-              >
-                {loading ? "读取中…" : "读取 Git 变更"}
-              </button>
-              <div className="panel-scroll">
-                {changes ? (
-                  <>
-                    <pre className="git-status">
-                      {changes.status || "没有变更，或当前目录不是 Git 仓库。"}
-                    </pre>
-                    <pre className="diff-view">{changes.diff}</pre>
-                    <p className="fine-print">
-                      Diff 展示已跟踪文件；新文件列在状态中。
-                    </p>
-                  </>
-                ) : (
-                  <div className="instruction-empty">
-                    <FileDiff size={26} />
-                    <p>读取项目当前变更，审阅代理修改。</p>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
+          {tab === "changes" && <ChangesPanel key={session.id} session={session} invoke={invoke} onOpen={onOpenFile} />}
         </>
       )}
       {guide && session && <CapabilityGuide kind={guide} session={session} invoke={invoke} update={update} close={() => setGuide(null)} />}

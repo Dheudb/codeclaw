@@ -20,7 +20,7 @@ import {
   X,
   Store,
 } from "lucide-react";
-import type { SessionView, ModelConfig, SessionCatalog, PermissionMode } from "./types";
+import type { SessionView, ModelConfig, SessionCatalog, PermissionMode, FileChange } from "./types";
 import { applyEvent, beginTurn, createSession } from "./state";
 import CapabilityPanel from "./CapabilityPanel";
 import { InteractionCard, SettingsDialog } from "./Dialogs";
@@ -31,6 +31,8 @@ import { CatalogPreferences } from "./catalog-preferences";
 import PanelResizer from "./PanelResizer";
 import TurnProcess from "./TurnProcess";
 import SkillInput from "./SkillInput";
+import FileChanges, { relativeFile } from "./FileChanges";
+import FilePreview from "./FilePreview";
 import { clampPanelWidth, DEFAULT_PANEL_WIDTH } from "./panel-width";
 
 const basename = (value: string) =>
@@ -54,6 +56,7 @@ export default function App() {
   const [opening, setOpening] = useState(true);
   const [notice, setNotice] = useState("");
   const [buildId, setBuildId] = useState("");
+  const [filePreview, setFilePreview] = useState<{ path: string; change?: FileChange }>();
   const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const navigation = useRef(0);
@@ -118,7 +121,13 @@ export default function App() {
   }, [active?.messages, active?.interactions]);
   useEffect(() => {
     input.current?.focus();
+    setFilePreview(undefined);
   }, [activeId]);
+  function openFile(path: string, change?: FileChange) {
+    if (!active) return;
+    change ||= active.fileChanges?.find((file) => file.path === path || relativeFile(file.path, active.project) === path.replace(/^\.[\\/]/, ""));
+    setFilePreview({ path, change });
+  }
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
@@ -479,7 +488,7 @@ export default function App() {
                     {message.trace && <TurnProcess trace={message.trace} />}
                     <div className="markdown">
                       {message.text ? (
-                        <Markdown text={message.text} />
+                        <Markdown text={message.text} onOpenFile={openFile} />
                       ) : active.busy && index === active.streamIndex ? (
                         <div className="thinking">
                           <span />
@@ -490,6 +499,7 @@ export default function App() {
                         <span className="muted">此次任务未返回文本。</span>
                       ) : null}
                     </div>
+                    {!!message.trace?.files?.length && <FileChanges files={message.trace.files} project={active.project} onOpen={openFile} />}
                   </div>
                 </article>
               ))}
@@ -639,6 +649,7 @@ export default function App() {
         <PanelResizer width={clampPanelWidth(panelWidth, viewport)} viewport={viewport} change={setPanelWidth}
           save={(inspectorWidth) => { void window.codeclaw.invoke("layout.save", { inspectorWidth }).catch(onError); }} />
         <CapabilityPanel
+            onOpenFile={openFile}
           key={activeId || "empty"}
           session={active}
           tab={panelTab}
@@ -650,6 +661,9 @@ export default function App() {
         />
         </div>
       )}
+      {filePreview && active && <FilePreview key={activeId + filePreview.path} sessionId={activeId} project={active.project}
+        version={active.fileChanges?.find((file) => file.path === (filePreview.change?.path || filePreview.path) || relativeFile(file.path, active.project) === filePreview.path)?.updatedAt}
+        path={filePreview.path} change={filePreview.change} close={() => setFilePreview(undefined)} onOpen={openFile} />}
       {settingsOpen && (
         <SettingsDialog
           key={activeId}

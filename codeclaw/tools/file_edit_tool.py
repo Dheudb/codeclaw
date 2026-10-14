@@ -4,6 +4,7 @@ import re
 from pydantic import BaseModel, Field
 from codeclaw.tools.base import BaseAgenticTool
 from codeclaw.context.tool_results import build_tool_result
+from codeclaw.features.file_changes import notify_change, read_snapshot
 
 class FileEditToolInput(BaseModel):
     file_path: str = Field(..., description="The absolute path to the file to modify")
@@ -200,6 +201,7 @@ class FileEditTool(BaseAgenticTool):
                     f.write(new_string)
                 created_snapshot = cache.record_write(abs_path) if cache is not None else None
                 self.context.setdefault("read_file_state", {})[abs_path] = True
+                notify_change(self.context, abs_path, "", read_snapshot(abs_path), "create")
                 if tracker is not None:
                     tracker.record_file_change(
                         path=abs_path,
@@ -349,6 +351,7 @@ class FileEditTool(BaseAgenticTool):
                 
             # Keep read state fresh since we're the ones modifying it
             self.context.setdefault("read_file_state", {})[abs_path] = True
+            notify_change(self.context, abs_path, content, read_snapshot(abs_path), "edit")
             if tracker is not None:
                     tracker.record_file_change(
                     path=abs_path,

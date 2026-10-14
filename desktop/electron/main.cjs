@@ -22,6 +22,7 @@ const engineMethods = new Set([
   "respond",
   "stop",
   "changes",
+  "files.read",
   "capabilities.list",
   "capabilities.toggle",
   "skills.read",

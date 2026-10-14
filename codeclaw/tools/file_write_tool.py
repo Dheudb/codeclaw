@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 from codeclaw.context.tool_results import build_tool_result
 from codeclaw.tools.base import BaseAgenticTool
+from codeclaw.features.file_changes import notify_change, read_snapshot
 
 
 class FileWriteToolInput(BaseModel):
@@ -82,11 +83,13 @@ class FileWriteTool(BaseAgenticTool):
             before_snapshot = cache.snapshot(abs_path) if cache is not None else None
 
         def _perform_write():
+            before_text = read_snapshot(abs_path) if os.path.isfile(abs_path) else ""
             os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
             with open(abs_path, "w", encoding="utf-8") as f:
                 f.write(content)
             after_snapshot = cache.record_write(abs_path) if cache is not None else None
             self.context.setdefault("read_file_state", {})[abs_path] = True
+            notify_change(self.context, abs_path, before_text, read_snapshot(abs_path), operation)
             if tracker is not None:
                 tracker.record_file_change(
                     path=abs_path,

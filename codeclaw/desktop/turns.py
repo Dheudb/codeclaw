@@ -6,13 +6,16 @@ import uuid
 
 from codeclaw.desktop.activity import timestamp, transcript_activity
 from codeclaw.protocols.dsml import marker_position
+from codeclaw.features.file_changes import describe_change, legacy_changes
+import os
 
 
 class TurnRecorder:
     def __init__(self):
         self.clock = time.monotonic()
+        self.baselines = {}
         self.record = {"id": str(uuid.uuid4()), "startedAt": int(time.time() * 1000),
-                       "status": "running", "steps": [], "pendingText": "", "answer": ""}
+                       "status": "running", "steps": [], "pendingText": "", "answer": "", "files": []}
 
     def flush(self):
         if self.record["pendingText"].strip():
@@ -22,6 +25,14 @@ class TurnRecorder:
     def accept(self, event):
         kind = event.get("type")
         record = self.record
+        if kind == "file_changed":
+            change = event["change"]
+            identity = os.path.normcase(change["path"])
+            if identity not in self.baselines: self.baselines[identity] = event.get("before")
+            previous = next((item for item in record["files"] if os.path.normcase(item["path"]) == identity), None)
+            change = describe_change(change["path"], self.baselines[identity], event.get("after"), (previous or change)["operation"])
+            record["files"] = [item for item in record["files"] if os.path.normcase(item["path"]) != identity] + [change]
+            return True
         if kind == "text_delta":
             record["pendingText"] += event.get("text", "")
             return False
@@ -141,6 +152,8 @@ def conversation_history(messages, traces=()):
                 if not has_calls:
                     trace["finishedAt"] = timestamp(final)
         if answer.strip() or trace:
+            if trace and "files" not in trace:
+                trace["files"] = legacy_changes([step["tool"] for step in trace["steps"] if step.get("kind") == "tool"], os.getcwd())
             items.append({"role": "assistant", "text": answer, **({"trace": trace} if trace else {})})
 
     for message in messages:

@@ -14,6 +14,7 @@ from codeclaw.core.model_catalog import public_config, active_connection, save_c
 from codeclaw.security.permissions import ApprovalPolicy
 from codeclaw.desktop.activity import restore_activity
 from codeclaw.desktop.turns import TurnRecorder, conversation_history
+from codeclaw.features.file_changes import legacy_changes, preview_file
 from codeclaw.skills.registry import SkillRegistry
 from codeclaw.agents.registry import AgentRegistry
 from codeclaw.protocols.mcp_config import MCPConfigStore
@@ -70,12 +71,22 @@ class DesktopBridge:
         self.mcp_stamp = None
         self.mcp_testing = False
         self.model_signature = None
+        self.file_changes = []
 
     def emit(self, event):
         if self.recorder and self.recorder.accept(event):
             # Deliver the settled trace before turn_finished clears the UI's
             # active response index. Snapshots never enter model messages.
             self.output({"type": "turn_trace", "trace": copy.deepcopy(self.recorder.record)})
+        if event.get("type") == "file_changed":
+            change = event["change"]
+            if self.recorder:
+                change = next(item for item in self.recorder.record["files"] if os.path.normcase(item["path"]) == os.path.normcase(change["path"]))
+            self.file_changes = ([change] + [item for item in self.file_changes if os.path.normcase(item["path"]) != os.path.normcase(change["path"])])[:100]
+            if self.engine:
+                self.engine.tool_context["file_changes"] = self.file_changes
+                self.engine.persist_session_state()
+            event = {"type": "file_changed", "change": change}
         self.output(event)
 
     def config_stamp(self):
@@ -347,8 +358,13 @@ class DesktopBridge:
                 raw = json.loads((self.cwd / ".codeclaw" / "sessions" / (sid + ".json")).read_text(encoding="utf-8"))
                 messages = raw if isinstance(raw, list) else raw.get("messages", [])
             activity, workers = restore_activity(raw, self.cwd)
+            saved_changes = raw.get("metadata", {}).get("file_changes", []) if isinstance(raw, dict) else []
+            saved_paths = {os.path.normcase(item["path"]) for item in saved_changes}
+            self.file_changes = saved_changes + [item for item in legacy_changes(activity, self.cwd) if os.path.normcase(item["path"]) not in saved_paths]
             traces = raw.get("metadata", {}).get("turn_traces", []) if isinstance(raw, dict) else []
-            return {"project": str(self.cwd), "persistedId": sid, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages, traces), "activity": activity, "workers": workers}
+            return {"project": str(self.cwd), "persistedId": sid, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages, traces), "activity": activity, "workers": workers, "fileChanges": self.file_changes}
+        if method == "files.read":
+            return preview_file(self.cwd, params.get("path"), self.file_changes)
         if method == "capabilities.list":
             return self.capabilities()
         if method == "capabilities.directory":

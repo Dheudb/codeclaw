@@ -4,6 +4,7 @@ import uuid
 from typing import Optional
 from pydantic import BaseModel, Field
 from codeclaw.tools.base import BaseAgenticTool
+from codeclaw.features.file_changes import notify_change, read_snapshot
 
 
 class NotebookEditToolInput(BaseModel):
@@ -185,12 +186,14 @@ class NotebookEditTool(BaseAgenticTool):
         notebook["cells"] = cells
 
         def _perform_write():
+            before_text = read_snapshot(abs_path)
             with open(abs_path, "w", encoding="utf-8") as f:
                 json.dump(notebook, f, indent=1, ensure_ascii=False)
                 f.write("\n")
             if cache is not None:
                 cache.record_write(abs_path)
             self.context.setdefault("read_file_state", {})[abs_path] = True
+            notify_change(self.context, abs_path, before_text, read_snapshot(abs_path), "edit")
             vm = self.context.get("verification_manager")
             if vm is not None:
                 vm.record_file_modification(abs_path, "notebook_edit")

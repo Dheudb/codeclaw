@@ -40,6 +40,8 @@ export function applyEvent(
 ): SessionView {
   if (event.session !== session.id) return session;
   switch (event.type) {
+    case "file_changed":
+      return { ...session, fileChanges: [event.change, ...(session.fileChanges || []).filter((file) => file.path !== event.change.path)].slice(0, 100) };
     case "permission_mode_changed":
       return ["ask", "full"].includes(event.permissionMode) ? { ...session, permissionMode: event.permissionMode } : session;
     case "session_started":

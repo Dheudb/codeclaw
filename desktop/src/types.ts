@@ -50,6 +50,7 @@ export type ModelConfig = {
 };
 export type ModelConnection = Omit<ModelConfig, "connections"> & { connectionId: string; connectionName: string; models: string[] };
 export type TurnTrace = {
+  files?: FileChange[];
   id: string;
   status: string;
   startedAt?: number;
@@ -90,6 +91,7 @@ export type SessionCatalog = {
   view: { sort: "recent" | "oldest" | "name" | "created" };
 };
 export type InitialSession = {
+  fileChanges?: FileChange[];
   scope?: "project" | "standalone";
   permissionMode?: PermissionMode;
   id: string;
@@ -147,6 +149,11 @@ export type SessionView = InitialSession & {
   draft: string;
 };
 export type PermissionMode = "ask" | "full";
+export type FileChange = {
+  path: string; operation: string; updatedAt: number;
+  added: number | null; removed: number | null; diff: string;
+  statsAvailable: boolean; truncated?: boolean; legacy?: boolean;
+};
 declare global {
   interface Window {
     codeclaw: {

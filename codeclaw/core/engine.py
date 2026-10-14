@@ -2783,6 +2783,7 @@ class QueryEngine:
             self.messages = msgs
             self._sync_message_context()
             metadata = state.get("metadata", {})
+            self.tool_context["file_changes"] = metadata.get("file_changes", [])
             self.tool_context["workspace_moves"] = metadata.get("workspace_moves", [])
             self.turn_traces = metadata.get("turn_traces", [])
             model_runtime = metadata.get("model_runtime", {}) or {}
@@ -2872,6 +2873,7 @@ class QueryEngine:
 
     def _build_session_metadata(self) -> dict:
         return {
+            "file_changes": self.tool_context.get("file_changes", []),
             "workspace_moves": self.tool_context.get("workspace_moves", []),
             "todos": self.todo_manager.export(),
             "plan": self.plan_manager.export(),

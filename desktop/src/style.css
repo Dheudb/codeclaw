@@ -683,6 +683,32 @@ a,
   max-width: 780px;
   margin: auto;
 }
+.file-changes { margin: 18px 0 5px; border: 1px solid #e4e6df; border-radius: 10px; overflow: hidden; background: white; }
+.file-changes > header { display: flex; align-items: center; gap: 12px; padding: 14px; border-bottom: 1px solid #eceee7; color: #7a856d; }
+.file-changes > header > div { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.file-changes strong { font-size: 12px; color: #525b47; font-weight: 500; }
+.file-changes small { font-size: 10px; color: #9aa18f; }
+.file-counts { display: inline-flex; gap: 6px; white-space: nowrap; font-size: 11px; }
+.lines-added { color: #408946; }.lines-removed { color: #c35e50; }
+.changed-file-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; border: 0; border-radius: 0; background: white; padding: 12px 14px; font-size: 12px; text-align: left; }
+.changed-file-row:hover { background: #f5f6f1; }.changed-file-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.show-more-files { display: flex; gap: 6px; align-items: center; background: none; border: 0; padding: 10px 14px; font-size: 11px; color: #879178; }
+.changes-scroll { padding-top: 0 !important; }.changes-scroll .file-changes { margin-top: 0; }
+.git-changes { margin-top: 18px; font-size: 11px; color: #8b957e; }.git-changes > summary { cursor: pointer; margin-bottom: 12px; }
+.inline-file-link { display: inline; border: 0; background: none; padding: 0; font: inherit; color: #b46647; text-decoration: underline; text-decoration-color: #d9bcae; cursor: pointer; }
+.inline-file-link code { color: inherit; }
+.file-preview-overlay { z-index: 100; }
+.dialog.file-preview { width: min(1100px, 92vw); max-width: none; height: min(800px, 90vh); max-height: 90vh; padding: 0; display: flex; flex-direction: column; }
+.file-preview > header { display: flex; align-items: center; gap: 12px; padding: 20px 24px 16px; border-bottom: 1px solid #eceee7; }
+.file-preview > header > div { flex: 1; min-width: 0; }.file-preview h2 { font-size: 16px; margin: 0 0 5px; overflow-wrap: anywhere; }
+.file-preview > header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: #969e8b; }
+.file-preview-tabs { display: flex; align-items: center; gap: 16px; padding: 0 24px; border-bottom: 1px solid #e5e8df; flex-wrap: wrap; }
+.file-preview-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 12px 2px; font-size: 12px; }
+.file-preview-tabs button[aria-selected="true"] { color: #b56a4b; border-bottom-color: #c97454; }.file-preview-tabs small { font-size: 10px; color: #9ba18f; margin-left: auto; }
+.file-preview-body { overflow: auto; flex: 1; min-height: 0; padding: 20px 24px; }.file-preview-body .markdown { font-size: 13px; }
+.file-source, .file-diff { font: 12px/1.8 Consolas, monospace; white-space: pre; margin: 0; tab-size: 4; color: #4b5344; }
+.file-diff > div { min-width: max-content; padding: 0 8px; }.diff-added { background: #eaf6e9; color: #34763b; }.diff-removed { background: #fcece8; color: #a84c3e; }.diff-hunk { color: #668aa8; background: #edf3f8; }
+.preview-limitation { font-size: 11px; color: #999f8f; margin: 0 0 14px; }
 .session-item.dragging { opacity: .45; }
 .session-item[draggable="true"] { cursor: grab; }
 .project-group.drop-target { outline: 2px solid #a7b496; outline-offset: -2px; border-radius: 8px; background: #f0f4eb; }
