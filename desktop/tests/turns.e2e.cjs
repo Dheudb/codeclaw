@@ -83,7 +83,15 @@ async function main() {
     assert.equal(await page.locator(".message.assistant").count(), 4);
     await page.locator(".message.assistant").first().scrollIntoViewIfNeeded();
     fs.mkdirSync(path.join(root, "test-results"), { recursive: true });
-    await page.screenshot({ path: path.join(root, "test-results/turn-process.png") });
+    // Playwright's screenshot waits for a visible compositor in hidden windows.
+    // Electron can wake the renderer and capture without showing the test app.
+    const shot = await app.evaluate(async ({ BrowserWindow }) => {
+      const web = BrowserWindow.getAllWindows()[0].webContents;
+      await web.capturePage(undefined, { stayHidden: true, stayAwake: true });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return (await web.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString("base64");
+    });
+    fs.writeFileSync(path.join(root, "test-results/turn-process.png"), Buffer.from(shot, "base64"));
     assert.deepEqual(errors, []);
     console.log("Turn process E2E passed: live expanded timer, completed collapse, commentary/tool results retained, per-turn isolation, cancellation/error and restart persistence");
   } finally { if (app) await app.close().catch(() => {}); server.closeAllConnections(); server.close(); }
