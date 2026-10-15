@@ -2,8 +2,8 @@ name: Desktop workbench
 permissions:
   contents: read
 on:
-  push:
-  pull_request:
+  # Manual runs only while the account billing lock blocks hosted runners.
+  # Keep local validation available without repeated failure emails on pushes.
   workflow_dispatch:
 jobs:
   engine:

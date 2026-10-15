@@ -90,4 +90,7 @@ npm run test:mcp
 ```
 
 GitHub Actions 验证 Python 3.9/3.12、前端和 Windows 成品，并上传便携包与测试截图。
+目前因 GitHub 账户计费锁定，仅保留手动触发，避免每次推送重复失败通知。
+账户解锁后可在 Actions → Desktop workbench → Run workflow 手动运行；
+如需恢复自动检查，再为 `.github/workflows/desktop.yml` 添加 `push` 和 `pull_request` 触发。
 `desktop/build`、`desktop/release`、虚拟环境、缓存和本地配置不提交 Git。
