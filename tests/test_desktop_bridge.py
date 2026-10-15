@@ -13,6 +13,27 @@ from unittest.mock import patch, AsyncMock, Mock
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_graceful_stop_is_cancelled_and_partial_text_is_retained_for_resume(self):
+        from types import SimpleNamespace
+        end = asyncio.Event()
+        async def submit(text, **kwargs):
+            yield {"type": "text_delta", "text": "PARTIAL_PROGRESS"}
+            await end.wait()
+            yield {"type": "final", "text": "internal abort response"}
+        engine = SimpleNamespace(messages=[], turn_traces=[], set_mode=Mock(), submit_message=submit,
+            tool_context={"subagent_tasks": SimpleNamespace(close=AsyncMock()), "command_sessions": SimpleNamespace(close=AsyncMock())},
+            request_abort=AsyncMock(side_effect=lambda: end.set()), persist_session_state=Mock(), _sync_message_context=Mock())
+        self.bridge.engine = engine
+        self.bridge.ensure_engine = AsyncMock(return_value=engine)
+        self.bridge.turn_task = asyncio.create_task(self.bridge.turn("task", [], "normal"))
+        while not any(event["type"] == "text_delta" for event in self.events): await asyncio.sleep(0)
+        await self.bridge.dispatch("stop", {})
+        self.assertTrue(any(event["type"] == "turn_cancelled" for event in self.events))
+        self.assertFalse(any(event["type"] == "final" for event in self.events))
+        self.assertEqual(engine.turn_traces[-1]["status"], "cancelled")
+        self.assertEqual(engine.turn_traces[-1]["answer"], "PARTIAL_PROGRESS")
+        self.assertEqual(engine.messages[-1]["content"], "PARTIAL_PROGRESS")
+
     async def test_full_access_resolves_approvals_but_keeps_user_questions(self):
         permission = asyncio.create_task(self.bridge.ask("permission", {"request": {"tool_name": "file_write_tool"}}))
         plan = asyncio.create_task(self.bridge.ask("plan_approval", {"content": "plan"}))

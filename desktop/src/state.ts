@@ -17,6 +17,7 @@ export function createSession(initial: InitialSession): SessionView {
     selected: [],
     mode: "normal",
     draft: initial.savedDraft || "",
+    editingId: initial.savedDraftEditId || undefined,
   };
 }
 
@@ -26,6 +27,7 @@ export function beginTurn(session: SessionView, text: string): SessionView {
     busy: true,
     error: "",
     draft: "",
+    editingId: undefined,
     streamIndex: session.messages.length + 1,
     messages: [
       ...session.messages,
@@ -41,6 +43,8 @@ export function applyEvent(
 ): SessionView {
   if (event.session !== session.id) return session;
   switch (event.type) {
+    case "turn_restarted":
+      return beginTurn({ ...session, messages: event.history }, event.text);
     case "command_status":
       return { ...session, commands: { ...session.commands, [event.command.id]: event.command } };
     case "file_changed":
@@ -55,7 +59,8 @@ export function applyEvent(
       };
     case "turn_trace":
       return session.streamIndex === null ? session : { ...session, messages: session.messages.map((message, index) =>
-        index === session.streamIndex ? { ...message, trace: event.trace, text: event.trace.answer || event.trace.pendingText || "" } : message) };
+        index === session.streamIndex ? { ...message, trace: event.trace, text: event.trace.answer || event.trace.pendingText || "" }
+          : index === session.streamIndex! - 1 && event.trace.userMessageId ? { ...message, id: event.trace.userMessageId } : message) };
     case "text_delta":
     case "final": {
       if (session.streamIndex === null) return session;
@@ -79,6 +84,7 @@ export function applyEvent(
         ...session,
         busy: false,
         messages: finishTrace(session, "cancelled"),
+        streamIndex: null,
         error: "任务已停止，已收到的内容保留。",
         interactions: [],
         tools: settleTools(session, "cancelled"),

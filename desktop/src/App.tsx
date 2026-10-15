@@ -19,6 +19,8 @@ import {
   Square,
   X,
   Store,
+  Pencil,
+  Play,
 } from "lucide-react";
 import type { SessionView, ModelConfig, SessionCatalog, PermissionMode, FileChange } from "./types";
 import { applyEvent, beginTurn, createSession } from "./state";
@@ -61,6 +63,8 @@ export default function App() {
   const input = useRef<HTMLTextAreaElement>(null);
   const navigation = useRef(0);
   const active = sessions.find((item) => item.id === activeId);
+  const lastUser = active?.messages.slice().reverse().find((message) => message.role === "user");
+  const paused = !active?.busy && ["cancelled", "interrupted"].includes(active?.messages.at(-1)?.trace?.status || "");
   function receiveCatalog(value: SessionCatalog) {
     setCatalog(preferences.current.receive(value));
   }
@@ -105,10 +109,10 @@ export default function App() {
   }, []);
   useEffect(() => {
     if (!active || opening) return;
-    const id = active.id, draft = active.draft;
-    const timer = setTimeout(() => window.codeclaw.invoke("session.update", { id, patch: { draft } }).catch(onError), 500);
+    const id = active.id, draft = active.draft, draftEditId = active.editingId || "";
+    const timer = setTimeout(() => window.codeclaw.invoke("session.update", { id, patch: { draft, draftEditId } }).catch(onError), 500);
     return () => clearTimeout(timer);
-  }, [activeId, active?.draft, opening]);
+  }, [activeId, active?.draft, active?.editingId, opening]);
   useEffect(() => {
     if (activeId) window.codeclaw.invoke("session.activate", { session: activeId }).catch(onError);
   }, [activeId]);
@@ -171,7 +175,7 @@ export default function App() {
     setNotice("");
     try {
       if (active?.draft && ["project.open", "session.new", "session.open", "session.select", "session.move"].includes(method))
-        await window.codeclaw.invoke("session.update", { id: active.id, patch: { draft: active.draft } });
+        await window.codeclaw.invoke("session.update", { id: active.id, patch: { draft: active.draft, draftEditId: active.editingId || "" } });
       const result = await window.codeclaw.invoke(method, params);
       if (!result) return;
       if (preferenceWrite) setCatalog(preferences.current.finish(preferenceWrite.id, result));
@@ -212,15 +216,21 @@ export default function App() {
   async function refresh() {
     if (active) update({ capabilities: await invoke("capabilities.list") });
   }
-  async function send() {
-    if (opening || modelChanging || permissionChanging || !active || active.busy || !active.draft.trim()) return;
+  function editLastPrompt() {
+    if (!active || active.busy || !lastUser?.id) return;
+    update({ editingId: lastUser.id, draftBeforeEdit: active.draft, draft: lastUser.text });
+    requestAnimationFrame(() => input.current?.focus());
+  }
+  async function send(continuation?: string) {
+    if (opening || modelChanging || permissionChanging || !active || active.busy || !(continuation || active.draft).trim()) return;
     const id = active.id,
-      text = active.draft.trim(),
+      text = (continuation || active.draft).trim(),
       selected = active.selected,
-      mode = active.mode;
+      mode = active.mode,
+      replaceMessageId = continuation ? undefined : active.editingId;
     setSessions((previous) =>
       previous.map((session) =>
-        session.id === id ? beginTurn(session, text) : session,
+        session.id === id ? replaceMessageId ? { ...session, busy: true, error: "" } : beginTurn(session, text) : session,
       ),
     );
     try {
@@ -229,11 +239,12 @@ export default function App() {
         text,
         skills: selected,
         mode,
+        replaceMessageId,
       });
     } catch (error) {
       setSessions((previous) =>
         previous.map((session) =>
-          applyEvent(session, {
+          applyEvent(session.id === id ? { ...session, draft: text, editingId: replaceMessageId } : session, {
             session: id,
             type: "turn_error",
             message: String(error),
@@ -504,6 +515,8 @@ export default function App() {
                       ) : null}
                     </div>
                     {!!message.trace?.files?.length && <FileChanges files={message.trace.files} project={active.project} onOpen={openFile} />}
+                    {message === lastUser && message.id && <button className="edit-prompt-button" aria-label="编辑上一条提示词" title="编辑上一条提示词（空输入框连按两次 Esc）"
+                      disabled={opening || active.busy || !!runningWorkers || !!runningCommands} onClick={editLastPrompt}><Pencil size={13} /></button>}
                   </div>
                 </article>
               ))}
@@ -521,7 +534,7 @@ export default function App() {
           <div ref={bottom} />
         </div>
         <div className="composer-area">
-          {active?.error && (
+          {active?.error && !paused && (
             <div className="session-error" role="alert">
               {active.error}
               <button
@@ -546,7 +559,13 @@ export default function App() {
             </button>
           )}
           {!!runningCommands && !active?.busy && <button className="worker-strip" onClick={() => invoke("stop").catch(onError)}><Square size={13} />{runningCommands} 个后台命令正在运行 · 停止所有后台任务</button>}
+          {paused && !active?.editingId && <div className="paused-actions" role="status"><span>任务已停止，已收到的内容保留。</span>
+            <button disabled={opening || modelChanging || permissionChanging || !!active?.draft.trim()} title={active?.draft.trim() ? "请先发送或清空当前草稿" : "保留上下文，继续未完成的任务"} onClick={() => void send("请从刚才停止的位置继续完成上一项任务。先核对已完成的操作与当前文件状态，避免重复执行；按原任务要求完成并汇报结果。")}><Play size={13} />继续执行</button>
+            {lastUser?.id && <button disabled={opening || !!runningWorkers || !!runningCommands} onClick={editLastPrompt}><Pencil size={13} />编辑提示词</button>}
+          </div>}
           <div className={"composer " + (!active ? "disabled" : "")}>
+            {active?.editingId && <div className="editing-prompt"><span>编辑上一条提示词 · 发送后重新执行，已修改的文件保留</span>
+              <button aria-label="取消编辑提示词" disabled={active.busy} onClick={() => update({ editingId: undefined, draft: active.draftBeforeEdit || "", draftBeforeEdit: undefined })}><X size={13} /></button></div>}
             {active && active.selected.length > 0 && (
               <div className="selected-skills">
                 {active.selected.map((name) => (
@@ -569,7 +588,7 @@ export default function App() {
             )}
             <SkillInput key={activeId} sessionId={activeId} draft={active?.draft || ""}
               selected={active?.selected || []} capabilities={active?.capabilities}
-              disabled={opening || !active || active.busy} inputRef={input} update={update} send={send} />
+              disabled={opening || !active || active.busy} inputRef={input} update={update} send={send} editPrevious={editLastPrompt} />
             <div className="composer-toolbar">
               <div className="composer-options">
                 <select
@@ -623,7 +642,7 @@ export default function App() {
                     className="send-button"
                     aria-label="发送任务"
                     disabled={opening || modelChanging || permissionChanging || !active?.draft.trim()}
-                    onClick={send}
+                    onClick={() => void send()}
                   >
                     <ArrowUp size={19} />
                   </button>

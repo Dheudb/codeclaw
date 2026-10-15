@@ -58,6 +58,7 @@ class DesktopBridge:
         self.agents = AgentRegistry(self.cwd)
         self.engine = None
         self.turn_task = None
+        self.stop_requested = False
         self.pending = {}
         self.pending_kinds = {}
         self.approval_policy = ApprovalPolicy()
@@ -281,16 +282,27 @@ class DesktopBridge:
                 for name, _ in selections:
                     self.emit({"type": "skill_loaded", "name": name})
             async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)})):
+                if self.stop_requested and event.get("type") == "final":
+                    continue
                 if event.get("type") == "final" and str(event.get("text", "")).startswith(("[bold red]API Loop Exception:", "[bold red]System Halt:")):
                     self.emit({"type": "turn_error", "message": re.sub(r"\[/?bold red\]", "", event["text"])})
                     continue
                 self.emit(event)
             self.emit({"type": "sessions_changed", "sessions": self.sessions()})
         except asyncio.CancelledError:
-            self.emit({"type": "turn_cancelled"})
+            self.stop_requested = True
         except Exception as exc:
             self.emit({"type": "turn_error", "message": str(exc)})
         finally:
+            if self.stop_requested:
+                if self.engine and self.recorder.record["pendingText"].strip():
+                    from codeclaw.core.messages import create_assistant_message
+                    partial = self.recorder.record["pendingText"]
+                    from codeclaw.desktop.turns import visible_text
+                    if not self.engine.messages or visible_text(self.engine.messages[-1]) != partial:
+                        self.engine.messages.append(create_assistant_message(partial, stop_reason="interrupted"))
+                        self.engine._sync_message_context()
+                self.emit({"type": "turn_cancelled"})
             self.emit({"type": "turn_finished"})
             if self.engine:
                 self.engine.active_turn_trace = None
@@ -430,6 +442,15 @@ class DesktopBridge:
                 raise ValueError("Message is empty")
             if params.get("mode", "normal") not in {"normal", "plan"}:
                 raise ValueError("Invalid mode")
+            for name in params.get("skills", []):
+                self.skills.read(name)
+            if params.get("replaceMessageId"):
+                self.require_idle()
+                engine = await self.ensure_engine()
+                from codeclaw.desktop.prompt_edit import replace_latest_turn
+                replace_latest_turn(engine, params["replaceMessageId"])
+                self.emit({"type": "turn_restarted", "history": self.history(engine.messages, engine.turn_traces), "text": text})
+            self.stop_requested = False
             self.turn_task = asyncio.create_task(self.turn(text, params.get("skills", []), params.get("mode", "normal")))
             return {"started": True}
         if method == "respond":
@@ -439,6 +460,7 @@ class DesktopBridge:
             future.set_result(params.get("answer"))
             return True
         if method == "stop":
+            self.stop_requested = self.busy()
             for future in self.pending.values():
                 future.cancel()
             if self.engine:

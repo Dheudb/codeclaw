@@ -1050,18 +1050,14 @@ class QueryEngine:
         Only used for native Anthropic API; third-party proxies (MiniMax etc.)
         get a plain string to avoid incompatible parameters.
         """
-        boundary = self.context_builder.DYNAMIC_BOUNDARY
         if self.model_provider != "anthropic" or not self._is_native_anthropic():
             return system_prompt
 
-        static, dynamic = self.context_builder.generate_system_prompt_split(
-            session_summary=self.plan_manager.render_prompt_summary(),
-            todo_summary=self.todo_manager.render_prompt_summary(),
-            memory_summary=self.get_memory_summary(),
-            structured_output_summary=self.structured_output_manager.render_prompt_summary(),
-            tool_prompt_summary=self._build_tool_prompt_summary(),
-            mcp_instructions=self._build_mcp_instructions(),
-        )
+        # Cache the actual request prompt, retaining model/fallback metadata and role addons.
+        static, separator, dynamic = system_prompt.partition("\n\n# Environment\n")
+        if not separator:
+            return [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+        dynamic = "# Environment\n" + dynamic
         blocks = [
             {
                 "type": "text",
@@ -1860,6 +1856,7 @@ class QueryEngine:
         self.refresh_memory_files()
         effective_thinking_config = self._resolve_thinking_config()
         system_prompt = self.context_builder.generate_system_prompt(
+            model_name=self.primary_model,
             session_summary=self.plan_manager.render_prompt_summary(),
             todo_summary=self.todo_manager.render_prompt_summary(),
             memory_summary=self.get_memory_summary(),
@@ -4068,6 +4065,7 @@ class QueryEngine:
                 loaded_memory_files = self.refresh_memory_files()
                 effective_thinking_config = self._resolve_thinking_config()
                 system_prompt = self.context_builder.generate_system_prompt(
+                    model_name=loop_state["active_model"],
                     session_summary=self.plan_manager.render_prompt_summary(),
                     todo_summary=self.todo_manager.render_prompt_summary(),
                     memory_summary=self.get_memory_summary(),

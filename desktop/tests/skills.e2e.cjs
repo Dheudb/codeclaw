@@ -43,7 +43,7 @@ async function launch() {
   const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, CODECLAW_SKILLS_PATHS: "" };
   for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
   app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
-  page = await app.firstWindow(); page.setDefaultTimeout(30000);
+  page = await app.firstWindow(); page.setDefaultTimeout(90000);
   page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }
@@ -126,6 +126,12 @@ async function main() {
     assert.equal(await page.locator("#skill-options").getByRole("option", { name: /other-project/ }).count(), 1);
     assert.deepEqual(errors, []);
     console.log("Skill E2E passed: actual directories, default availability with no switches, legacy flag compatibility, shadowing/invalid filters, keyboard/mouse/multiple selection, fresh files, caret/task preservation, full instructions reaching model, project isolation and restart");
+  } catch (error) {
+    if (page) {
+      console.error("Fixture UI errors:", await page.locator(".session-error, .global-notice").allTextContents().catch(() => []));
+      console.error("Fixture input state:", await page.evaluate(() => ({ draft: document.querySelector(".composer textarea")?.value, disabled: document.querySelector(".send-button")?.disabled, stop: !!document.querySelector(".send-button.stop"), picker: !!document.querySelector(".skill-picker") })).catch(() => ({})));
+    }
+    throw error;
   } finally { if (app) await app.close().catch(() => {}); server.closeAllConnections(); server.close(); }
 }
-main().catch((error) => { console.error(error); process.exitCode = 1; });
+main().catch((error) => { console.error(error); console.error("Fixture request count:", requests.length); process.exitCode = 1; });

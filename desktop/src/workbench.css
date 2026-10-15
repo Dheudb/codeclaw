@@ -160,6 +160,14 @@ a, .markdown-link, .inline-file-link { color: #4d627c; text-decoration-color: #b
 .changed-file-row { padding: 12px 16px; }
 .changed-file-row:hover { background: var(--surface-soft); }
 .panel-resizer:hover, .panel-resizer:focus-visible { background: #777b8124; }
+.message.user .message-body { position: relative; }
+.edit-prompt-button { position: absolute; right: 0; bottom: -27px; padding: 4px 6px; border: 0; background: transparent; color: var(--text-muted); opacity: 0; }
+.message.user:hover .edit-prompt-button, .edit-prompt-button:focus-visible { opacity: 1; }
+.paused-actions { max-width: var(--chat-width); margin: 0 auto 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-muted); font-size: 12px; }
+.paused-actions > span { margin-right: auto; }
+.paused-actions button { font-size: 12px; padding: 6px 9px; border-color: var(--line); }
+.editing-prompt { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 16px 0; color: var(--text-secondary); font-size: 12px; }
+.editing-prompt button { background: transparent; border: 0; padding: 4px; }
 @media (max-width: 1200px) {
   .conversation { padding: 0 24px; }
   .composer-area { padding-left: 24px; padding-right: 24px; }

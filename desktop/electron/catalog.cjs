@@ -77,7 +77,7 @@ class SessionCatalog {
             scope: item.scope === "standalone" ? "standalone" : "project",
             title: item.title || text.split("\n")[0].slice(0, 80) || "新会话",
             updated: stat.mtimeMs, created: item.created || stat.birthtimeMs || stat.mtimeMs,
-            pinned: !!item.pinned, archived: !!item.archived, draft: item.draft || "", permissionMode: item.permissionMode === "full" ? "full" : "ask" }];
+            pinned: !!item.pinned, archived: !!item.archived, draft: item.draft || "", draftEditId: item.draftEditId || "", permissionMode: item.permissionMode === "full" ? "full" : "ask" }];
         } catch (error) {
           // Keep an unreadable record visible and deletable instead of hiding it.
           return [{ id: sessionKey(project, sessionId), sessionId, project,
@@ -228,6 +228,10 @@ class SessionCatalog {
     }
     for (const field of ["pinned", "archived"]) if (field in patch) next[field] = !!patch[field];
     if ("draft" in patch) next.draft = String(patch.draft || "");
+    if ("draftEditId" in patch) {
+      if (patch.draftEditId && !validId(patch.draftEditId)) throw new Error("编辑目标无效");
+      next.draftEditId = patch.draftEditId || "";
+    }
     if ("permissionMode" in patch) {
       if (!["ask", "full"].includes(patch.permissionMode)) throw new Error("请选择请求批准或完全访问");
       next.permissionMode = patch.permissionMode;

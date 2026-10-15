@@ -85,6 +85,9 @@ class TurnRecorder:
             record["pendingText"] = ""
         elif kind in {"turn_finished", "turn_error", "turn_cancelled"}:
             if kind != "turn_finished":
+                if kind == "turn_cancelled" and record["pendingText"].strip():
+                    record["answer"] = record["pendingText"]
+                    record["pendingText"] = ""
                 self.flush()
                 record["status"] = "cancelled" if kind == "turn_cancelled" else "error"
             elif record["status"] == "running":
@@ -165,7 +168,7 @@ def conversation_history(messages, traces=()):
         if human and visible_text(message).strip():
             finish()
             group, user = [], message
-            items.append({"role": "user", "text": visible_text(message)})
+            items.append({"role": "user", "text": visible_text(message), **({"id": message["_uuid"]} if message.get("_uuid") else {})})
         elif message.get("role") in {"assistant", "user"}:
             group.append(message)
     finish()

@@ -23,6 +23,7 @@ function server(name, key, models) {
       const body = JSON.parse(raw); requests.push({ server: name, body });
       const last = [...body.messages].reverse().find((message) => message.role === "user")?.content || "";
       if (!body.stream) { res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ id: "memory", choices: [{ message: { role: "assistant", content: "memory" } }] })); return; }
+      assert(body.messages.some((message) => message.role === "system" && message.content.includes("Configured request model ID: " + body.model)), "Prompt identity metadata must follow the actual requested model on every switch");
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "test", model: body.model, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
       chunk({ role: "assistant", content: "模型回复：" + body.model });

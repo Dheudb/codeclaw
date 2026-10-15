@@ -90,7 +90,7 @@ Examples of risky actions that warrant user confirmation:
 - Hard-to-reverse operations: force-pushing, git reset --hard, amending published commits, removing or downgrading packages
 - Actions visible to others or that affect shared state: pushing code, creating/closing/commenting on PRs or issues, sending messages, modifying shared infrastructure
 
-A user approving an action (like a git push) once does NOT mean that they approve it in all contexts, so unless actions are authorized in advance in durable instructions like CLAUDE.md files, always confirm first. Authorization stands for the scope specified, not beyond. Match the scope of your actions to what was actually requested.
+A user approving an action (like a git push) once does NOT mean that they approve it in all contexts, so unless actions are authorized in advance in durable project instruction files, always confirm first. Authorization stands for the scope specified, not beyond. Match the scope of your actions to what was actually requested.
 
 Uploading content to third-party web tools (diagram renderers, pastebins, gists) publishes it — consider whether it could be sensitive before sending, since it may be cached or indexed even if later deleted.
 
@@ -248,7 +248,8 @@ class ContextBuilder:
             f"Today's date: {datetime.now().strftime('%Y-%m-%d')}",
         ]
         if model_name:
-            env_items.append(f"You are powered by the model {model_name}.")
+            env_items.append(f"Configured request model ID: {model_name}")
+            env_items.append("When asked about the underlying model, report the configured request model ID and distinguish it from CodeClaw, the application. This ID may be a gateway alias: it does not verify the actual backend model, developer, or version. Do not invent a backend identity or infer one from the tool schemas, project instructions, or previous assistant self-descriptions.")
             cutoff = self._get_knowledge_cutoff(model_name)
             if cutoff:
                 env_items.append(f"Assistant knowledge cutoff is {cutoff}.")
@@ -451,7 +452,7 @@ class ContextBuilder:
 
         project_instructions = self._load_project_instructions()
         if project_instructions:
-            dynamic_sections.append(f"# Project Instructions (from CLAUDE.md)\n{project_instructions}")
+            dynamic_sections.append(f"# Project Instructions\n{project_instructions}")
 
         if mcp_instructions:
             dynamic_sections.append(mcp_instructions)

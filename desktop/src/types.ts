@@ -50,6 +50,7 @@ export type ModelConfig = {
 };
 export type ModelConnection = Omit<ModelConfig, "connections"> & { connectionId: string; connectionName: string; models: string[] };
 export type TurnTrace = {
+  userMessageId?: string;
   files?: FileChange[];
   id: string;
   status: string;
@@ -61,7 +62,7 @@ export type TurnTrace = {
   pendingText?: string;
   steps: ({ kind: "text"; text: string } | { kind: "tool"; tool: ToolActivity })[];
 };
-export type HistoryItem = { role: "user" | "assistant"; text: string; trace?: TurnTrace };
+export type HistoryItem = { id?: string; role: "user" | "assistant"; text: string; trace?: TurnTrace };
 export type SavedSession = { id: string; title: string; updated: number };
 export type CatalogSession = SavedSession & {
   scope?: "project" | "standalone";
@@ -99,6 +100,7 @@ export type InitialSession = {
   project: string;
   title?: string;
   savedDraft?: string;
+  savedDraftEditId?: string;
   config: ModelConfig;
   capabilities: Capabilities;
   sessions: SavedSession[];
@@ -148,6 +150,8 @@ export type SessionView = InitialSession & {
   selected: string[];
   mode: string;
   draft: string;
+  editingId?: string;
+  draftBeforeEdit?: string;
 };
 export type PermissionMode = "ask" | "full";
 export type FileChange = {

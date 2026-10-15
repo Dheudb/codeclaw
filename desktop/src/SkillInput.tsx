@@ -4,11 +4,12 @@ import { Check, Puzzle } from "lucide-react";
 import type { Capabilities, Skill } from "./types";
 import { removeSkillMention, skillMention, skillScope } from "./skill-mention";
 
-export default function SkillInput({ sessionId, draft, selected, capabilities, disabled, inputRef, update, send }: {
+export default function SkillInput({ sessionId, draft, selected, capabilities, disabled, inputRef, update, send, editPrevious }: {
   sessionId: string; draft: string; selected: string[]; capabilities?: Capabilities; disabled: boolean;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   update: (patch: { draft?: string; selected?: string[]; capabilities?: Capabilities }) => void;
   send: () => void;
+  editPrevious?: () => void;
 }) {
   const [caret, setCaret] = useState(draft.length);
   const [focused, setFocused] = useState(false);
@@ -17,6 +18,7 @@ export default function SkillInput({ sessionId, draft, selected, capabilities, d
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const list = useRef<HTMLDivElement>(null);
+  const escapeAt = useRef(0);
   const mention = skillMention(draft, caret);
   const signature = JSON.stringify([draft, caret]);
   const open = !!mention && focused && !disabled && dismissed !== signature;
@@ -74,6 +76,12 @@ export default function SkillInput({ sessionId, draft, selected, capabilities, d
       onChange={(event) => { setCaret(event.target.selectionStart); update({ draft: event.target.value }); }}
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+        if (!open && event.key === "Escape" && !draft.trim()) {
+          event.preventDefault();
+          if (Date.now() - escapeAt.current < 800) { escapeAt.current = 0; editPrevious?.(); }
+          else escapeAt.current = Date.now();
+          return;
+        }
         if (open) {
           if (event.key === "Escape") { event.preventDefault(); setDismissed(signature); return; }
           if (["ArrowDown", "ArrowUp"].includes(event.key) && options.length) {

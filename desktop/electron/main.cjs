@@ -207,7 +207,7 @@ async function createSession(project, resumeId) {
       sessionId: resumeId,
       permissionMode: row.permissionMode,
     });
-    return { id, ...initial, scope: row.scope, title: row.title, savedDraft: row.draft || "" };
+    return { id, ...initial, scope: row.scope, title: row.title, savedDraft: row.draft || "", savedDraftEditId: row.draftEditId || "" };
   } catch (error) {
     sessions.delete(id);
     await transport.close();
@@ -484,9 +484,12 @@ async function invoke(method, params) {
     if (source.busy) throw new Error("此会话已有运行中的任务");
     source.busy = true;
     const row = catalog.find(params.session);
-    catalog.update(row, { draft: "", ...(row.title === "新会话" ? { title: String(params.text || "").split("\n")[0].slice(0, 80) || "新会话" } : {}) });
-    broadcastCatalog();
-    try { return await source.transport.request(method, payload); }
+    try {
+      const result = await source.transport.request(method, payload);
+      catalog.update(row, { draft: "", draftEditId: "", ...(row.title === "新会话" ? { title: String(params.text || "").split("\n")[0].slice(0, 80) || "新会话" } : {}) });
+      broadcastCatalog();
+      return result;
+    }
     catch (error) { source.busy = false; throw error; }
   }
   return source.transport.request(method, payload);
