@@ -142,7 +142,7 @@ export default function CapabilityPanel({
                       <Puzzle size={15} />
                       <strong>{skill.name}</strong>
                     </div>
-                    <p>{skill.description || skill.error}</p>
+                    <p className="skill-description" title={skill.description || skill.error}>{skill.description || skill.error}</p>
                     <div className="card-meta">
                       <span>
                         {skillScope(skill.scope)}

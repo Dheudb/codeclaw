@@ -298,7 +298,7 @@ export default function App() {
             <Code2 size={23} strokeWidth={2.4} />
           </span>
           <strong>
-            CodeClaw<span>DESKTOP</span>
+            CodeClaw
           </strong>
           <span className="preview-badge">预览</span>
         </div>
@@ -417,7 +417,7 @@ export default function App() {
                       {
                         icon: Code2,
                         title: active.scope === "standalone" ? "梳理一个任务" : "理解这个项目",
-                        text: active.scope === "standalone" ? "明确目标、拆解步骤，开始推进。" : "分析代码结构、技术栈和启动方式。",
+                        text: active.scope === "standalone" ? "明确目标，拆解步骤。" : "分析代码结构、技术栈和启动方式。",
                         prompt:
                           active.scope === "standalone" ? "请帮我梳理要完成的任务，先确认我的目标和需求。" : "请分析这个项目的代码结构、技术栈和启动方式，说明核心模块的职责。",
                       },
@@ -473,7 +473,7 @@ export default function App() {
           ) : (
             <div className="transcript">
               {active.messages.map((message, index) => (
-                <article key={index} className={"message " + message.role}>
+                <article key={index} className={"message " + message.role} aria-label={message.role === "user" ? "你的消息" : "CodeClaw 回复"}>
                   <div className="message-avatar">
                     {message.role === "assistant" ? <Code2 size={16} /> : "你"}
                   </div>
