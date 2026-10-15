@@ -21,6 +21,7 @@
     "test:framework": "node tests/framework.e2e.cjs",
     "test:appearance": "node tests/appearance.e2e.cjs",
     "test:resume": "node tests/resume.e2e.cjs",
+    "test:attachments": "node tests/attachments.e2e.cjs",
     "test:activity": "node tests/activity.e2e.cjs",
     "test:turns": "node tests/turns.e2e.cjs",
     "test:links": "node tests/links.e2e.cjs",

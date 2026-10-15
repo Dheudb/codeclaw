@@ -23,7 +23,7 @@ def reset_generated(path):
 
 def verify(runtime):
     with tempfile.TemporaryDirectory(prefix="codeclaw-runtime-check-") as directory:
-        subprocess.run([str(runtime / "python.exe"), "-I", "-c", "import sys,codeclaw.core.engine; from codeclaw.protocols.mcp_bridge import MCP_AVAILABLE; assert MCP_AVAILABLE; assert sys.version_info >= (3,12); print('Bundled Python and MCP verified')"], cwd=directory, check=True)
+        subprocess.run([str(runtime / "python.exe"), "-I", "-c", "import sys,codeclaw.core.engine; from PIL import Image; from codeclaw.protocols.mcp_bridge import MCP_AVAILABLE; assert MCP_AVAILABLE; assert sys.version_info >= (3,12); print('Bundled Python, image support and MCP verified')"], cwd=directory, check=True)
 
 
 def main():

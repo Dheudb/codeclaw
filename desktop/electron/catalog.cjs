@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { historyRoot, migrateProject } = require("./history-storage.cjs");
+const { historyRoot, migrateProject, rebase } = require("./history-storage.cjs");
 const { dataDirectory } = require("./workspace.cjs");
 
 const validId = (id) => typeof id === "string" && /^[a-zA-Z0-9_-]+$/.test(id);
@@ -77,7 +77,7 @@ class SessionCatalog {
             scope: item.scope === "standalone" ? "standalone" : "project",
             title: item.title || text.split("\n")[0].slice(0, 80) || "新会话",
             updated: stat.mtimeMs, created: item.created || stat.birthtimeMs || stat.mtimeMs,
-            pinned: !!item.pinned, archived: !!item.archived, draft: item.draft || "", draftEditId: item.draftEditId || "", permissionMode: item.permissionMode === "full" ? "full" : "ask" }];
+            pinned: !!item.pinned, archived: !!item.archived, draft: item.draft || "", draftEditId: item.draftEditId || "", draftAttachments: item.draftAttachments || [], permissionMode: item.permissionMode === "full" ? "full" : "ask" }];
         } catch (error) {
           // Keep an unreadable record visible and deletable instead of hiding it.
           return [{ id: sessionKey(project, sessionId), sessionId, project,
@@ -228,6 +228,10 @@ class SessionCatalog {
     }
     for (const field of ["pinned", "archived"]) if (field in patch) next[field] = !!patch[field];
     if ("draft" in patch) next.draft = String(patch.draft || "");
+    if ("draftAttachments" in patch) {
+      if (!Array.isArray(patch.draftAttachments) || patch.draftAttachments.length > 10 || !patch.draftAttachments.every(validId)) throw new Error("附件草稿无效");
+      next.draftAttachments = [...new Set(patch.draftAttachments)];
+    }
     if ("draftEditId" in patch) {
       if (patch.draftEditId && !validId(patch.draftEditId)) throw new Error("编辑目标无效");
       next.draftEditId = patch.draftEditId || "";
@@ -241,13 +245,18 @@ class SessionCatalog {
   }
   fork(row) {
     const raw = JSON.parse(fs.readFileSync(this.file(row.project, row.sessionId), "utf8"));
-    if (row.scope === "standalone") {
-      const copy = this.createStandalone(path.dirname(row.project));
-      atomicJSON(this.file(copy.project, copy.sessionId), { messages: Array.isArray(raw) ? raw : raw.messages || [], metadata: {} });
+    const copy = row.scope === "standalone" ? this.createStandalone(path.dirname(row.project)) : this.create(row.project, [], row.title + "（副本）", row.scope);
+    try {
+      const source = path.join(this.artifacts(row.project), row.sessionId), destination = path.join(this.artifacts(copy.project), copy.sessionId);
+      const attachmentDirectory = path.join(source, "attachments");
+      if (fs.existsSync(attachmentDirectory)) fs.cpSync(attachmentDirectory, path.join(destination, "attachments"), {
+        recursive: true, errorOnExist: true, force: false,
+        filter: (file) => { if (fs.lstatSync(file).isSymbolicLink()) throw new Error("无法复制链接形式的附件"); return true; },
+      });
+      atomicJSON(this.file(copy.project, copy.sessionId), { messages: rebase(Array.isArray(raw) ? raw : raw.messages || [], source, destination), metadata: {} });
       this.update(copy, { title: row.title + "（副本）" });
       return this.find(copy.id);
-    }
-    return this.create(row.project, Array.isArray(raw) ? raw : raw.messages || [], row.title + "（副本）", row.scope);
+    } catch (error) { this.delete(copy); throw error; }
   }
   delete(row) {
     // Runtime disposal must complete before this is called, otherwise closing

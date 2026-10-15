@@ -21,8 +21,9 @@ import {
   Store,
   Pencil,
   Play,
+  Paperclip,
 } from "lucide-react";
-import type { SessionView, ModelConfig, SessionCatalog, PermissionMode, FileChange } from "./types";
+import type { SessionView, ModelConfig, SessionCatalog, PermissionMode, FileChange, Attachment } from "./types";
 import { applyEvent, beginTurn, createSession } from "./state";
 import CapabilityPanel from "./CapabilityPanel";
 import { InteractionCard, SettingsDialog } from "./Dialogs";
@@ -36,6 +37,7 @@ import SkillInput from "./SkillInput";
 import FileChanges, { relativeFile } from "./FileChanges";
 import FilePreview from "./FilePreview";
 import { clampPanelWidth, DEFAULT_PANEL_WIDTH } from "./panel-width";
+import Attachments, { AttachmentPreview } from "./Attachments";
 
 const basename = (value: string) =>
   value.split(/[\\/]/).filter(Boolean).pop() || value;
@@ -58,17 +60,30 @@ export default function App() {
   const [opening, setOpening] = useState(true);
   const [notice, setNotice] = useState("");
   const [buildId, setBuildId] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [fileDrag, setFileDrag] = useState(false);
+  const [attachmentPreview, setAttachmentPreview] = useState<{ name: string; source: string }>();
+  const dragDepth = useRef(0);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [filePreview, setFilePreview] = useState<{ path: string; change?: FileChange; initialView: "diff" | "content" }>();
   const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const navigation = useRef(0);
   const active = sessions.find((item) => item.id === activeId);
+  const draftSessions = useRef(sessions);
+  draftSessions.current = sessions;
   const lastUser = active?.messages.slice().reverse().find((message) => message.role === "user");
   const paused = !active?.busy && ["cancelled", "interrupted"].includes(active?.messages.at(-1)?.trace?.status || "");
   function receiveCatalog(value: SessionCatalog) {
     setCatalog(preferences.current.receive(value));
   }
 
+  useEffect(() => {
+    const flush = () => window.codeclaw?.flushDrafts(draftSessions.current.map((session) => ({ id: session.id, draft: session.draft, draftEditId: session.editingId || "", draftAttachments: session.attachments.map((item) => item.id) })));
+    window.addEventListener("beforeunload", flush);
+    window.addEventListener("codeclaw-before-quit", flush);
+    return () => { window.removeEventListener("beforeunload", flush); window.removeEventListener("codeclaw-before-quit", flush); };
+  }, []);
   useEffect(() => {
     if (!window.codeclaw) {
       setNotice("请通过 CodeClaw 桌面程序打开工作台。");
@@ -108,11 +123,11 @@ export default function App() {
     return () => window.removeEventListener("resize", resize);
   }, []);
   useEffect(() => {
-    if (!active || opening) return;
-    const id = active.id, draft = active.draft, draftEditId = active.editingId || "";
-    const timer = setTimeout(() => window.codeclaw.invoke("session.update", { id, patch: { draft, draftEditId } }).catch(onError), 500);
+    if (!active || opening || importing) return;
+    const id = active.id, draft = active.draft, draftEditId = active.editingId || "", draftAttachments = active.attachments.map((item) => item.id);
+    const timer = setTimeout(() => window.codeclaw.invoke("session.update", { id, patch: { draft, draftEditId, draftAttachments } }).catch(onError), 500);
     return () => clearTimeout(timer);
-  }, [activeId, active?.draft, active?.editingId, opening]);
+  }, [activeId, active?.draft, active?.editingId, active?.attachments, opening, importing]);
   useEffect(() => {
     if (activeId) window.codeclaw.invoke("session.activate", { session: activeId }).catch(onError);
   }, [activeId]);
@@ -174,8 +189,8 @@ export default function App() {
     if (changesSelection) setOpening(true);
     setNotice("");
     try {
-      if (active?.draft && ["project.open", "session.new", "session.open", "session.select", "session.move"].includes(method))
-        await window.codeclaw.invoke("session.update", { id: active.id, patch: { draft: active.draft, draftEditId: active.editingId || "" } });
+      if (active && ["project.open", "session.new", "session.open", "session.select", "session.move"].includes(method))
+        await window.codeclaw.invoke("session.update", { id: active.id, patch: { draft: active.draft, draftEditId: active.editingId || "", draftAttachments: active.attachments.map((item) => item.id) } });
       const result = await window.codeclaw.invoke(method, params);
       if (!result) return;
       if (preferenceWrite) setCatalog(preferences.current.finish(preferenceWrite.id, result));
@@ -218,15 +233,16 @@ export default function App() {
   }
   function editLastPrompt() {
     if (!active || active.busy || !lastUser?.id) return;
-    update({ editingId: lastUser.id, draftBeforeEdit: active.draft, draft: lastUser.text });
+    update({ editingId: lastUser.id, draftBeforeEdit: active.draft, draft: lastUser.text, attachmentsBeforeEdit: active.attachments, attachments: lastUser.attachments || [] });
     requestAnimationFrame(() => input.current?.focus());
   }
   async function send(continuation?: string) {
-    if (opening || modelChanging || permissionChanging || !active || active.busy || !(continuation || active.draft).trim()) return;
+    if (opening || importing || modelChanging || permissionChanging || !active || active.busy || (!(continuation || active.draft).trim() && !active.attachments.length)) return;
     const id = active.id,
-      text = (continuation || active.draft).trim(),
+      text = (continuation || active.draft).trim() || "请查看这些附件。",
       selected = active.selected,
       mode = active.mode,
+      attached = continuation ? [] : active.attachments,
       replaceMessageId = continuation ? undefined : active.editingId;
     setSessions((previous) =>
       previous.map((session) =>
@@ -240,11 +256,12 @@ export default function App() {
         skills: selected,
         mode,
         replaceMessageId,
+        attachments: attached.map((item) => item.id),
       });
     } catch (error) {
       setSessions((previous) =>
         previous.map((session) =>
-          applyEvent(session.id === id ? { ...session, draft: text, editingId: replaceMessageId } : session, {
+          applyEvent(session.id === id ? { ...session, draft: text, editingId: replaceMessageId, attachments: attached } : session, {
             session: id,
             type: "turn_error",
             message: String(error),
@@ -252,6 +269,31 @@ export default function App() {
         ),
       );
     }
+  }
+  async function importFiles(files: File[]) {
+    if (!files.length) return;
+    if (importing || opening) { onError(importing ? "正在添加附件，请稍后再添加" : "会话正在打开，请稍后再添加附件"); return; }
+    if (active?.busy) { onError("请先停止当前任务，再添加附件"); return; }
+    setImporting(true);
+    try {
+      let id = activeId;
+      const existing = active?.attachments.map((item) => item.id) || [];
+      if (!active) {
+        const value = await window.codeclaw.invoke("session.new", { scope: "standalone" });
+        if (value.catalog) receiveCatalog(value.catalog);
+        setSessions((previous) => [...previous, createSession(value)]);
+        id = value.id; setActiveId(id);
+      }
+      const items = await window.codeclaw.importFiles(id, files, existing);
+      setSessions((previous) => previous.map((session) => session.id === id ? { ...session, attachments: items } : session));
+    } catch (error) { onError(error); }
+    finally { setImporting(false); }
+  }
+  async function openAttachment(item: Attachment) {
+    try {
+      if (item.kind === "image") setAttachmentPreview(await invoke("attachments.preview", { id: item.id }));
+      else await invoke("attachments.open", { id: item.id });
+    } catch (error) { onError(error); }
   }
   async function saveModel(value: ModelConfig & { apiKey: string }) {
     const config = await invoke("config.save", value);
@@ -302,7 +344,12 @@ export default function App() {
   const runningCommands = Object.values(active?.commands || {}).filter((command) => command.status === "running").length;
 
   return (
-    <div className={"workbench " + (!panelOpen ? "panel-hidden" : "")} style={{ "--inspector-width": clampPanelWidth(panelWidth, viewport) + "px" } as React.CSSProperties}>
+    <div className={"workbench " + (!panelOpen ? "panel-hidden" : "")} style={{ "--inspector-width": clampPanelWidth(panelWidth, viewport) + "px" } as React.CSSProperties}
+      onDragEnter={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); dragDepth.current++; setFileDrag(true); } }}
+      onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setFileDrag(false); } }}
+      onDragOver={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); event.dataTransfer.dropEffect = active?.busy || importing ? "none" : "copy"; } }}
+      onDrop={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); event.stopPropagation(); dragDepth.current = 0; setFileDrag(false); void importFiles(Array.from(event.dataTransfer.files)); } }}>
+      {fileDrag && <div className="file-drop-overlay"><Paperclip size={28} /><strong>{active?.busy ? "请先停止当前任务" : "松开以添加附件"}</strong><span>图片、PDF 和本地文件</span></div>}
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">
@@ -514,6 +561,7 @@ export default function App() {
                         <span className="muted">此次任务未返回文本。</span>
                       ) : null}
                     </div>
+                    {!!message.attachments?.length && <Attachments items={message.attachments} open={openAttachment} />}
                     {!!message.trace?.files?.length && <FileChanges files={message.trace.files} project={active.project} onOpen={openFile} />}
                     {message === lastUser && message.id && <button className="edit-prompt-button" aria-label="编辑上一条提示词" title="编辑上一条提示词（空输入框连按两次 Esc）"
                       disabled={opening || active.busy || !!runningWorkers || !!runningCommands} onClick={editLastPrompt}><Pencil size={13} /></button>}
@@ -560,12 +608,14 @@ export default function App() {
           )}
           {!!runningCommands && !active?.busy && <button className="worker-strip" onClick={() => invoke("stop").catch(onError)}><Square size={13} />{runningCommands} 个后台命令正在运行 · 停止所有后台任务</button>}
           {paused && !active?.editingId && <div className="paused-actions" role="status"><span>任务已停止，已收到的内容保留。</span>
-            <button disabled={opening || modelChanging || permissionChanging || !!active?.draft.trim()} title={active?.draft.trim() ? "请先发送或清空当前草稿" : "保留上下文，继续未完成的任务"} onClick={() => void send("请从刚才停止的位置继续完成上一项任务。先核对已完成的操作与当前文件状态，避免重复执行；按原任务要求完成并汇报结果。")}><Play size={13} />继续执行</button>
+            <button disabled={opening || importing || modelChanging || permissionChanging || !!active?.draft.trim() || !!active?.attachments.length} title={active?.draft.trim() || active?.attachments.length ? "请先发送或清空当前草稿" : "保留上下文，继续未完成的任务"} onClick={() => void send("请从刚才停止的位置继续完成上一项任务。先核对已完成的操作与当前文件状态，避免重复执行；按原任务要求完成并汇报结果。")}><Play size={13} />继续执行</button>
             {lastUser?.id && <button disabled={opening || !!runningWorkers || !!runningCommands} onClick={editLastPrompt}><Pencil size={13} />编辑提示词</button>}
           </div>}
-          <div className={"composer " + (!active ? "disabled" : "")}>
+          <div className={"composer " + (!active ? "disabled" : "")} onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); void importFiles(Array.from(event.clipboardData.files)); } }}>
             {active?.editingId && <div className="editing-prompt"><span>编辑上一条提示词 · 发送后重新执行，已修改的文件保留</span>
-              <button aria-label="取消编辑提示词" disabled={active.busy} onClick={() => update({ editingId: undefined, draft: active.draftBeforeEdit || "", draftBeforeEdit: undefined })}><X size={13} /></button></div>}
+              <button aria-label="取消编辑提示词" disabled={active.busy} onClick={() => update({ editingId: undefined, draft: active.draftBeforeEdit || "", draftBeforeEdit: undefined, attachments: active.attachmentsBeforeEdit || [], attachmentsBeforeEdit: undefined })}><X size={13} /></button></div>}
+            {active && <Attachments items={active.attachments} open={openAttachment} disabled={importing || active.busy} remove={(id) => update({ attachments: active.attachments.filter((item) => item.id !== id) })} />}
+            {importing && <div className="attachment-loading" role="status"><LoaderCircle size={13} className="spin" />正在添加附件…</div>}
             {active && active.selected.length > 0 && (
               <div className="selected-skills">
                 {active.selected.map((name) => (
@@ -591,6 +641,8 @@ export default function App() {
               disabled={opening || !active || active.busy} inputRef={input} update={update} send={send} editPrevious={editLastPrompt} />
             <div className="composer-toolbar">
               <div className="composer-options">
+                <input ref={fileInput} type="file" multiple hidden aria-label="选择附件文件" onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; void importFiles(files); }} />
+                <button className="attach-button" type="button" aria-label="添加附件" title="添加文件或图片，也可直接拖入或粘贴图片" disabled={opening || importing || active?.busy} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>
                 <select
                   aria-label="执行模式"
                   disabled={opening || !active || active.busy}
@@ -641,7 +693,7 @@ export default function App() {
                   <button
                     className="send-button"
                     aria-label="发送任务"
-                    disabled={opening || modelChanging || permissionChanging || !active?.draft.trim()}
+                    disabled={opening || importing || modelChanging || permissionChanging || (!active?.draft.trim() && !active?.attachments.length)}
                     onClick={() => void send()}
                   >
                     <ArrowUp size={19} />
@@ -705,6 +757,7 @@ export default function App() {
           discoverModels={(value) => window.codeclaw.invoke("config.models", value)}
         />
       )}
+      {attachmentPreview && <AttachmentPreview image={attachmentPreview} close={() => setAttachmentPreview(undefined)} />}
       {mcpOpen && active && (
         <McpDialog
           key={active.id}

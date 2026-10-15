@@ -267,13 +267,16 @@ class DesktopBridge:
             if getattr(engine, "mcp_bridge", None):
                 await engine.mcp_bridge.cleanup()
 
-    async def turn(self, text, selected_skills, mode):
+    async def turn(self, text, selected_skills, mode, attachment_ids=None, prepared=None):
         self.recorder = TurnRecorder()
         self.emit({"type": "turn_started"})
         try:
             # Validate all selections before creating a turn or emitting loaded events.
-            selections = [(name, self.skills.read(name)) for name in selected_skills]
+            selections = prepared[0] if prepared is not None else [(name, self.skills.read(name)) for name in selected_skills]
             engine = await self.ensure_engine()
+            from codeclaw.desktop.attachments import prepare_attachments
+            attachment_blocks, attachment_items = prepared[1] if prepared is not None else prepare_attachments(self.cwd, getattr(engine, "session_id", ""), attachment_ids or [])
+            display_text = text
             engine.turn_traces.append(self.recorder.record)
             engine.active_turn_trace = self.recorder.record
             engine.set_mode(mode)
@@ -281,7 +284,8 @@ class DesktopBridge:
                 text += "\n\n<selected-skills>\n" + "\n\n".join(body for _, body in selections) + "\n</selected-skills>"
                 for name, _ in selections:
                     self.emit({"type": "skill_loaded", "name": name})
-            async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)})):
+            options = {"input_blocks": [{"type": "text", "text": text}] + attachment_blocks, "attachments": attachment_items, "display_text": display_text} if attachment_items else {}
+            async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)}), **options):
                 if self.stop_requested and event.get("type") == "final":
                     continue
                 if event.get("type") == "final" and str(event.get("text", "")).startswith(("[bold red]API Loop Exception:", "[bold red]System Halt:")):
@@ -437,21 +441,23 @@ class DesktopBridge:
         if method == "prompt":
             if self.busy() or self.mcp_testing:
                 raise ValueError("A turn or MCP connection operation is already running")
-            text = str(params.get("text", "")).strip()
+            attachment_ids = params.get("attachments", [])
+            text = str(params.get("text", "")).strip() or ("请查看这些附件。" if attachment_ids else "")
             if not text:
                 raise ValueError("Message is empty")
             if params.get("mode", "normal") not in {"normal", "plan"}:
                 raise ValueError("Invalid mode")
-            for name in params.get("skills", []):
-                self.skills.read(name)
+            selections = [(name, self.skills.read(name)) for name in params.get("skills", [])]
+            from codeclaw.desktop.attachments import prepare_attachments
+            prepared_attachments = prepare_attachments(self.cwd, self.resume_id or (self.engine.session_id if self.engine else ""), attachment_ids)
             if params.get("replaceMessageId"):
                 self.require_idle()
                 engine = await self.ensure_engine()
                 from codeclaw.desktop.prompt_edit import replace_latest_turn
                 replace_latest_turn(engine, params["replaceMessageId"])
-                self.emit({"type": "turn_restarted", "history": self.history(engine.messages, engine.turn_traces), "text": text})
+                self.emit({"type": "turn_restarted", "history": self.history(engine.messages, engine.turn_traces), "text": text, "attachments": prepared_attachments[1]})
             self.stop_requested = False
-            self.turn_task = asyncio.create_task(self.turn(text, params.get("skills", []), params.get("mode", "normal")))
+            self.turn_task = asyncio.create_task(self.turn(text, params.get("skills", []), params.get("mode", "normal"), attachment_ids, (selections, prepared_attachments)))
             return {"started": True}
         if method == "respond":
             future = self.pending.get(params["requestId"])

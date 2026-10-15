@@ -18,6 +18,7 @@ export function createSession(initial: InitialSession): SessionView {
     mode: "normal",
     draft: initial.savedDraft || "",
     editingId: initial.savedDraftEditId || undefined,
+    attachments: initial.savedAttachments || [],
   };
 }
 
@@ -28,10 +29,11 @@ export function beginTurn(session: SessionView, text: string): SessionView {
     error: "",
     draft: "",
     editingId: undefined,
+    attachments: [],
     streamIndex: session.messages.length + 1,
     messages: [
       ...session.messages,
-      { role: "user", text },
+      { role: "user", text, ...(session.attachments.length ? { attachments: session.attachments } : {}) },
       { role: "assistant", text: "", trace: { id: "pending", startedAt: Date.now(), status: "running", steps: [] } },
     ],
   };
@@ -44,7 +46,7 @@ export function applyEvent(
   if (event.session !== session.id) return session;
   switch (event.type) {
     case "turn_restarted":
-      return beginTurn({ ...session, messages: event.history }, event.text);
+      return beginTurn({ ...session, messages: event.history, attachments: event.attachments || [] }, event.text);
     case "command_status":
       return { ...session, commands: { ...session.commands, [event.command.id]: event.command } };
     case "file_changed":

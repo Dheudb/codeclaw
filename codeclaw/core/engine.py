@@ -525,6 +525,23 @@ class QueryEngine:
         }
 
     def _clean_roles_for_openai_api(self, messages, system_prompt: str):
+        def parts(blocks):
+            result = []
+            for block in blocks:
+                if block.get("type") == "text":
+                    result.append({"type": "text", "text": block.get("text", "")})
+                elif block.get("type") == "image":
+                    source = block.get("source", {})
+                    if source.get("type") == "base64":
+                        result.append({"type": "image_url", "image_url": {"url": "data:" + source["media_type"] + ";base64," + source["data"]}})
+                elif block.get("type") == "document":
+                    result.append({"type": "text", "text": "[PDF document: use file_read_tool with its attached local path to extract text.]"})
+            return result
+
+        def user_message(blocks):
+            values = parts(blocks)
+            return {"role": "user", "content": values if any(item["type"] == "image_url" for item in values) else "".join(item.get("text", "") for item in values)}
+
         normalized_messages = self._clean_roles_for_api(messages)
         rendered = []
         if system_prompt:
@@ -562,26 +579,31 @@ class QueryEngine:
                     })
                 continue
 
-            text_parts = []
+            user_parts = []
+            tool_images = []
             for block in content:
                 if not isinstance(block, dict):
                     continue
                 block_type = block.get("type")
                 if block_type == "text":
-                    text_parts.append(block.get("text", ""))
+                    user_parts.append(block)
                 elif block_type in {"image", "document"}:
-                    text_parts.append(f"[{block_type} attached]")
+                    user_parts.append(block)
                 elif block_type == "tool_result":
-                    if text_parts:
-                        rendered.append({"role": "user", "content": "".join(text_parts)})
-                        text_parts = []
+                    if user_parts:
+                        rendered.append(user_message(user_parts))
+                        user_parts = []
+                    value = block.get("content", "") or ""
+                    if isinstance(value, list):
+                        tool_images.extend(item for item in value if item.get("type") in {"image", "document"})
+                        value = "".join(item.get("text", "") for item in value if item.get("type") == "text")
                     rendered.append({
                         "role": "tool",
                         "tool_call_id": block.get("tool_use_id", ""),
-                        "content": str(block.get("content", "") or ""),
+                        "content": str(value),
                     })
-            if text_parts:
-                rendered.append({"role": "user", "content": "".join(text_parts)})
+            if tool_images or user_parts:
+                rendered.append(user_message(tool_images + user_parts))
 
         return rendered
 
@@ -2486,9 +2508,9 @@ class QueryEngine:
                         parts = []
                         for part in block_content:
                             part_block = self._block_to_dict(part)
-                            if isinstance(part_block, dict) and part_block.get("type") == "text":
-                                parts.append(part_block.get("text", ""))
-                        block_content = "".join(parts)
+                            if isinstance(part_block, dict) and part_block.get("type") in {"text", "image", "document"}:
+                                parts.append(part_block)
+                        block_content = parts if any(part.get("type") in {"image", "document"} for part in parts) else "".join(part.get("text", "") for part in parts)
                     elif block_content is None:
                         block_content = ""
                     else:
@@ -3969,7 +3991,7 @@ class QueryEngine:
             self.active_stream = None
             self.active_streaming_tool_entries = []
 
-    async def _run_loop(self, user_input: str, sys_print_callback=print, event_callback=None):
+    async def _run_loop(self, user_input: str, sys_print_callback=print, event_callback=None, input_blocks=None, attachments=None, display_text=None):
         """
         The Core Action Loop:
         1. Contextualize System Prompt.
@@ -3987,7 +4009,11 @@ class QueryEngine:
 
         run_started_at = time.time()
         auto_commit_git_baseline = self._capture_auto_commit_baseline()
-        user_msg = create_user_message(user_input, origin="human")
+        user_msg = create_user_message(input_blocks if input_blocks is not None else user_input, origin="human")
+        if attachments:
+            user_msg["_attachments"] = attachments
+        if display_text is not None:
+            user_msg["_display_text"] = display_text
         if self.active_turn_trace is not None:
             self.active_turn_trace["userMessageId"] = get_msg_uuid(user_msg)
         self.messages.append(user_msg)
@@ -4539,7 +4565,7 @@ class QueryEngine:
     async def run(self, user_input: str, sys_print_callback=print):
         return await self._run_loop(user_input, sys_print_callback=sys_print_callback)
 
-    async def submit_message(self, user_input: str, sys_print_callback=print):
+    async def submit_message(self, user_input: str, sys_print_callback=print, input_blocks=None, attachments=None, display_text=None):
         queue = asyncio.Queue()
 
         async def emit(payload: dict):
@@ -4550,6 +4576,9 @@ class QueryEngine:
                 user_input,
                 sys_print_callback=sys_print_callback,
                 event_callback=emit,
+                input_blocks=input_blocks,
+                attachments=attachments,
+                display_text=display_text,
             )
         )
         self.active_run_task = task

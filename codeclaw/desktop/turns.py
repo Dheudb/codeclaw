@@ -104,6 +104,8 @@ class TurnRecorder:
 
 
 def visible_text(message):
+    if message.get("role") == "user" and isinstance(message.get("_display_text"), str):
+        return message["_display_text"]
     content = message.get("content", "")
     text = content if isinstance(content, str) else "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
     text = text.split("\n\n<selected-skills>")[0]
@@ -168,7 +170,7 @@ def conversation_history(messages, traces=()):
         if human and visible_text(message).strip():
             finish()
             group, user = [], message
-            items.append({"role": "user", "text": visible_text(message), **({"id": message["_uuid"]} if message.get("_uuid") else {})})
+            items.append({"role": "user", "text": visible_text(message), **({"id": message["_uuid"]} if message.get("_uuid") else {}), **({"attachments": copy.deepcopy(message["_attachments"])} if message.get("_attachments") else {})})
         elif message.get("role") in {"assistant", "user"}:
             group.append(message)
     finish()

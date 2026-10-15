@@ -25,6 +25,7 @@ setup(
         "gitpython",
         "wcwidth",
         "pymupdf",
+        "Pillow>=10.0",
         "PyYAML>=6.0",
     ],
     entry_points={

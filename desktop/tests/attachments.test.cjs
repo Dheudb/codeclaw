@@ -1,0 +1,38 @@
+const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), os = require("node:os");
+const { SessionCatalog, atomicJSON } = require("../electron/catalog.cjs");
+const { Attachments } = require("../electron/attachments.cjs");
+const { moveSession } = require("../electron/session-move.cjs");
+
+test("attachments own immutable copies, survive drafts/moves/forks and clean up with their session", async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-attachment-unit-"));
+  assert(path.isAbsolute(base) && base.startsWith(path.join(os.tmpdir(), "codeclaw-attachment-unit-")));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const project = path.join(base, "project"); fs.mkdirSync(project);
+  fs.mkdirSync(path.join(base, "workspaces"));
+  let settings = { projects: [project] };
+  const catalog = new SessionCatalog(() => settings, (value) => { settings = value; }, path.join(base, "data"));
+  const row = catalog.createStandalone(path.join(base, "workspaces"));
+  const store = new Attachments(catalog);
+  const original = path.join(base, "中文 文件.pdf"); fs.writeFileSync(original, "PDF_CONTENT");
+  const [item] = await store.import(row, [{ path: original }]);
+  assert.notEqual(item.path, original); assert.equal(item.name, "中文 文件.pdf");
+  fs.writeFileSync(original, "changed original"); assert.equal(fs.readFileSync(item.path, "utf8"), "PDF_CONTENT");
+  catalog.update(row, { draftAttachments: [item.id] });
+  assert.deepEqual(catalog.find(row.id).draftAttachments, [item.id]);
+  atomicJSON(catalog.file(row.project, row.sessionId), { messages: [{ role: "user", content: JSON.stringify({ path: item.path.replaceAll("\\", "/") }), _attachments: [item] }], metadata: {} });
+  const moved = moveSession(catalog, row, project);
+  const relocated = store.get(moved, item.id); assert(fs.existsSync(relocated.path));
+  const copy = catalog.fork(moved), copied = store.get(copy, item.id);
+  assert.notEqual(copied.path, relocated.path);
+  assert.equal(JSON.parse(JSON.parse(fs.readFileSync(catalog.file(copy.project, copy.sessionId))).messages[0].content).path, copied.path.replaceAll("\\", "/"));
+  catalog.delete(moved); assert(!fs.existsSync(relocated.path)); assert(fs.existsSync(copied.path)); assert(fs.existsSync(original));
+  assert.throws(() => store.get(copy, "../../secret"));
+  await assert.rejects(store.import(copy, [{ path: project }]), /文件夹/);
+  const oversized = path.join(base, "large.pdf"), fd = fs.openSync(oversized, "w"); fs.ftruncateSync(fd, 65 * 1024 * 1024); fs.closeSync(fd);
+  await assert.rejects(store.import(copy, [{ path: oversized }]), /64 MB/);
+  await assert.rejects(store.import(copy, [{ data: "data:text/html;base64,PGgxPiE=" }]), /格式无效/);
+  await assert.rejects(store.import(copy, Array(11).fill({ path: original })), /10 个/);
+  const paper = path.join(base, "27MB-paper.pdf"), paperFile = fs.openSync(paper, "w"); fs.ftruncateSync(paperFile, 27 * 1024 * 1024); fs.closeSync(paperFile);
+  const [largePaper] = await store.import(copy, [{ path: paper }]);
+  assert.equal(largePaper.size, 27 * 1024 * 1024);
+});

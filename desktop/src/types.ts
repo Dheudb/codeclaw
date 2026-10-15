@@ -62,7 +62,8 @@ export type TurnTrace = {
   pendingText?: string;
   steps: ({ kind: "text"; text: string } | { kind: "tool"; tool: ToolActivity })[];
 };
-export type HistoryItem = { id?: string; role: "user" | "assistant"; text: string; trace?: TurnTrace };
+export type Attachment = { id: string; name: string; path: string; size: number; kind: "image" | "file"; preview?: string };
+export type HistoryItem = { id?: string; role: "user" | "assistant"; text: string; trace?: TurnTrace; attachments?: Attachment[] };
 export type SavedSession = { id: string; title: string; updated: number };
 export type CatalogSession = SavedSession & {
   scope?: "project" | "standalone";
@@ -74,6 +75,7 @@ export type CatalogSession = SavedSession & {
   archived: boolean;
   error?: string;
   draft?: string;
+  draftAttachments?: string[];
 };
 export type CatalogProject = {
   path: string;
@@ -101,6 +103,7 @@ export type InitialSession = {
   title?: string;
   savedDraft?: string;
   savedDraftEditId?: string;
+  savedAttachments?: Attachment[];
   config: ModelConfig;
   capabilities: Capabilities;
   sessions: SavedSession[];
@@ -152,6 +155,8 @@ export type SessionView = InitialSession & {
   draft: string;
   editingId?: string;
   draftBeforeEdit?: string;
+  attachments: Attachment[];
+  attachmentsBeforeEdit?: Attachment[];
 };
 export type PermissionMode = "ask" | "full";
 export type FileChange = {
@@ -163,6 +168,8 @@ export type FileChange = {
 declare global {
   interface Window {
     codeclaw: {
+      flushDrafts(drafts: { id: string; draft: string; draftEditId: string; draftAttachments: string[] }[]): boolean;
+      importFiles(session: string, files: File[], existing: string[]): Promise<Attachment[]>;
       invoke<T = any>(
         method: string,
         params?: Record<string, unknown>,

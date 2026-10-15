@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, protocol } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, protocol, nativeImage } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { SessionCatalog, projectKey, sessionKey, atomicJSON } = require("./catalog.cjs");
@@ -21,6 +21,8 @@ let configTransport;
 let activeSessionId;
 let restoration;
 const catalog = new SessionCatalog(settings, saveSettings, dataRoot);
+const { Attachments } = require("./attachments.cjs");
+const attachments = new Attachments(catalog, nativeImage);
 let workspaceQueue = Promise.resolve();
 let catalogRevision = 0;
 const engineMethods = new Set([
@@ -207,7 +209,7 @@ async function createSession(project, resumeId) {
       sessionId: resumeId,
       permissionMode: row.permissionMode,
     });
-    return { id, ...initial, scope: row.scope, title: row.title, savedDraft: row.draft || "", savedDraftEditId: row.draftEditId || "" };
+    return { id, ...initial, scope: row.scope, title: row.title, savedDraft: row.draft || "", savedDraftEditId: row.draftEditId || "", savedAttachments: attachments.list(row, row.draftAttachments || []) };
   } catch (error) {
     sessions.delete(id);
     await transport.close();
@@ -215,11 +217,12 @@ async function createSession(project, resumeId) {
   }
 }
 function running(source) {
-  return source.busy || [...source.workers.values()].includes("running") || [...(source.commands?.values() || [])].includes("running");
+  return source.busy || !!source.attachmentImport || [...source.workers.values()].includes("running") || [...(source.commands?.values() || [])].includes("running");
 }
 async function disposeSession(id) {
   const source = sessions.get(id);
   if (!source) return;
+  if (source.attachmentImport) await source.attachmentImport.catch(() => {});
   await source.transport.close();
   htmlPreviews.revokeSession(id);
   sessions.delete(id);
@@ -337,7 +340,7 @@ async function invoke(method, params) {
     if (scope !== "standalone" && catalog.snapshot().projects.some((entry) => projectKey(entry.path) === projectKey(source.project) && entry.archived))
       throw new Error("请先在设置的已归档会话页面恢复项目");
     if (params.resumeId) return selectRow(catalog.find(sessionKey(source.project, params.resumeId)));
-    const empty = scope !== "standalone" && catalog.list(source.project).find((row) => row.scope === scope && !row.archived && !row.error && !row.draft &&
+    const empty = scope !== "standalone" && catalog.list(source.project).find((row) => row.scope === scope && !row.archived && !row.error && !row.draft && !row.draftAttachments.length &&
       row.title === "新会话" && !running(sessions.get(row.id) || { busy: false, workers: new Map() }) &&
       JSON.parse(fs.readFileSync(catalog.file(row.project, row.sessionId), "utf8")).messages?.length === 0);
     return selectRow(empty || (scope === "standalone" ? catalog.createStandalone(source.project) : catalog.create(source.project)));
@@ -433,6 +436,31 @@ async function invoke(method, params) {
   const source = sessions.get(params.session);
   if (!source) throw new Error("请先打开项目");
   if (source.moving) throw new Error("会话正在移动，请稍候");
+  if (method === "attachments.import") {
+    if (source.busy || source.attachmentImport) throw new Error("请等待当前任务结束后添加附件");
+    const row = catalog.find(params.session);
+    source.attachmentImport = (async () => {
+      const items = await attachments.import(row, params.files, params.existing || []);
+      catalog.update(row, { draftAttachments: items.map((item) => item.id) });
+      broadcastCatalog();
+      return items;
+    })();
+    try { return await source.attachmentImport; }
+    finally { source.attachmentImport = undefined; }
+  }
+  if (method === "attachments.open") {
+    const item = attachments.get(catalog.find(params.session), params.id);
+    shell.showItemInFolder(item.path);
+    return true;
+  }
+  if (method === "attachments.preview") {
+    const item = attachments.get(catalog.find(params.session), params.id);
+    if (item.kind !== "image") throw new Error("该附件不是图片");
+    const image = nativeImage.createFromPath(item.path);
+    const size = image.getSize();
+    const scale = Math.min(2048 / size.width, 2048 / size.height, 1);
+    return { name: item.name, source: image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: "good" }).toDataURL() };
+  }
   if (method === "preview.open") {
     const file = await source.transport.request("files.read", { path: params.path });
     return htmlPreviews.create(params.session, source.project, file.path);
@@ -481,12 +509,13 @@ async function invoke(method, params) {
   if (!engineMethods.has(method)) throw new Error("不支持的操作");
   const { session: _session, ...payload } = params;
   if (method === "prompt") {
-    if (source.busy) throw new Error("此会话已有运行中的任务");
+    if (source.busy || source.attachmentImport) throw new Error("此会话已有运行中的任务或附件正在添加");
     source.busy = true;
     const row = catalog.find(params.session);
     try {
+      attachments.list(row, params.attachments || []);
       const result = await source.transport.request(method, payload);
-      catalog.update(row, { draft: "", draftEditId: "", ...(row.title === "新会话" ? { title: String(params.text || "").split("\n")[0].slice(0, 80) || "新会话" } : {}) });
+      catalog.update(row, { draft: "", draftEditId: "", draftAttachments: [], ...(row.title === "新会话" ? { title: String(params.text || "").split("\n")[0].slice(0, 80) || "附件会话" } : {}) });
       broadcastCatalog();
       return result;
     }
@@ -529,12 +558,23 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
-    if (/^(app\.initialize|layout\.save|permissions\.set|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|layout\.save|attachments\.import|permissions\.set|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;
     }
     return invoke(method, params);
+  });
+  ipcMain.on("workbench:drafts", (event, drafts) => {
+    event.returnValue = false;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !Array.isArray(drafts) || drafts.length > 8) return;
+    try {
+      for (const draft of drafts) {
+        let row; try { row = catalog.find(draft.id); } catch { continue; }
+        catalog.update(row, { draft: String(draft.draft || ""), draftEditId: draft.draftEditId || "", draftAttachments: draft.draftAttachments || [] });
+      }
+      event.returnValue = true;
+    } catch { event.returnValue = false; }
   });
   window.on("focus", () => { if (restoration) broadcastCatalog(); });
   const url = !app.isPackaged && process.env.CODECLAW_DEV_URL;
@@ -548,11 +588,13 @@ app.on("before-quit", (event) => {
   if (quitting || (!sessions.size && !configTransport)) return;
   event.preventDefault();
   quitting = true;
-  Promise.allSettled(
+  const flush = window && !window.isDestroyed()
+    ? window.webContents.executeJavaScript("window.dispatchEvent(new Event('codeclaw-before-quit'))").catch(() => {}) : Promise.resolve();
+  flush.then(() => Promise.allSettled(
     [...sessions.values()]
       .map(({ transport }) => transport.close())
       .concat(configTransport ? [configTransport.close()] : []),
-  ).finally(() => {
+  )).finally(() => {
     sessions.clear();
     app.quit();
   });

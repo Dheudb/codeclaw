@@ -149,7 +149,7 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
       {choosing && <input type="checkbox" aria-label={"选择会话 " + row.title} disabled={opening} checked={selected.includes(row.id)} onChange={() => toggleSelected(row.id)} />}
       <button className="session-select" title={row.error || row.title} disabled={opening} onClick={() => choosing ? toggleSelected(row.id) : run("session.select", { id: row.id })}>
         {busy(row.id) ? <LoaderCircle size={14} className="spin" /> : <MessageSquare size={14} />}
-        <span><strong>{row.title}</strong><small>{row.error ? "读取失败" : row.draft ? "有草稿" : row.updated ? new Date(row.updated).toLocaleDateString("zh-CN") : ""}</small></span>
+        <span><strong>{row.title}</strong><small>{row.error ? "读取失败" : row.draft || row.draftAttachments?.length ? "有草稿" : row.updated ? new Date(row.updated).toLocaleDateString("zh-CN") : ""}</small></span>
         {row.pinned && <Pin size={11} />}{row.archived && <Archive size={11} />}
       </button>
       <button className="icon-button row-menu-trigger" aria-label={"会话操作 " + row.title} onClick={(e) => openMenu(e, { kind: "session", row })}><MoreHorizontal size={15} /></button>
