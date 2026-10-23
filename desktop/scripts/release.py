@@ -67,7 +67,11 @@ def main():
             if "__pycache__" in relative.parts or path.suffix in {".pyc", ".pyo"} or path.name == "direct_url.json":
                 skipped += 1
                 continue
-            if any(part.lower() in {".git", ".codeclaw", ".env", "history", "workspaces"} for part in relative.parts):
+            dependency_workspace = relative.as_posix().startswith("resources/python/Lib/site-packages/anthropic/")
+            forbidden = {".git", ".codeclaw", ".env", "history"}
+            if not dependency_workspace:
+                forbidden.add("workspaces")
+            if any(part.lower() in forbidden for part in relative.parts):
                 raise SystemExit("Refusing user/private data in archive")
             archive.write(path, "CodeClaw-win32-x64/" + relative.as_posix())
         archive.writestr("CodeClaw-win32-x64/RELEASE.json", json.dumps(record, indent=2) + "\n")
