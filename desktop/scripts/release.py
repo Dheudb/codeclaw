@@ -64,7 +64,9 @@ def main():
             if not path.is_file():
                 continue
             relative = path.relative_to(package)
-            if "__pycache__" in relative.parts or path.suffix in {".pyc", ".pyo"} or path.name == "direct_url.json":
+            # pip's generated launcher embeds the build interpreter's absolute path.
+            local_launcher = relative.as_posix() == "resources/python/Lib/site-packages/bin/codeclaw.exe"
+            if "__pycache__" in relative.parts or path.suffix in {".pyc", ".pyo"} or path.name == "direct_url.json" or local_launcher:
                 skipped += 1
                 continue
             dependency_workspace = relative.as_posix().startswith("resources/python/Lib/site-packages/anthropic/")

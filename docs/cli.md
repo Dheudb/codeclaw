@@ -14,6 +14,14 @@ codeclaw --help
 进入要处理的项目目录后运行 `codeclaw`。首次使用 `/model` 配置模型。
 从源码安装的 CLI 需要本机 Python；Windows 桌面便携包的用户不需要配置 Python。
 
+Windows 便携包也可以直接启动 CLI。在目标工作目录打开 PowerShell，使用解压目录的实际路径：
+
+```powershell
+& "C:\path\to\CodeClaw-win32-x64\resources\python\python.exe" -I -m codeclaw.main
+```
+
+这个命令使用包内 Python，不依赖构建机器上的解释器路径。
+
 ## 常用入口
 
 ```text

@@ -104,7 +104,7 @@ python desktop/scripts/release.py --tag v0.1.0-beta.1
 ```
 
 脚本核对已安装引擎、前端和 Electron 代码与源码一致，仅打包原安装目录，不创建另一份 EXE。
-它排除 Python 缓存和本机 wheel 安装来源信息，校验 ZIP 完整性并生成 SHA256 校验文件；
+它排除 Python 缓存、本机 wheel 安装来源信息和含构建机路径的 pip CLI 启动器，校验 ZIP 完整性并生成 SHA256 校验文件；
 压缩包内 `RELEASE.json` 记录源码提交、版本和构建号。
 将同一提交推送并创建版本标签，在 GitHub Release 上传 ZIP 和 `SHA256SUMS.txt`。
 首次发布使用 Pre-release，发布说明见 `docs/releases/`。此流程无需运行 GitHub Actions。
