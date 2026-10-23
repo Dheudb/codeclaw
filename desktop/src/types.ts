@@ -50,6 +50,7 @@ export type ModelConfig = {
 };
 export type ModelConnection = Omit<ModelConfig, "connections"> & { connectionId: string; connectionName: string; models: string[] };
 export type TurnTrace = {
+  modelStreams?: { turn: number; status: string; elapsedMs?: number; connectedMs?: number; firstChunkMs?: number; firstTextMs?: number; lastProgressMs?: number; textChars?: number; reasoningChunks?: number; finishReason?: string; error?: string }[];
   userMessageId?: string;
   files?: FileChange[];
   id: string;

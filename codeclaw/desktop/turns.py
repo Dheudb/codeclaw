@@ -25,6 +25,14 @@ class TurnRecorder:
     def accept(self, event):
         kind = event.get("type")
         record = self.record
+        if kind == "stream_status":
+            streams = record.setdefault("modelStreams", [])
+            entry = next((item for item in streams if item.get("turn") == event["turn"]), None)
+            if entry is None:
+                entry = {"turn": event["turn"]}
+                streams.append(entry)
+            entry.update(event["metrics"])
+            return True
         if kind == "file_changed":
             change = event["change"]
             identity = os.path.normcase(change["path"])
@@ -67,6 +75,13 @@ class TurnRecorder:
                 return False
             self.flush()
             record["steps"].append({"kind": "text", "text": text.strip()})
+        elif kind == "tool_protocol_error":
+            self.flush()
+            record["steps"].append({"kind": "text", "text": event["message"],
+                "protocolError": {key: event.get(key) for key in ("retrying", "detail", "diagnostic")}})
+        elif kind in {"subagents_waiting", "workflow_incomplete"}:
+            self.flush()
+            record["steps"].append({"kind": "text", "text": event["message"]})
         elif kind == "permission":
             classifier = event.get("request", {}).get("classifier_input", {})
             if classifier.get("agent_role", "main") != "main":
@@ -85,7 +100,7 @@ class TurnRecorder:
             record["pendingText"] = ""
         elif kind in {"turn_finished", "turn_error", "turn_cancelled"}:
             if kind != "turn_finished":
-                if kind == "turn_cancelled" and record["pendingText"].strip():
+                if kind in {"turn_cancelled", "turn_error"} and record["pendingText"].strip():
                     record["answer"] = record["pendingText"]
                     record["pendingText"] = ""
                 self.flush()

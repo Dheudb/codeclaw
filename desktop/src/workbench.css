@@ -51,7 +51,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .breadcrumbs > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .breadcrumbs button { font-size: 13px; color: var(--text-secondary); }
 .local-tag { font-size: 11px; color: var(--text-muted); }
-.conversation { padding: 0 32px; scrollbar-width: thin; scrollbar-color: #d0d2d5 transparent; }
+.conversation { padding: 0 32px; scrollbar-width: auto; scrollbar-color: #c7c9cd transparent; overscroll-behavior: contain; scroll-behavior: auto; }
 .transcript { max-width: var(--chat-width); width: 100%; margin: 0 auto; padding: 35px 0 12px; }
 .message { margin: 0 0 30px; gap: 0; }
 .message-avatar { display: none; }

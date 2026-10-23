@@ -262,7 +262,22 @@ class SessionCatalog {
     // Runtime disposal must complete before this is called, otherwise closing
     // Python can persist the conversation again and resurrect the deleted row.
     const target = this.file(row.project, row.sessionId);
-    if (fs.existsSync(target)) fs.unlinkSync(target);
+    const index = this.index(row.project);
+    const artifacts = path.resolve(this.artifacts(row.project), row.sessionId);
+    // Clean owned outputs before removing the durable conversation/index. If
+    // Windows holds an attachment open, the conversation stays visible/retryable.
+    if (fs.existsSync(artifacts)) {
+      const dataRoot = projectKey(fs.realpathSync(this.dataRoot)) + path.sep;
+      if (fs.lstatSync(artifacts).isSymbolicLink() || !projectKey(fs.realpathSync(artifacts)).startsWith(dataRoot))
+        throw new Error("会话附件目录必须位于集中存储中，记录已保留");
+      try { fs.rmSync(artifacts, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); }
+      catch (error) {
+        if (!["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].includes(error.code)) throw error;
+        const failure = new Error("会话附件仍被占用或无法访问。会话记录已保留，请关闭相关文件或预览后重试删除。");
+        failure.cause = error;
+        throw failure;
+      }
+    }
     const subagents = path.join(this.directory(row.project), "subagents");
     if (fs.existsSync(subagents) && !fs.lstatSync(subagents).isSymbolicLink()) {
       for (const name of fs.readdirSync(subagents).filter((name) => name.endsWith(".json"))) {
@@ -273,11 +288,9 @@ class SessionCatalog {
         if (raw.session_id === row.sessionId) fs.unlinkSync(child);
       }
     }
-    const index = this.index(row.project);
+    if (fs.existsSync(target)) fs.unlinkSync(target);
     delete index[row.sessionId];
     this.saveIndex(row.project, index);
-    const artifacts = path.join(this.artifacts(row.project), row.sessionId);
-    if (fs.existsSync(artifacts) && !fs.lstatSync(artifacts).isSymbolicLink()) fs.rmSync(artifacts, { recursive: true });
   }
   setView(patch) {
     const settings = this.readSettings();

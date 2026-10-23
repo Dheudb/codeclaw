@@ -28,7 +28,7 @@ def connections(cfg):
         raise ValueError("model_connections 必须是数组")
     result = [dict(item, models=model_ids(item.get("models", []))) for item in saved
               if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("provider") in {"openai", "anthropic"}]
-    if result:
+    if result or "model_connections" in cfg:
         return result
     active = cfg.get("model_provider") or os.environ.get("CODECLAW_MODEL_PROVIDER", "anthropic")
     for provider in ("openai", "anthropic"):
@@ -45,6 +45,9 @@ def connections(cfg):
 
 def active_connection(cfg):
     items = connections(cfg)
+    if not items:
+        return {"id": "", "name": "", "provider": cfg.get("model_provider") if cfg.get("model_provider") in {"openai", "anthropic"} else "openai",
+                "model": "", "models": [], "base_url": "", "api_key": "", "network_mode": "direct"}
     return next((item for item in items if item["id"] == cfg.get("active_model_connection")), None) or next(
         (item for item in items if item["provider"] == (cfg.get("model_provider") or os.environ.get("CODECLAW_MODEL_PROVIDER", "anthropic"))), items[0])
 
@@ -72,6 +75,15 @@ def apply_connection_env(item):
     os.environ["CODECLAW_NETWORK_MODE"] = item.get("network_mode", "direct")
 
 
+def apply_catalog_env(cfg):
+    """Drop obsolete in-process credentials/projections before applying a saved catalog."""
+    for provider in ("OPENAI", "ANTHROPIC"):
+        for suffix in ("MODEL", "BASE_URL", "API_KEY", "FALLBACK_MODEL"):
+            os.environ.pop(provider + "_" + suffix, None)
+            os.environ.pop("CODECLAW_" + provider + "_" + suffix, None)
+    apply_connection_env(active_connection(cfg))
+
+
 def project_active(cfg, item, items):
     cfg.update(model_connections=items, active_model_connection=item["id"], model_provider=item["provider"],
                network_mode=item.get("network_mode", "direct"))
@@ -94,7 +106,7 @@ def save_connection(cfg, params):
         raise ValueError("Unknown network mode")
     items = connections(cfg)
     active = active_connection(cfg)
-    identity = params.get("connectionId") or (active["id"] if active["provider"] == provider else "legacy-" + provider)
+    identity = params.get("connectionId") or (active["id"] if active["provider"] == provider and active["id"] else "legacy-" + provider)
     if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", identity):
         raise ValueError("API 连接 ID 无效")
     previous = next((item for item in items if item["id"] == identity), {})
@@ -111,6 +123,28 @@ def save_connection(cfg, params):
     if not previous:
         items.append(item)
     return project_active(cfg, item, items)
+
+
+def delete_connection(cfg, identity):
+    items = connections(cfg)
+    if not isinstance(identity, str) or not any(item["id"] == identity for item in items):
+        raise ValueError("API 连接不存在，请刷新设置后重试")
+    active = active_connection(cfg)
+    remaining = [item for item in items if item["id"] != identity]
+    result = dict(cfg)
+    for provider in ("openai", "anthropic"):
+        for suffix in ("model", "models", "base_url", "api_key"):
+            result.pop(provider + "_" + suffix, None)
+    selected = next((item for item in remaining if item["id"] == active["id"]), None)
+    selected = selected or next((item for item in remaining if item.get("model") and item.get("api_key")), None)
+    selected = selected or (remaining[0] if remaining else active_connection({"model_connections": [], "model_provider": active["provider"]}))
+    # Retain legacy CLI projections only for connections still in the catalog.
+    for provider in ("openai", "anthropic"):
+        projection = next((item for item in remaining if item["provider"] == provider), None)
+        if projection:
+            for suffix in ("model", "models", "base_url", "api_key"):
+                result[provider + "_" + suffix] = projection.get(suffix, [] if suffix == "models" else "")
+    return project_active(result, selected, remaining)
 
 
 def select_model(cfg, identity, model):

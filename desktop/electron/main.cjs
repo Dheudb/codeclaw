@@ -42,6 +42,7 @@ const engineMethods = new Set([
   "agents.capacity",
   "config.save",
   "config.select",
+  "config.delete",
   "mcp.list",
   "mcp.market",
   "mcp.install",
@@ -272,10 +273,9 @@ async function invoke(method, params) {
   }
   if (method === "workspace.get") return workspaceSettings();
   if (method === "layout.save") {
-    if (!Number.isFinite(params.inspectorWidth) || params.inspectorWidth < 280 || params.inspectorWidth > 760)
-      throw new Error("右侧面板宽度必须在 280 到 760 之间");
-    const layout = { inspectorWidth: Math.round(params.inspectorWidth) };
-    saveSettings({ ...settings(), layout });
+    const saved = settings();
+    const layout = require("./layout.cjs").updateLayout(saved.layout, params);
+    saveSettings({ ...saved, layout });
     return layout;
   }
   if (method === "workspace.save") {
@@ -309,6 +309,10 @@ async function invoke(method, params) {
   }
   if (method === "config.get") return globalConfig().request("config.get");
   if (method === "config.models") return globalConfig().request(method, params);
+  if (method === "config.delete") {
+    if ([...sessions.values()].some(running)) throw new Error("请先停止运行中的任务，再删除 API 连接");
+    return globalConfig().request(method, params);
+  }
   if (["config.save", "config.select"].includes(method) && !params.session)
     return globalConfig().request(method, params);
   if (method === "project.open") {
@@ -558,7 +562,7 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
-    if (/^(app\.initialize|layout\.save|attachments\.import|permissions\.set|config\.(save|select)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|layout\.save|attachments\.import|permissions\.set|config\.(save|select|delete)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;

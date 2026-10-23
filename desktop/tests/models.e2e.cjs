@@ -40,6 +40,7 @@ async function launch() {
   app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(60000); page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
+  await page.addStyleTag({ content: "*, *::before, *::after { animation: none !important; transition: none !important; }" });
 }
 const readConfig = () => JSON.parse(fs.readFileSync(path.join(config, "config.json"), "utf8"));
 async function settings() { await page.getByRole("button", { name: "设置与模型", exact: true }).click(); }
@@ -53,6 +54,11 @@ async function send(text, model) {
   await page.getByRole("button", { name: "发送任务", exact: true }).click();
   await page.getByText("模型回复：" + model, { exact: true }).last().waitFor();
   await page.waitForFunction(() => !document.querySelector(".send-button.stop"));
+}
+async function confirmDelete() {
+  await page.getByRole("button", { name: "删除 API", exact: true }).click();
+  await page.getByRole("button", { name: "确认删除 API", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: /已删除/ }).waitFor();
 }
 async function main() {
   try {
@@ -103,6 +109,11 @@ async function main() {
       try { await window.codeclaw.invoke("config.select", { session, connectionId, model: "another" }); return false; } catch { return true; }
     }, [session, secondId]);
     assert(refused, "Switching a running session must be refused");
+    const beforeDelete = fs.readFileSync(path.join(config, "config.json"), "utf8");
+    assert(await page.evaluate(async (connectionId) => {
+      try { await window.codeclaw.invoke("config.delete", { connectionId, confirm: true }); return false; } catch { return true; }
+    }, secondId));
+    assert.equal(fs.readFileSync(path.join(config, "config.json"), "utf8"), beforeDelete);
     await page.getByRole("button", { name: "停止任务", exact: true }).click();
     await page.waitForFunction(() => !document.querySelector(".model-picker").disabled);
     await select(secondId, "another");
@@ -113,12 +124,55 @@ async function main() {
     await settings();
     assert.equal(await page.getByLabel("可选模型列表", { exact: true }).inputValue(), "other\nanother");
     assert.equal(await page.getByLabel("API Key", { exact: true }).inputValue(), "");
-    const screenshot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString("base64"));
-    fs.mkdirSync(path.join(root, "test-results"), { recursive: true }); fs.writeFileSync(path.join(root, "test-results/models-settings.png"), Buffer.from(screenshot, "base64"));
+    fs.mkdirSync(path.join(root, "test-results"), { recursive: true });
+    const screenshot = await app.evaluate(async ({ BrowserWindow }) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents;
+      contents.invalidate();
+      return (await contents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString("base64");
+    });
+    fs.writeFileSync(path.join(root, "test-results/models-settings.png"), Buffer.from(screenshot, "base64"));
     await page.getByRole("button", { name: "关闭设置", exact: true }).click();
     await send("重启后继续", "another");
+    await settings();
+    const beforeCancel = fs.readFileSync(path.join(config, "config.json"), "utf8");
+    await page.getByRole("button", { name: "删除 API", exact: true }).click();
+    await page.getByRole("button", { name: "保留 API", exact: true }).click();
+    assert.equal(fs.readFileSync(path.join(config, "config.json"), "utf8"), beforeCancel);
+    assert(await page.evaluate(async (connectionId) => {
+      try { await window.codeclaw.invoke("config.delete", { connectionId }); return false; } catch { return true; }
+    }, secondId), "Backend requires explicit deletion confirmation");
+    await confirmDelete();
+    assert.equal(readConfig().active_model_connection, "legacy-openai");
+    assert.equal(readConfig().openai_api_key, "first-fixture-key");
+    assert(!JSON.stringify(readConfig()).includes("second-fixture-key"));
+    assert.equal(await page.getByLabel("API 连接").inputValue(), "legacy-openai");
+    await page.getByRole("button", { name: "关闭设置", exact: true }).click();
+    assert.equal(await page.locator(".session-item.active").getAttribute("data-session-id"), session);
+    await send("删除当前 API 后继续", "three");
+    await settings();
+    await confirmDelete();
+    assert.deepEqual(readConfig().model_connections, []);
+    assert(!JSON.stringify(readConfig()).includes("fixture-key"));
+    assert.equal(await page.getByLabel("API Key", { exact: true }).inputValue(), "");
+    assert.equal(await page.getByRole("button", { name: "删除 API", exact: true }).isDisabled(), true);
+    await page.getByRole("button", { name: "关闭设置", exact: true }).click();
+    const requestCount = requests.length;
+    await page.getByRole("textbox", { name: "任务输入" }).fill("未配置时不能请求旧 API");
+    await page.getByRole("button", { name: "发送任务", exact: true }).click();
+    await page.getByText(/Model not configured/).last().waitFor();
+    assert.equal(requests.length, requestCount);
+    await app.close(); await launch();
+    const empty = await page.evaluate(() => window.codeclaw.invoke("config.get"));
+    assert.deepEqual(empty.connections, []); assert.equal(empty.model, ""); assert.equal(empty.hasKey, false);
+    await page.locator(".new-task").click(); await page.locator(".session-item.active").waitFor();
+    await settings(); await page.getByRole("button", { name: "新增 API", exact: true }).click();
+    await page.getByLabel("连接名称", { exact: true }).fill("重新添加的 API");
+    await page.getByLabel("模型 ID", { exact: true }).fill("one");
+    await page.getByLabel("API 地址", { exact: true }).fill(firstUrl);
+    await page.getByLabel("API Key", { exact: true }).fill("first-fixture-key"); await save();
+    await send("重新添加后正常请求", "one");
     assert.deepEqual(errors, []);
-    console.log("Model E2E passed: shared API model list, discovery, distinct API keys, hot switching, retained conversation/draft, running guard and restart");
+    console.log("Model E2E passed: shared keys/models, switching, running guard, confirmed deletion, active fallback, empty catalog restart, no stale API requests and re-add");
   } finally {
     if (app) await app.close().catch(() => {});
     first.closeAllConnections(); first.close(); second.closeAllConnections(); second.close();

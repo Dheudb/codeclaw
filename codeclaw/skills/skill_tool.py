@@ -37,6 +37,9 @@ class SkillTool(BaseAgenticTool):
                 text = "\n".join("{}: {}\n{}".format(s["name"], s["description"], s["path"]) for s in items) or "No enabled skills found."
             elif action == "read":
                 text = registry.read(skill_name)
+                completion = self.context.get("workflow_completion")
+                if completion:
+                    completion.activate(registry.resolve(skill_name))
                 loaded = self.context.setdefault("loaded_skills", [])
                 if skill_name not in loaded:
                     loaded.append(skill_name)

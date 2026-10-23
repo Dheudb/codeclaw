@@ -16,7 +16,8 @@ const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-mcp-e2e-"));
 const project = path.join(fixture, "mcp-project");
 const data = path.join(fixture, "app-data");
 const config = path.join(fixture, "config");
-for (const dir of [project, data, config])
+const home = path.join(fixture, "home");
+for (const dir of [project, data, config, home])
   fs.mkdirSync(dir, { recursive: true });
 fs.writeFileSync(path.join(project, "README.md"), "# MCP test project\n");
 fs.writeFileSync(
@@ -113,7 +114,11 @@ async function main() {
     ...process.env,
     CODECLAW_TEST_HEADLESS: "1",
     CODECLAW_USER_DATA: data,
+    CODECLAW_DATA_DIR: data,
     CODECLAW_CONFIG_DIR: config,
+    CODECLAW_SKILLS_PATHS: "",
+    USERPROFILE: home,
+    HOME: home,
     CODECLAW_MODEL_PROVIDER: "openai",
     OPENAI_MODEL: "mcp-test",
     OPENAI_API_KEY: "local-fixture-only",
@@ -225,7 +230,7 @@ async function main() {
         "import sys,json; from codeclaw.protocols.mcp_config import MCPConfigStore; print(json.dumps(MCPConfigStore(sys.argv[1]).snapshot()))",
         path.join(project, "mcp_servers.json"),
       ],
-      { cwd: path.resolve(root, ".."), windowsHide: true, encoding: "utf8" },
+      { cwd: path.resolve(root, ".."), env, windowsHide: true, encoding: "utf8" },
     );
     assert(!shared.includes("fixture-secret"));
     assert(shared.includes("offline_search"));

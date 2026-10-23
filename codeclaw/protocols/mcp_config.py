@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -66,14 +67,38 @@ class MCPConfigStore:
     def __init__(self, path):
         self.path = Path(path)
 
-    def read(self):
-        if not self.path.exists():
-            return {"mcpServers": {}}
+    def skill_servers(self):
+        from codeclaw.skills.registry import SkillRegistry
+        defaults = {}
+        for skill in SkillRegistry(self.path.resolve().parent).active():
+            manifest = Path(skill["root"]) / "mcp_servers.json"
+            if not manifest.is_file():
+                continue
+            servers = json.loads(manifest.read_text(encoding="utf-8"))["mcpServers"]
+            for name, raw in servers.items():
+                validate_name(name)
+                item = copy.deepcopy(raw)
+                def resolve(value):
+                    return value.replace("${python}", sys.executable).replace("${skill}", str(manifest.parent))
+                if isinstance(item.get("command"), str):
+                    item["command"] = resolve(item["command"])
+                if isinstance(item.get("args"), list):
+                    item["args"] = [resolve(value) for value in item["args"]]
+                if name in defaults:
+                    continue  # Earlier mounted skills retain discovery precedence.
+                defaults[name] = validate_server(item)
+        return defaults
+
+    def read(self, *, include_skills=False):
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {"mcpServers": {}}
             if not isinstance(data, dict) or not isinstance(data.get("mcpServers", {}), dict):
                 raise ValueError()
             data.setdefault("mcpServers", {})
+            if not include_skills:
+                return data
+            defaults = self.skill_servers()
+            data["mcpServers"] = {**data["mcpServers"], **{name: item for name, item in defaults.items() if name not in data["mcpServers"]}}
             return data
         except (ValueError, OSError):
             raise ValueError("mcp_servers.json is invalid; repair the file before saving")
@@ -92,7 +117,7 @@ class MCPConfigStore:
 
     def snapshot(self):
         servers = []
-        for name, raw in self.read()["mcpServers"].items():
+        for name, raw in self.read(include_skills=True)["mcpServers"].items():
             if not isinstance(raw, dict):
                 servers.append({"name": name, "error": "Configuration must be an object", "enabled": False})
                 continue
@@ -119,6 +144,8 @@ class MCPConfigStore:
         validate_name(name)
         data = self.read()
         previous = data["mcpServers"].get(name)
+        if previous is None:
+            previous = self.read(include_skills=True)["mcpServers"].get(name)
         if previous is not None and not existing:
             raise ValueError("A server with this name already exists")
         if existing and previous is None:
@@ -139,13 +166,20 @@ class MCPConfigStore:
     def toggle(self, name, enabled):
         data = self.read()
         if name not in data["mcpServers"]:
-            raise ValueError("Unknown MCP server")
+            builtin = self.read(include_skills=True)["mcpServers"].get(name)
+            if builtin is None:
+                raise ValueError("Unknown MCP server")
+            data["mcpServers"][name] = builtin
         data["mcpServers"][name]["enabled"] = bool(enabled)
         self.write(data)
 
     def remove(self, name):
         data = self.read()
-        if name not in data["mcpServers"]:
+        bundled = self.skill_servers()
+        if name in bundled:
+            data["mcpServers"][name] = {**bundled[name], "enabled": False}
+        elif name not in data["mcpServers"]:
             raise ValueError("Unknown MCP server")
-        del data["mcpServers"][name]
+        else:
+            del data["mcpServers"][name]
         self.write(data)

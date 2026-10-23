@@ -166,6 +166,59 @@ test("delete removes parent and owned child transcripts, preserves other histori
   assert(fs.existsSync(path.join(project, "code.py")));
   assert.deepEqual(catalog.list(project).map((row) => row.id), [b.id]);
 });
+
+test("locked attachments preserve the conversation and metadata for retry; readonly copies can be deleted", (t) => {
+  const { project, catalog } = fixture(t);
+  const row = catalog.create(project);
+  catalog.update(row, { title: "retain on failure", draft: "keep draft" });
+  const target = catalog.file(project, row.sessionId), before = fs.readFileSync(target);
+  const artifacts = path.join(catalog.artifacts(project), row.sessionId);
+  fs.mkdirSync(artifacts, { recursive: true });
+  const attachment = path.join(artifacts, "readonly.html"); fs.writeFileSync(attachment, "owned copy"); fs.chmodSync(attachment, 0o444);
+  const original = fs.rmSync;
+  const mock = t.mock.method(fs, "rmSync", (file, options) => {
+    if (path.resolve(file) === path.resolve(artifacts)) {
+      assert.equal(options.force, true); assert.equal(options.maxRetries, 3);
+      const error = new Error("fixture locked attachment"); error.code = "EPERM"; throw error;
+    }
+    return original(file, options);
+  });
+  assert.throws(() => catalog.delete(row), /会话记录已保留/);
+  assert(fs.readFileSync(target).equals(before));
+  assert.equal(catalog.find(row.id).title, "retain on failure");
+  assert.equal(catalog.find(row.id).draft, "keep draft");
+  assert(fs.existsSync(attachment));
+  mock.mock.restore();
+  catalog.delete(row);
+  assert(!fs.existsSync(target)); assert(!fs.existsSync(artifacts));
+});
+
+test("a real Windows attachment lock leaves the conversation retryable until released", { skip: process.platform !== "win32", timeout: 15000 }, async (t) => {
+  const { spawn } = require("node:child_process");
+  const { project, catalog } = fixture(t);
+  const row = catalog.create(project), target = catalog.file(project, row.sessionId);
+  catalog.update(row, { title: "Windows locked file" });
+  const artifacts = path.join(catalog.artifacts(project), row.sessionId);
+  fs.mkdirSync(artifacts, { recursive: true });
+  const attachment = path.join(artifacts, "locked.html"); fs.writeFileSync(attachment, "owned attachment");
+  const script = '$locked=[IO.File]::Open($env:CODECLAW_LOCK_FIXTURE,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read); [Console]::Out.WriteLine("LOCKED"); [Console]::Out.Flush(); [Console]::In.ReadLine() | Out-Null; $locked.Dispose()';
+  const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, CODECLAW_LOCK_FIXTURE: attachment },
+  });
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  t.after(async () => { child.stdin.end(); await exited; });
+  await new Promise((resolve, reject) => {
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; if (output.includes("LOCKED")) resolve(); });
+    child.once("error", reject);
+    child.once("exit", (code) => { if (!output.includes("LOCKED")) reject(new Error("Lock helper failed: " + code)); });
+  });
+  assert.throws(() => catalog.delete(row), /会话记录已保留/);
+  assert(fs.existsSync(target)); assert.equal(catalog.find(row.id).title, "Windows locked file");
+  child.stdin.end("\n"); await exited;
+  catalog.delete(row);
+  assert(!fs.existsSync(target)); assert(!fs.existsSync(artifacts));
+});
 test("removing a project keeps histories and reimport finds them; closing is persisted separately", (t) => {
   const { project, catalog } = fixture(t);
   const row = catalog.create(project);

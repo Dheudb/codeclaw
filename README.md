@@ -21,14 +21,18 @@ CodeClaw 围绕本地项目提供模型对话、文件与命令工具、Skills�
 
 ## 桌面版
 
-Windows 便携包内置 Python 运行时和 MCP 依赖，解压完整目录后运行 `CodeClaw.exe`。
+[**下载 Windows x64 便携版**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.1) · [所有版本](https://github.com/Dheudb/codeclaw/releases)
+
+在 Release 的 Assets 中下载 `CodeClaw-v0.1.0-beta.1-windows-x64.zip`，完整解压后运行 `CodeClaw.exe`。
+请下载成品 ZIP；GitHub 自动提供的 Source code 是源码。程序依赖同目录的 `resources`，不能只复制 EXE。
+Windows 便携包内置 Python 运行时和 MCP 依赖。
 **使用便携包不需要安装 Python、Node.js，也不需要选择解释器。**
 在“设置与模型”填写协议、API 地址、模型 ID 和 Key，点击“新建会话”即可使用默认工作区。
 默认目录按当前系统和用户自动设置，可在设置中修改；处理已有代码时再选择“打开项目”。
 仅打开界面、管理 Skills 或配置 MCP 不需要调用模型。
 
 本仓库保存源码；Windows 包由 `npm run pack` 构建，输出到 `desktop/release/`。
-GitHub Actions 的桌面验证任务也会生成便携包构建产物。
+公开下载包在 Releases 发布；GitHub Actions 目前仅手动触发。
 第三方本地 MCP 服务可能需要它自己的 Node.js、uv 或其他运行环境，服务安装卡片会说明。
 
 ## 从源码启动
@@ -61,7 +65,7 @@ C:\path\to\codeclaw\.venv\Scripts\codeclaw.exe
 | 能力 | 当前实现 |
 |---|---|
 | 桌面与 CLI | 共用引擎、模型配置和同一项目的会话格式 |
-| Skills | 项目/用户/导入目录发现，启停、校验和按需加载资源 |
+| Skills | 项目/用户/导入目录发现，校验、输入 `$` 选择和按需加载资源 |
 | 子代理 | 内置/自定义角色、并行批次、容量查询、消息投递、按 ID 续接及取消 |
 | MCP | 精选目录、官方注册表浏览、自定义 stdio / Streamable HTTP、连接测试和启停 |
 | 联网 | 内置 DuckDuckGo 搜索、静态网页读取，以及外部搜索 MCP |

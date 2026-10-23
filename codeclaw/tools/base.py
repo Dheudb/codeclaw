@@ -30,11 +30,8 @@ class BaseAgenticTool(ABC):
         return {
             "name": cls.name,
             "description": cls.description,
-            "input_schema": {
-                "type": "object",
-                "properties": schema.get("properties", {}),
-                "required": schema.get("required", [])
-            }
+            # Keep $defs and constraints: nested models reference them via $ref.
+            "input_schema": schema
         }
         
     @abstractmethod

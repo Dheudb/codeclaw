@@ -29,6 +29,7 @@ class MemoryCompactor:
         local_tokenizer_path: str = None,
     ):
         self.provider = self._resolve_provider(provider, model)
+        self.has_requested_model = bool(str(model or "").strip())
         self.model = self._resolve_model_name(model)
         self.api_base_url = api_base_url or os.environ.get("OPENAI_BASE_URL", "")
         self.local_tokenizer_path = (
@@ -72,6 +73,8 @@ class MemoryCompactor:
             if AsyncOpenAI is None:
                 return None
             kwargs = {}
+            if not self.has_requested_model:
+                kwargs["api_key"] = "not-configured"
             if self.api_base_url:
                 kwargs["base_url"] = self.api_base_url
             from openai import DefaultAsyncHttpxClient

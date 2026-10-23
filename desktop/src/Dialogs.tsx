@@ -14,6 +14,7 @@ export function SettingsDialog({
   catalog,
   workspaceAction,
   discoverModels,
+  deleteConnection,
 }: {
   config?: ModelConfig;
   close: () => void;
@@ -24,6 +25,7 @@ export function SettingsDialog({
   catalog: SessionCatalog;
   workspaceAction: (method: string, params: Record<string, unknown>) => Promise<void>;
   discoverModels: (value: Record<string, unknown>) => Promise<{ models: string[] }>;
+  deleteConnection: (connectionId: string) => Promise<ModelConfig>;
 }) {
   const [tab, setTab] = useState("model");
   const dialogRef = useRef<HTMLElement>(null);
@@ -44,6 +46,9 @@ export function SettingsDialog({
   const [discovering, setDiscovering] = useState(false);
   const [discoveryStatus, setDiscoveryStatus] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteId, setDeleteId] = useState("");
+  const savedConnection = config?.connections?.find((item) => item.connectionId === form.connectionId);
   const [error, setError] = useState("");
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -108,7 +113,7 @@ export function SettingsDialog({
           </nav>
           <div className="settings-content">
         <div className="form-section" role="tabpanel" id="settings-panel-model" aria-labelledby="settings-tab-model" hidden={tab !== "model"}>
-          <fieldset disabled={saving || discovering}>
+          <fieldset disabled={saving || discovering || deleting}>
           <h3>
             <KeyRound size={16} /> 模型连接
           </h3>
@@ -116,16 +121,32 @@ export function SettingsDialog({
           <div className="api-connection-row"><label>API 连接
             <select aria-label="API 连接" disabled={discovering || saving} value={form.connectionId} onChange={(event) => {
               const connection = config?.connections?.find((item) => item.connectionId === event.target.value);
-              if (connection) { setForm({ ...connection, apiKey: "", networkMode: connection.networkMode || "direct" }); setModelsText(connection.models.join("\n")); setDiscoveryStatus(""); setError(""); }
+              if (connection) { setForm({ ...connection, apiKey: "", networkMode: connection.networkMode || "direct" }); setModelsText(connection.models.join("\n")); setDiscoveryStatus(""); setError(""); setDeleteId(""); }
             }}>
               {(config?.connections || []).map((connection) => <option key={connection.connectionId} value={connection.connectionId}>{connection.connectionName}</option>)}
               {!config?.connections?.some((connection) => connection.connectionId === form.connectionId) && <option value={form.connectionId}>{form.connectionName}</option>}
             </select></label>
             <button disabled={discovering || saving} onClick={() => {
               setForm({ connectionId: crypto.randomUUID(), connectionName: "新 API", provider: "openai", model: "", baseUrl: "", hasKey: false, apiKey: "", networkMode: "direct" });
-              setModelsText(""); setDiscoveryStatus(""); setError("");
+              setModelsText(""); setDiscoveryStatus(""); setError(""); setDeleteId("");
             }}>新增 API</button>
+            <button className="danger" disabled={!savedConnection || saving || discovering || deleting} onClick={() => { setDeleteId(form.connectionId); setError(""); }}>删除 API</button>
           </div>
+          {deleteId === savedConnection?.connectionId && <div className="api-delete-confirm" role="group" aria-label="确认删除 API 连接">
+            <p>删除「{savedConnection.connectionName}」及其 {savedConnection.models.length} 个模型配置？保存的 Key 也会删除，聊天记录会保留。</p>
+            <div className="actions"><button onClick={() => setDeleteId("")}>保留 API</button>
+              <button className="danger" onClick={async () => {
+                setDeleting(true); setError("");
+                try {
+                  const next = await deleteConnection(deleteId);
+                  setForm({ connectionId: next.connectionId || crypto.randomUUID(), connectionName: next.connectionName || "我的 API", provider: next.provider,
+                    model: next.model, baseUrl: next.baseUrl, hasKey: next.hasKey, apiKey: "", networkMode: next.networkMode || "direct" });
+                  setModelsText((next.models || []).join("\n")); setDeleteId("");
+                  setDiscoveryStatus(next.connections?.length ? "已删除 API 连接。" : "已删除所有 API 连接，请添加新的连接。");
+                } catch (e) { setError(String(e)); } finally { setDeleting(false); }
+              }}>{deleting ? "删除中…" : "确认删除 API"}</button>
+            </div>
+          </div>}
           <label>连接名称<input aria-label="连接名称" value={form.connectionName} onChange={(event) => setForm({ ...form, connectionName: event.target.value })} /></label>
           <label>
             API 协议
@@ -210,7 +231,7 @@ export function SettingsDialog({
         {error && tab === "model" && <p role="alert" className="error">{error}</p>}
         <footer>
           <button onClick={close}>取消</button>
-          <button className="primary" disabled={saving || discovering || !form.model.trim()} onClick={submit}><Check size={15} />{saving ? "保存中…" : "保存配置"}</button>
+          <button className="primary" disabled={saving || discovering || deleting || !!deleteId || !form.model.trim()} onClick={submit}><Check size={15} />{saving ? "保存中…" : "保存配置"}</button>
         </footer>
           </fieldset>
         </div>

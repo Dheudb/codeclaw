@@ -51,7 +51,7 @@ async function dragWidth(target) {
   const box = await separator().boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + 110); await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 - (target - before), box.y + 110, { steps: 10 }); await page.mouse.up();
-  await page.waitForFunction((target) => Number(document.querySelector('[role="separator"]').getAttribute("aria-valuenow")) === target, target);
+  await page.waitForFunction((target) => Number(document.querySelector('.inspector-shell > [role="separator"]').getAttribute("aria-valuenow")) === target, target);
   assert.equal(settings().layout.inspectorWidth, target);
 }
 async function main() {

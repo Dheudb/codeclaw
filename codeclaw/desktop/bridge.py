@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 from codeclaw.core.config import load_config, load_config_into_env, save_config, normalize_api_base_url
-from codeclaw.core.model_catalog import public_config, active_connection, save_connection, select_model, discover_models, apply_connection_env
+from codeclaw.core.model_catalog import public_config, active_connection, save_connection, delete_connection, select_model, discover_models, apply_connection_env, apply_catalog_env
 from codeclaw.security.permissions import ApprovalPolicy
 from codeclaw.desktop.activity import restore_activity
 from codeclaw.desktop.turns import TurnRecorder, conversation_history
@@ -139,9 +139,12 @@ class DesktopBridge:
         provider = config["provider"]
         key = active_connection(cfg).get("api_key", "")
         signature = (provider, config["model"], config["baseUrl"], key, config["networkMode"])
-        if not config["model"] or (not force and signature == self.model_signature):
+        if not force and signature == self.model_signature:
             return
-        apply_connection_env(active_connection(cfg))
+        if not config["connections"]:
+            apply_catalog_env(cfg)
+        else:
+            apply_connection_env(active_connection(cfg))
         previous_client, previous_compactor = engine.client, engine.compactor
         engine.switch_model_runtime(provider=provider, model=config["model"], api_base_url=config["baseUrl"], api_key=key)
         await previous_client.close()
@@ -285,7 +288,7 @@ class DesktopBridge:
                 for name, _ in selections:
                     self.emit({"type": "skill_loaded", "name": name})
             options = {"input_blocks": [{"type": "text", "text": text}] + attachment_blocks, "attachments": attachment_items, "display_text": display_text} if attachment_items else {}
-            async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)}), **options):
+            async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)}), selected_skills=selected_skills, **options):
                 if self.stop_requested and event.get("type") == "final":
                     continue
                 if event.get("type") == "final" and str(event.get("text", "")).startswith(("[bold red]API Loop Exception:", "[bold red]System Halt:")):
@@ -354,7 +357,7 @@ class DesktopBridge:
             elif method == "mcp.reload":
                 await self.reload_mcp()
             elif method == "mcp.test":
-                if name not in self.mcp_store.read()["mcpServers"]:
+                if name not in self.mcp_store.read(include_skills=True)["mcpServers"]:
                     raise ValueError("Unknown MCP server")
                 self.mcp_testing = True
                 bridge = MCPBridge(str(self.mcp_store.path))
@@ -484,11 +487,18 @@ class DesktopBridge:
         if method in {"agents.list", "agents.capacity"}:
             await self.ensure_engine()
             return json.loads(await self.engine.available_tools["agent_tool"].execute(action=method.split(".")[1]))
-        if method in {"config.save", "config.select"}:
+        if method in {"config.save", "config.select", "config.delete"}:
             self.require_idle()
-            cfg = save_connection(load_config(), params) if method == "config.save" else select_model(load_config(), params.get("connectionId"), params.get("model"))
+            if method == "config.delete":
+                if params.get("confirm") is not True:
+                    raise ValueError("请确认删除 API 连接")
+                cfg = delete_connection(load_config(), params.get("connectionId"))
+            else:
+                cfg = save_connection(load_config(), params) if method == "config.save" else select_model(load_config(), params.get("connectionId"), params.get("model"))
             provider, network_mode = cfg["model_provider"], cfg["network_mode"]
             save_config(cfg)
+            if method == "config.delete":
+                apply_catalog_env(cfg)
             for suffix in ("model", "base_url", "api_key"):
                 value = cfg.get(provider + "_" + suffix, "")
                 if value:

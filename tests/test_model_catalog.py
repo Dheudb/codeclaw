@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import httpx
 
-from codeclaw.core.model_catalog import save_connection, public_config, select_model, discover_models, sync_legacy_connection, apply_connection_env, active_connection
+from codeclaw.core.model_catalog import save_connection, delete_connection, public_config, select_model, discover_models, sync_legacy_connection, apply_connection_env, apply_catalog_env, active_connection, connections
 
 
 class ModelCatalogTests(unittest.IsolatedAsyncioTestCase):
@@ -63,6 +63,43 @@ class ModelCatalogTests(unittest.IsolatedAsyncioTestCase):
             load_config_into_env()
             self.assertEqual(os.environ["OPENAI_MODEL"], "three")
             self.assertEqual(os.environ["OPENAI_API_KEY"], "first-secret")
+
+    def test_delete_active_falls_back_and_inactive_preserves_selection_and_keys(self):
+        first = self.configured()
+        cfg = save_connection(first, {"connectionId": "second", "provider": "anthropic", "model": "a", "models": ["a", "b"],
+            "baseUrl": "https://second.invalid/v1", "apiKey": "second-secret"})
+        original = json.dumps(cfg)
+        removed = delete_connection(cfg, 'second')
+        self.assertEqual(removed['active_model_connection'], 'legacy-openai')
+        self.assertEqual(removed['openai_api_key'], 'first-secret')
+        self.assertNotIn('second-secret', json.dumps(removed))
+        self.assertNotIn('anthropic_api_key', removed)
+        self.assertEqual(json.dumps(cfg), original)
+        inactive = delete_connection(cfg, 'legacy-openai')
+        self.assertEqual(inactive['active_model_connection'], 'second')
+        self.assertEqual(inactive['anthropic_api_key'], 'second-secret')
+        self.assertNotIn('first-secret', json.dumps(inactive))
+        with self.assertRaises(ValueError):
+            delete_connection(cfg, 'missing')
+        self.assertEqual(json.dumps(cfg), original)
+
+    def test_delete_last_stays_empty_across_environment_and_cli_reload_and_can_readd(self):
+        cfg = delete_connection(self.configured(), 'legacy-openai')
+        self.assertEqual(cfg['model_connections'], [])
+        self.assertEqual(cfg['unrelated'], 'preserve')
+        self.assertNotIn('first-secret', json.dumps(cfg))
+        with patch.dict(os.environ, {'OPENAI_MODEL': 'stale', 'OPENAI_API_KEY': 'first-secret', 'ANTHROPIC_API_KEY': 'other-secret', 'CODECLAW_OPENAI_MODEL': 'stale-alias'}):
+            self.assertEqual(connections(cfg), [])
+            self.assertEqual(public_config(cfg)['model'], '')
+            self.assertFalse(public_config(cfg)['hasKey'])
+            from codeclaw.core.config import load_config_into_env
+            with patch('codeclaw.core.config.load_config', return_value=cfg):
+                load_config_into_env()
+            for key in ('OPENAI_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CODECLAW_OPENAI_MODEL'):
+                self.assertNotIn(key, os.environ)
+        restored = save_connection(cfg, {'provider': 'openai', 'model': 'new', 'apiKey': 'new-secret'})
+        self.assertEqual(public_config(restored)['model'], 'new')
+        self.assertEqual(len(connections(restored)), 1)
 
     async def test_discovery_uses_own_key_filters_deduplicates_and_does_not_save(self):
         cfg = self.configured()

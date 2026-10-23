@@ -84,7 +84,7 @@ class MCPBridge:
 
     async def load_and_connect(self, only=None, include_disabled=False):
         discovered = {}
-        for name, raw in self.store.read()["mcpServers"].items():
+        for name, raw in self.store.read(include_skills=True)["mcpServers"].items():
             if only is not None and name != only:
                 continue
             if isinstance(raw, dict) and raw.get("enabled", True) is False and not include_disabled:

@@ -94,3 +94,17 @@ GitHub Actions 验证 Python 3.9/3.12、前端和 Windows 成品，并上传便�
 账户解锁后可在 Actions → Desktop workbench → Run workflow 手动运行；
 如需恢复自动检查，再为 `.github/workflows/desktop.yml` 添加 `push` 和 `pull_request` 触发。
 `desktop/build`、`desktop/release`、虚拟环境、缓存和本地配置不提交 Git。
+
+## 发布已有 Windows 成品
+
+将已测试的源码提交后，确认原安装目录的应用版本与准备发布的标签一致，再归档：
+
+```powershell
+python desktop/scripts/release.py --tag v0.1.0-beta.1
+```
+
+脚本核对已安装引擎、前端和 Electron 代码与源码一致，仅打包原安装目录，不创建另一份 EXE。
+它排除 Python 缓存和本机 wheel 安装来源信息，校验 ZIP 完整性并生成 SHA256 校验文件；
+压缩包内 `RELEASE.json` 记录源码提交、版本和构建号。
+将同一提交推送并创建版本标签，在 GitHub Release 上传 ZIP 和 `SHA256SUMS.txt`。
+首次发布使用 Pre-release，发布说明见 `docs/releases/`。此流程无需运行 GitHub Actions。

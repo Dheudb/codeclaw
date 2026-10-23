@@ -36,7 +36,8 @@ import TurnProcess from "./TurnProcess";
 import SkillInput from "./SkillInput";
 import FileChanges, { relativeFile } from "./FileChanges";
 import FilePreview from "./FilePreview";
-import { clampPanelWidth, DEFAULT_PANEL_WIDTH } from "./panel-width";
+import { clampPanelWidth, clampSidebarWidth, defaultSidebarWidth, DEFAULT_PANEL_WIDTH } from "./panel-width";
+import useConversationScroll from "./useConversationScroll";
 import Attachments, { AttachmentPreview } from "./Attachments";
 
 const basename = (value: string) =>
@@ -56,6 +57,7 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelTab, setPanelTab] = useState("skills");
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [sidebarWidth, setSidebarWidth] = useState<number>();
   const [viewport, setViewport] = useState(window.innerWidth);
   const [opening, setOpening] = useState(true);
   const [notice, setNotice] = useState("");
@@ -66,10 +68,11 @@ export default function App() {
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const [filePreview, setFilePreview] = useState<{ path: string; change?: FileChange; initialView: "diff" | "content" }>();
-  const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const navigation = useRef(0);
   const active = sessions.find((item) => item.id === activeId);
+  const conversationScroll = useConversationScroll(activeId, active?.messages, active?.interactions);
+  const effectiveSidebarWidth = clampSidebarWidth(sidebarWidth ?? defaultSidebarWidth(viewport), viewport, panelOpen);
   const draftSessions = useRef(sessions);
   draftSessions.current = sessions;
   const lastUser = active?.messages.slice().reverse().find((message) => message.role === "user");
@@ -96,6 +99,7 @@ export default function App() {
         setBuildId(value.buildId || "");
         setDefaultDirectory(value.workspaceSettings.defaultDirectory);
         if (Number.isFinite(value.layout?.inspectorWidth)) setPanelWidth(value.layout.inspectorWidth);
+        if (Number.isFinite(value.layout?.sidebarWidth)) setSidebarWidth(value.layout.sidebarWidth);
         receiveCatalog(value.catalog);
         setSessions((value.restored || []).map(createSession));
         setActiveId(value.activeId || "");
@@ -131,13 +135,6 @@ export default function App() {
   useEffect(() => {
     if (activeId) window.codeclaw.invoke("session.activate", { session: activeId }).catch(onError);
   }, [activeId]);
-  useEffect(() => {
-    bottom.current?.scrollIntoView({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ? "auto"
-        : "smooth",
-    });
-  }, [active?.messages, active?.interactions]);
   useEffect(() => {
     input.current?.focus();
     setFilePreview(undefined);
@@ -238,6 +235,7 @@ export default function App() {
   }
   async function send(continuation?: string) {
     if (opening || importing || modelChanging || permissionChanging || !active || active.busy || (!(continuation || active.draft).trim() && !active.attachments.length)) return;
+    conversationScroll.followLatest();
     const id = active.id,
       text = (continuation || active.draft).trim() || "请查看这些附件。",
       selected = active.selected,
@@ -344,13 +342,15 @@ export default function App() {
   const runningCommands = Object.values(active?.commands || {}).filter((command) => command.status === "running").length;
 
   return (
-    <div className={"workbench " + (!panelOpen ? "panel-hidden" : "")} style={{ "--inspector-width": clampPanelWidth(panelWidth, viewport) + "px" } as React.CSSProperties}
+    <div className={"workbench " + (!panelOpen ? "panel-hidden" : "")} style={{ "--sidebar-width": effectiveSidebarWidth + "px", "--inspector-width": clampPanelWidth(panelWidth, viewport, effectiveSidebarWidth) + "px" } as React.CSSProperties}
       onDragEnter={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); dragDepth.current++; setFileDrag(true); } }}
       onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setFileDrag(false); } }}
       onDragOver={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); event.dataTransfer.dropEffect = active?.busy || importing ? "none" : "copy"; } }}
       onDrop={(event) => { if (Array.from(event.dataTransfer.types).includes("Files")) { event.preventDefault(); event.stopPropagation(); dragDepth.current = 0; setFileDrag(false); void importFiles(Array.from(event.dataTransfer.files)); } }}>
       {fileDrag && <div className="file-drop-overlay"><Paperclip size={28} /><strong>{active?.busy ? "请先停止当前任务" : "松开以添加附件"}</strong><span>图片、PDF 和本地文件</span></div>}
       <aside className="sidebar">
+        <PanelResizer side="left" width={effectiveSidebarWidth} viewport={viewport} panelOpen={panelOpen} change={setSidebarWidth}
+          save={(sidebarWidth) => { void window.codeclaw.invoke("layout.save", { sidebarWidth }).catch(onError); }} />
         <div className="brand">
           <span className="brand-mark">
             <Code2 size={23} strokeWidth={2.4} />
@@ -439,7 +439,7 @@ export default function App() {
             </button>
           </div>
         )}
-        <div className="conversation">
+        <div className="conversation" ref={conversationScroll.ref} onScroll={conversationScroll.onScroll} onWheel={conversationScroll.onWheel}>
           {!active || !active.messages.length ? (
             <div className="welcome">
               <div className="welcome-symbol">
@@ -579,7 +579,6 @@ export default function App() {
               }
             />
           ))}
-          <div ref={bottom} />
         </div>
         <div className="composer-area">
           {active?.error && !paused && (
@@ -722,7 +721,7 @@ export default function App() {
       </main>
       {panelOpen && (
         <div className="inspector-shell">
-        <PanelResizer width={clampPanelWidth(panelWidth, viewport)} viewport={viewport} change={setPanelWidth}
+        <PanelResizer width={clampPanelWidth(panelWidth, viewport, effectiveSidebarWidth)} viewport={viewport} sidebarWidth={effectiveSidebarWidth} change={setPanelWidth}
           save={(inspectorWidth) => { void window.codeclaw.invoke("layout.save", { inspectorWidth }).catch(onError); }} />
         {filePreview && active ? <FilePreview sessionId={activeId} project={active.project}
           version={active.fileChanges?.find((file) => file.path === (filePreview.change?.path || filePreview.path) || relativeFile(file.path, active.project) === filePreview.path)?.updatedAt}
@@ -754,6 +753,12 @@ export default function App() {
           }}
           close={() => setSettingsOpen(false)}
           save={saveModel}
+          deleteConnection={async (connectionId) => {
+            const config = await invoke("config.delete", { connectionId, confirm: true });
+            setGlobalModel(config);
+            setSessions((previous) => previous.map((session) => ({ ...session, config })));
+            return config;
+          }}
           discoverModels={(value) => window.codeclaw.invoke("config.models", value)}
         />
       )}

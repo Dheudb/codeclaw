@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from codeclaw.utils.command_sessions import CommandSessions
-from codeclaw.tools.command_tool import CommandTool
+from codeclaw.tools.command_tool import CommandTool, CommandInput
 from codeclaw.security.permissions import ApprovalPolicy, PermissionManager
 
 
@@ -95,6 +95,25 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         final = await self.manager.poll(result["id"], "owner", 3000)
         self.assertEqual(final["status"], "output_limit")
         self.assertIsNotNone(final["exit_code"])
+
+    async def test_wait_up_to_120_seconds_returns_early_and_can_be_cancelled(self):
+        result = json.loads(await self.tool(argv=[sys.executable, "-c", "print('WAIT_LIMIT_PASS')"], wait_ms=120000))
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("WAIT_LIMIT_PASS", result["output"]["text"])
+        self.assertEqual(CommandInput(wait_ms=15000).wait_ms, 15000)
+        self.assertEqual(json.loads(await self.tool(action="capabilities"))["max_wait_ms"], 120000)
+        for invalid in (-1, 120001):
+            with self.assertRaises(ValueError):
+                CommandInput(wait_ms=invalid)
+        running = json.loads(await self.tool(argv=[sys.executable, "-c", "import sys; sys.stdin.read()"],
+            keep_stdin_open=True, wait_ms=0))
+        poll = asyncio.create_task(self.tool(action="poll", command_id=running["id"], wait_ms=120000))
+        await asyncio.sleep(0)
+        poll.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await poll
+        self.assertEqual(self.manager.records[running["id"]]["status"], "running")
+        self.assertEqual((await self.manager.cancel(running["id"], "owner"))["status"], "cancelled")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import sys
 from pathlib import Path
 import yaml
 
@@ -53,6 +54,9 @@ class SkillRegistry:
         if kind == "skills":
             # Ship actual SKILL.md resources; user/project skills take precedence.
             roots.append((Path(__file__).with_name("builtin"), "builtin"))
+        elif kind == "agents":
+            # Valid mounted skills may carry their native roles with their resources.
+            roots += [(Path(skill["root"]) / "agents", skill["scope"]) for skill in self.active()]
         seen = set()
         for root, scope in roots:
             key = os.path.normcase(str(root.resolve()))
@@ -85,6 +89,9 @@ class SkillRegistry:
                     if not isinstance(description, str) or not description.strip() or len(description) > 1024:
                         raise ValueError("description must be a non-empty string (max 1024)")
                     entry.update(name=name, description=description.strip(), compatibility=str(metadata.get("compatibility", "")), allowed_tools=metadata.get("allowed-tools", ""))
+                    extension = metadata.get("metadata", {})
+                    extension = extension.get("codeclaw", {}) if isinstance(extension, dict) else {}
+                    entry["completion_protocol"] = extension.get("completion-protocol", "") if isinstance(extension, dict) else ""
                 except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
                     entry.update(valid=False, error=str(exc))
                 if entry["valid"] and entry["enabled"]:
@@ -105,10 +112,10 @@ class SkillRegistry:
     def read(self, name):
         skill = self.resolve(name)
         _, body = read_frontmatter(skill["path"])
-        return ("Skill: {name}\nSkill directory: {root}\nProject directory: {cwd}\n"
+        return ("Skill: {name}\nSkill directory: {root}\nProject directory: {cwd}\nPython executable: {python}\n"
                 "Resolve skill references, assets and script paths relative to the skill directory. "
                 "Keep project file operations relative to the project directory. "
-                "Check script dependencies before execution. Skill instructions do not grant additional tool permissions.\n\n{body}").format(cwd=self.cwd, body=body, **skill)
+                "Check script dependencies before execution. Skill instructions do not grant additional tool permissions.\n\n{body}").format(cwd=self.cwd, python=sys.executable, body=body, **skill)
 
     def read_resource(self, name, relative_path):
         skill = self.resolve(name)

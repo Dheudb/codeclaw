@@ -164,7 +164,7 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
         try:
             with patch.dict(os.environ, {"CODECLAW_TEST_MODEL_SECRET": "must-not-inherit"}):
                 tools = await bridge.load_and_connect()
-            self.assertEqual(set(tools), {"local_search", "remote_search"})
+            self.assertEqual({name for name in tools if getattr(tools[name], "server_name", None) not in self.store.skill_servers()}, {"local_search", "remote_search"})
             self.assertIn("SEARCH_FIXTURE_PROOF", await tools["local_search"](query="local"))
             self.assertEqual(await tools["local_search"](query="__env__"), "absent:explicit-fixture")
             self.assertEqual(await tools["remote_search"](query="__header__"), "Bearer fixture-secret")

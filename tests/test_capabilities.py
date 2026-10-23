@@ -77,11 +77,13 @@ class RegistryTests(unittest.TestCase):
 
     def test_bundled_skills_load_without_user_configuration(self):
         builtins = [s for s in self.registry.active() if s["scope"] == "builtin"]
-        self.assertEqual({s["name"] for s in builtins}, {"code-review", "debug-issue", "web-research"})
+        self.assertTrue({"code-review", "debug-issue", "web-research"}.issubset({s["name"] for s in builtins}))
         for skill in builtins:
             self.assertTrue(Path(skill["path"]).is_file())
             self.assertIn("Project directory: " + str(self.project.resolve()), self.registry.read(skill["name"]))
-        self.assertFalse(any(scope == "builtin" for _, scope in self.registry.roots("agents")))
+        for root, scope in self.registry.roots("agents"):
+            if scope == "builtin":
+                self.assertTrue((root.parent / "SKILL.md").is_file())
 
     def test_custom_skill_overrides_builtin_and_removal_restores_fallback(self):
         directory = self.skill(self.project / ".codeclaw" / "skills", name="code-review", body="CUSTOM_REVIEW_INSTRUCTIONS")

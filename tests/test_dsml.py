@@ -10,6 +10,22 @@ def envelope(parameters, name="agent_tool"):
 
 
 class DSMLTests(unittest.TestCase):
+    def test_wrapped_native_arguments_are_normalized_without_relaxing_validation(self):
+        import json
+        wrapped = '<｜DSML｜parameter name="arguments" string="false">{"prompt":"hello","run_in_background":true,"values":[1,2]}</｜DSML｜parameter>'
+        arguments = json.loads(decode_tool_text(envelope(wrapped), SCHEMA)[1][0]["arguments"])
+        self.assertEqual(arguments, {"prompt": "hello", "run_in_background": True, "values": [1, 2]})
+        cases = [wrapped.replace('"prompt":"hello"', '"prompt":"hello","prompt":"second"'),
+                 wrapped.replace('"prompt":"hello"', '"unknown":"hello"'),
+                 wrapped.replace('string="false"', 'string="true"'),
+                 wrapped + '<｜DSML｜parameter name="prompt" string="true">override</｜DSML｜parameter>',
+                 '<｜DSML｜parameter name="arguments" string="false">[]</｜DSML｜parameter>']
+        for value in cases:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                decode_tool_text(envelope(value), SCHEMA)
+        # A tool that actually declares arguments must receive it unchanged.
+        schema = [{"function": {"name": "agent_tool", "parameters": {"properties": {"arguments": {}}}}}]
+        self.assertEqual(json.loads(decode_tool_text(envelope(wrapped), schema)[1][0]["arguments"]), {"arguments": arguments})
     def test_decode_strings_json_and_parallel_calls(self):
         parameters = '<｜DSML｜parameter name="prompt" string="true">你好\n<>& raw</｜DSML｜parameter>\n<｜DSML｜parameter name="run_in_background" string="false">true</｜DSML｜parameter>\n<｜DSML｜parameter name="values" string="false">[1,{"nested":false}]</｜DSML｜parameter>'
         body = envelope(parameters)

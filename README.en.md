@@ -10,13 +10,20 @@ The desktop uses Electron and React. It is currently a preview.
 
 ## Desktop
 
+[**Download Windows x64 portable**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.1) · [All releases](https://github.com/Dheudb/codeclaw/releases)
+
+Download `CodeClaw-v0.1.0-beta.1-windows-x64.zip` from Assets, extract the entire
+folder, and run `CodeClaw.exe`. The automatic Source code downloads contain source,
+not a runnable application. Keep the `resources` directory beside the executable.
+
 The Windows portable package includes Python and the MCP dependencies. Extract the
 entire package and run `CodeClaw.exe`; users do not install Python or select an
 interpreter. Open a project and configure the model endpoint in Settings.
 Some third-party local MCP servers still require their own Node.js, uv or other runtime.
 
 This repository contains source. Run `npm run pack` in `desktop/` to build a
-Windows package, or use the artifact from the desktop GitHub Actions workflow.
+Windows package. Public downloads are published in Releases; the desktop GitHub
+Actions workflow currently runs only when manually dispatched.
 
 ## Source setup
 
@@ -41,7 +48,7 @@ Run `codeclaw` from the project you want to work on to use the CLI.
 ## Capabilities
 
 - Project sessions and streaming conversations, shared with the CLI after saving.
-- Skills discovery, import, enable/disable, validation and resource loading.
+- Skills discovery, import, validation, `$` selection and resource loading.
 - Built-in and custom subagents with foreground/background tasks and cancellation.
 - MCP curated catalog, official registry browsing, stdio/Streamable HTTP configuration and connection tests.
 - Built-in DuckDuckGo search, static page extraction and external search MCP tools.

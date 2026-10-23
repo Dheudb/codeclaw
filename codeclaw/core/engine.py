@@ -8,6 +8,7 @@ import sys
 import time
 from types import SimpleNamespace
 from typing import Optional
+from pydantic import ValidationError
 
 _logger = logging.getLogger(__name__)
 from anthropic import (
@@ -43,8 +44,10 @@ from codeclaw.features.plans import PlanManager, is_session_plan_file
 from codeclaw.security.permissions import PermissionManager
 from codeclaw.utils.shell_tasks import ShellTaskManager
 from codeclaw.context.tool_results import build_tool_result, serialize_tool_result
-from codeclaw.protocols.dsml import ToolTextFilter, decode_tool_text
+from codeclaw.protocols.dsml import ToolTextFilter, ToolProtocolError, decode_tool_text, parse_tool_arguments
 from codeclaw.features.todos import TodoManager
+from codeclaw.features.workflow_completion import WorkflowCompletion
+from codeclaw.protocols.stream_watch import StreamWatch, StreamAborted, StreamInterrupted
 from codeclaw.utils.vcr import VCRManager
 from codeclaw.features.ultraplan import UltraplanManager
 from codeclaw.agents.team import TeamManager
@@ -284,6 +287,7 @@ class QueryEngine:
         
         # Share state across instances for locks and cross-tool persistence
         self.tool_context = {
+            "workflow_completion": WorkflowCompletion(),
             "skill_registry": SkillRegistry(self.session_cwd),
             "agent_registry": AgentRegistry(self.session_cwd),
             "subagent_tasks": SubagentTasks(),
@@ -371,7 +375,7 @@ class QueryEngine:
         """
         if provider:
             self.model_provider = self._resolve_model_provider(provider, model or self.primary_model)
-        if model:
+        if model is not None:
             self.primary_model = model
             self.model = model
         self.fallback_model = self._resolve_fallback_model(None)
@@ -465,6 +469,8 @@ class QueryEngine:
                     "OpenAI provider requested but openai SDK is not installed."
                 )
             kwargs = {}
+            if not self.primary_model:
+                kwargs["api_key"] = "not-configured"
             if self.api_base_url:
                 kwargs["base_url"] = self.api_base_url
             from openai import DefaultAsyncHttpxClient
@@ -2201,6 +2207,8 @@ class QueryEngine:
         tool_name = self._tb_get(tool_block, "name", "")
         tool_id = self._tb_get(tool_block, "id", "")
         tool_inputs = copy.deepcopy(self._tb_get(tool_block, "input", {}) or {})
+        input_error = bool(self._tb_get(tool_block, "_argument_error", ""))
+        handler_invoked = False
         spill_recorder = self._build_spill_recorder(tool_name=tool_name, tool_use_id=tool_id)
 
         sys_print_callback(f"  [dim cyan]↳ calling {tool_name}[/dim cyan]")
@@ -2235,8 +2243,16 @@ class QueryEngine:
                 reason=before_tool_decision.reason,
             )
 
-        if tool_name not in self.available_tools:
-            res_text = f"System Error: Tool '{tool_name}' not found."
+        if self._tb_get(tool_block, "_argument_error", ""):
+            res_text = serialize_tool_result(build_tool_result(
+                ok=False, content=(self._tb_get(tool_block, "_argument_error", "") +
+                    "\nThis call was not executed. Correct the arguments using the tool schema and resubmit only this call; do not repeat completed operations."),
+                metadata={"tool_name": tool_name, "executed": False, "code": "invalid_json_arguments"}, is_error=True))
+        elif tool_name not in self.available_tools:
+            input_error = True
+            res_text = serialize_tool_result(build_tool_result(ok=False,
+                content=f"Tool '{tool_name}' is unavailable. This call was not executed. Use a currently declared tool or discover it with search_tool.",
+                metadata={"code": "unavailable_tool", "executed": False}, is_error=True))
         elif before_tool_decision.behavior == "reject":
             res_text = serialize_tool_result(
                 build_tool_result(
@@ -2260,6 +2276,8 @@ class QueryEngine:
                 if tool_name not in effective_tools:
                     raise KeyError(f"Tool '{tool_name}' is not available in current mode.")
                 handler = effective_tools[tool_name]
+                if hasattr(handler, "input_schema"):
+                    handler.input_schema(**tool_inputs)
                 permission = await self.permission_manager.authorize(
                     handler,
                     tool_inputs,
@@ -2301,15 +2319,26 @@ class QueryEngine:
                         spill_recorder=spill_recorder,
                     )
                 else:
+                    handler_invoked = True
                     raw_result = await handler(**tool_inputs)
                     res_text = serialize_tool_result(
                         raw_result,
+                        spill_threshold_chars=1000000 if tool_name == "skill_tool" and tool_inputs.get("action") in {"read", "resource"} else 5000,
                         artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id),
                         spill_recorder=spill_recorder,
                     )
             except asyncio.CancelledError:
                 self._record_tool_completion(tool_name, tool_id, "操作已取消。", "cancelled")
                 raise
+            except (ValidationError, ToolProtocolError) as e:
+                detail = json.dumps(e.errors(include_input=False, include_url=False), ensure_ascii=False, default=str) if isinstance(e, ValidationError) else str(e)
+                if handler_invoked:
+                    res_text = "Tool Exception Caught: " + detail + "\nExecution may have begun. Inspect the existing operation and its durable result before retrying; do not blindly repeat it."
+                else:
+                    input_error = True
+                    res_text = serialize_tool_result(build_tool_result(ok=False,
+                        content="Invalid tool input: " + detail + "\nCorrect the parameters using the tool schema. This call was not executed; do not repeat completed operations.",
+                        metadata={"code": "invalid_tool_input", "tool_name": tool_name, "executed": False}, is_error=True))
             except Exception as e:
                 res_text = f"Tool Exception Caught: {str(e)}"
 
@@ -2325,6 +2354,7 @@ class QueryEngine:
             "tool_use_id": tool_id,
             "content": res_text,
             "is_error": status == "error",
+            **({"_input_error": True} if input_error else {}),
         }
 
     async def _execute_tool_batches(self, tool_calls, sys_print_callback=print, *, turn: int = 0, event_callback=None):
@@ -2430,6 +2460,8 @@ class QueryEngine:
                 "id": getattr(block, "id", ""),
                 "name": getattr(block, "name", ""),
                 "input": copy.deepcopy(getattr(block, "input", {}) or {}),
+                **({"_argument_error": block._argument_error} if getattr(block, "_argument_error", "") else {}),
+                **({"_raw_arguments": getattr(block, "_raw_arguments", "")} if getattr(block, "_argument_error", "") else {}),
             }
         if block_type == "thinking":
             return {
@@ -3607,6 +3639,7 @@ class QueryEngine:
         current_safe_batch_tasks = None
         streaming_semaphore = asyncio.Semaphore(self.MAX_TOOL_CONCURRENCY)
         streaming_sibling_cancel = asyncio.Event()
+        openai_watch = None
 
         try:
             if self.model_provider == "openai":
@@ -3647,16 +3680,19 @@ class QueryEngine:
 
                     tool_id = record["id"]
                     raw_args = "".join(record.get("arguments", []) or [])
+                    argument_error = ""
                     try:
-                        parsed_args = json.loads(raw_args) if raw_args.strip() else {}
-                    except Exception:
-                        parsed_args = {}
+                        parsed_args = parse_tool_arguments(raw_args)
+                    except ToolProtocolError as exc:
+                        parsed_args, argument_error = {}, str(exc)
 
                     tool_block = SimpleNamespace(
                         type="tool_use",
                         id=tool_id,
                         name=record["name"],
                         input=parsed_args,
+                        _argument_error=argument_error,
+                        _raw_arguments=raw_args,
                     )
 
                     is_safe = self._is_concurrency_safe(record["name"], parsed_args)
@@ -3700,8 +3736,14 @@ class QueryEngine:
                         "task": task,
                     })
 
-                stream = await self.client.chat.completions.create(**create_kwargs)
+                async def stream_status(metrics):
+                    await self._emit_stream_event(event_callback, {"type": "stream_status", "turn": turn_count, "metrics": metrics})
+                openai_watch = StreamWatch(self.abort_event, stream_status)
+                await openai_watch.status("waiting", force=True)
+                stream = await openai_watch.wait(self.client.chat.completions.create(**create_kwargs))
                 self.active_stream = stream
+                openai_watch.metrics["connectedMs"] = openai_watch.ms()
+                await openai_watch.status("connected", force=True)
                 await self._emit_stream_event(event_callback, {
                     "type": "message_start",
                     "turn": turn_count,
@@ -3709,7 +3751,17 @@ class QueryEngine:
 
                 last_tool_index = -1
 
-                async for chunk in stream:
+                iterator = stream.__aiter__()
+                while True:
+                    try:
+                        chunk = await openai_watch.wait(iterator.__anext__())
+                    except StopAsyncIteration:
+                        break
+                    except (StreamAborted, StreamInterrupted):
+                        raise
+                    except Exception as exc:
+                        raise StreamInterrupted("模型流传输中断，已收到的内容保留。请检查后继续，不会自动重放工具操作。") from exc
+                    await openai_watch.chunk(chunk)
                     if self.abort_event.is_set():
                         raise AbortRequestedError("Abort requested during OpenAI streaming response.")
                     chunk_usage = getattr(chunk, "usage", None)
@@ -3721,6 +3773,8 @@ class QueryEngine:
 
                     choices = list(getattr(chunk, "choices", []) or [])
                     if not choices:
+                        if openai_watch.terminal_at is not None and chunk_usage is not None:
+                            break
                         continue
 
                     choice = choices[0]
@@ -3732,6 +3786,7 @@ class QueryEngine:
                             visible_delta = text_filter.feed(delta_text)
                             if visible_delta:
                                 await self._emit_stream_event(event_callback, {"type": "text_delta", "turn": turn_count, "text": visible_delta})
+                                await openai_watch.visible()
 
                         for tool_delta in list(getattr(delta, "tool_calls", []) or []):
                             index = int(getattr(tool_delta, "index", 0) or 0)
@@ -3767,10 +3822,20 @@ class QueryEngine:
 
                     if getattr(choice, "finish_reason", None):
                         finish_reason = self._map_openai_finish_reason(choice.finish_reason)
+                    if openai_watch.terminal_at is not None and chunk_usage is not None:
+                        break
+
+                if openai_watch.terminal_at is None:
+                    raise StreamInterrupted("模型连接在收到结束标记前断开，已有内容可能不完整，已保留。请检查后继续，不会自动重放工具操作。")
+                await openai_watch.status("completed", force=True)
 
                 full_text = "".join(text_fragments)
                 if not tool_calls:
-                    full_text, recovered = decode_tool_text(full_text, tools_schema)
+                    try:
+                        full_text, recovered = decode_tool_text(full_text, tools_schema)
+                    except ToolProtocolError as exc:
+                        exc.usage = usage_payload
+                        raise
                     for index, call in enumerate(recovered):
                         tool_calls[index] = {**call, "arguments": [call["arguments"]]}
                 else:
@@ -3796,17 +3861,19 @@ class QueryEngine:
                 for record in [tool_calls[idx] for idx in sorted(tool_calls.keys())]:
                     tool_id = record.get("id") or f"call_{len(content_blocks) + 1}"
                     raw_arguments = "".join(record.get("arguments", []) or [])
+                    argument_error = ""
                     try:
-                        parsed_arguments = json.loads(raw_arguments) if raw_arguments.strip() else {}
-                    except Exception:
-                        parsed_arguments = {}
-                    content_blocks.append(
-                        self._make_tool_use_block(
+                        parsed_arguments = parse_tool_arguments(raw_arguments)
+                    except ToolProtocolError as exc:
+                        parsed_arguments, argument_error = {}, str(exc)
+                    block = self._make_tool_use_block(
                             tool_id=tool_id,
                             name=record.get("name", ""),
                             input_payload=parsed_arguments,
                         )
-                    )
+                    block._argument_error = argument_error
+                    block._raw_arguments = raw_arguments
+                    content_blocks.append(block)
 
                 await self._emit_stream_event(event_callback, {
                     "type": "message_stop",
@@ -3987,11 +4054,76 @@ class QueryEngine:
                     "stop_reason": getattr(response, "stop_reason", None),
                 })
                 return response, [], True
+        except StreamAborted:
+            await self._cancel_streaming_tool_tasks(tool_entries)
+            if openai_watch:
+                await openai_watch.status("cancelled", force=True)
+            raise AbortRequestedError("Abort requested while receiving model stream.")
+        except StreamInterrupted as exc:
+            exc.partial_text = text_filter.text[:text_filter.emitted] if self.model_provider == "openai" else ""
+            await self._cancel_streaming_tool_tasks(tool_entries)
+            exc.tool_results = [entry["task"].result() for entry in tool_entries
+                                if entry["task"].done() and not entry["task"].cancelled() and entry["task"].exception() is None]
+            if openai_watch:
+                openai_watch.metrics["error"] = str(exc)
+                await openai_watch.status("error", force=True)
+            raise
         finally:
+            if self.model_provider == "openai" and self.active_stream is not None:
+                close = getattr(self.active_stream, "close", None) or getattr(self.active_stream, "aclose", None)
+                if close:
+                    try:
+                        result = close()
+                        if inspect.isawaitable(result):
+                            await result
+                    except Exception:
+                        pass
             self.active_stream = None
             self.active_streaming_tool_entries = []
 
-    async def _run_loop(self, user_input: str, sys_print_callback=print, event_callback=None, input_blocks=None, attachments=None, display_text=None):
+    async def _collect_subagents_before_final(self, *, turn, event_callback=None):
+        """Close the completion race without replaying work or consuming model turns while waiting."""
+        workers = self.tool_context["subagent_tasks"]
+        active = lambda: {key: task for key, task in workers.tasks.items() if not task.done()}
+        pending = active()
+        waited = bool(pending)
+        if pending:
+            stopped = asyncio.create_task(self.abort_event.wait())
+            try:
+                while pending:
+                    if self.abort_event.is_set():
+                        raise AbortRequestedError("Abort requested while waiting for subagents.")
+                    await self._emit_stream_event(event_callback, {"type": "subagents_waiting", "count": len(pending),
+                        "agent_ids": list(pending), "message": f"等待 {len(pending)} 个子代理返回结果，全部结束后再汇总。"})
+                    await asyncio.wait([*pending.values(), stopped], return_when=asyncio.FIRST_COMPLETED)
+                    if self.abort_event.is_set():
+                        raise AbortRequestedError("Abort requested while waiting for subagents.")
+                    pending = active()
+            finally:
+                stopped.cancel()
+                await asyncio.gather(stopped, return_exceptions=True)
+        # Include workers that finished while the model was streaming its answer,
+        # even if no worker remains active by the time this gate is reached.
+        reports = workers.completed()
+        if not waited and not reports:
+            return False
+        for report in reports:
+            self.messages.append(create_user_message("Background subagent completed: " + json.dumps(report, ensure_ascii=False), origin="subagent"))
+        self.messages.append(create_user_message(
+            "\n\n[Delegation completion guard]\nThe previous draft was provisional. All owned subagent tasks have now ended, "
+            "and any newly returned results are included above. Continue the requested workflow and synthesize the actual results. "
+            "Distinguish completed, crashed, cancelled and missing-output workers. Do not invent their output or claim that all succeeded. "
+            "Do not relaunch or repeat completed work just to prepare the final answer.",
+            is_meta=True, origin="delegation_completion"))
+        self._sync_message_context()
+        await self._record_loop_transition("delegation_completion_guard", turn=turn, event_callback=event_callback,
+            waited=waited, report_count=len(reports))
+        await self._emit_stream_event(event_callback, {"type": "subagents_waiting", "count": 0,
+            "message": "子代理均已结束，正在汇总实际结果；失败或取消的任务会单独说明。"})
+        self.persist_session_state()
+        return True
+
+    async def _run_loop(self, user_input: str, sys_print_callback=print, event_callback=None, input_blocks=None, attachments=None, display_text=None, selected_skills=None):
         """
         The Core Action Loop:
         1. Contextualize System Prompt.
@@ -4000,6 +4132,10 @@ class QueryEngine:
         4. If stop -> Return final textual output.
         """
         self.abort_event.clear()
+        completion = self.tool_context["workflow_completion"]
+        completion.reset()
+        for name in selected_skills or []:
+            completion.activate(self.tool_context["skill_registry"].resolve(name))
 
         if not self.is_configured:
             return (
@@ -4033,6 +4169,9 @@ class QueryEngine:
             self.persist_session_state()
         
         loop_state = self._build_loop_state()
+        protocol_failures = 0
+        protocol_retries = 0
+        input_failures = 0
 
         while loop_state["turn_count"] < loop_state["max_turns"]:
             mailbox = self.tool_context.get("delegated_mailbox")
@@ -4163,6 +4302,7 @@ class QueryEngine:
                     tools_schema=tools_schema,
                     thinking_config=effective_thinking_config,
                 )
+                protocol_failures = 0
                 await self._emit_stream_event(event_callback, {
                     "type": "token_usage",
                     "turn": turn_count,
@@ -4191,6 +4331,7 @@ class QueryEngine:
                 self.persist_session_state()
                 
                 if response.stop_reason == "tool_use":
+                    loop_state["workflow_guard_stalls"] = 0
                     if streaming_tool_entries:
                         tool_results = []
                         for item in streaming_tool_entries:
@@ -4214,6 +4355,27 @@ class QueryEngine:
                     )
                     self.messages.append(tool_result_msg)
                     self._sync_message_context()
+                    if any(item.get("_input_error") for item in tool_results):
+                        input_failures += 1
+                        retrying = input_failures <= 2 and protocol_retries < 6
+                        message = (f"工具参数校验失败，正在请求模型修正（{input_failures}/2）。已完成的操作保留。" if retrying else
+                                   "工具参数多次修正失败，任务已中断。已完成的操作和文件保留，可继续当前会话。")
+                        await self._record_loop_transition("tool_input_repair" if retrying else "tool_input_exhausted",
+                            turn=turn_count, event_callback=event_callback, attempt=input_failures, retrying=retrying)
+                        await self._emit_stream_event(event_callback, {"type": "tool_protocol_error", "message": message,
+                            "retrying": retrying, "detail": "Invalid tool input; see the rejected call's tool result."})
+                        sys_print_callback(message)
+                        self.persist_session_state()
+                        if not retrying:
+                            halted = create_assistant_message(message, model=loop_state["active_model"], stop_reason="tool_input_error")
+                            halted["_is_meta"] = True
+                            self.messages.append(halted)
+                            self._sync_message_context()
+                            self.persist_session_state()
+                            return "[bold red]API Loop Exception:[/bold red] " + message
+                        protocol_retries += 1
+                    else:
+                        input_failures = 0
                     
                     # Capture lagging compiler diagnostics from background daemon
                     await asyncio.sleep(0.4)
@@ -4287,6 +4449,36 @@ class QueryEngine:
                     # Normal completion without Tool calls => Return final answer
                     texts = [b.get("text", "") for b in content_as_dicts if isinstance(b, dict) and b.get("type") == "text"]
                     final_answer = "\n".join(texts)
+                    if await self._collect_subagents_before_final(turn=turn_count, event_callback=event_callback):
+                        assistant_message["_stop_reason"] = "awaiting_subagents"
+                        self.persist_session_state()
+                        continue
+
+                    if completion.pending:
+                        if self.abort_event.is_set():
+                            raise AbortRequestedError("Abort requested before workflow completion check.")
+                        stalls = loop_state.get("workflow_guard_stalls", 0) + 1
+                        retries = loop_state.get("workflow_guard_retries", 0)
+                        retrying = stalls <= 2 and retries < 6
+                        loop_state["workflow_guard_stalls"] = stalls
+                        assistant_message["_stop_reason"] = "workflow_incomplete"
+                        message = (f"技能流程尚未完成，正在请求模型继续执行（{stalls}/2）。" if retrying else
+                                   "技能流程尚未完成，模型多次提前结束，任务已中断。已有结果保留，可继续当前会话。")
+                        await self._emit_stream_event(event_callback, {"type": "workflow_incomplete", "message": message, "retrying": retrying})
+                        await self._record_loop_transition("workflow_completion_guard" if retrying else "workflow_completion_exhausted",
+                            turn=turn_count, event_callback=event_callback, retrying=retrying, attempt=stalls)
+                        if retrying:
+                            loop_state["workflow_guard_retries"] = retries + 1
+                            self.messages.append(create_user_message(completion.feedback(), is_meta=True, origin="workflow_completion"))
+                        else:
+                            halted = create_assistant_message(message, model=loop_state["active_model"], stop_reason="workflow_incomplete")
+                            halted["_is_meta"] = True
+                            self.messages.append(halted)
+                        self._sync_message_context()
+                        self.persist_session_state()
+                        if retrying:
+                            continue
+                        return "[bold red]System Halt:[/bold red] " + message
 
                     # Plan mode guard: model ended with text-only output while plan mode
                     # is active. It should have called exit_plan_mode or ask_user_question_tool.
@@ -4439,6 +4631,56 @@ class QueryEngine:
             except Exception as e:
                 if streaming_tool_entries:
                     await self._cancel_streaming_tool_tasks(streaming_tool_entries)
+                if isinstance(e, ToolProtocolError):
+                    # DSML is decoded atomically before dispatch. Earlier successful
+                    # turns and their side effects must never be rolled back/replayed.
+                    protocol_failures += 1
+                    retrying = protocol_failures <= 2 and protocol_retries < 6
+                    diagnostic = ""
+                    try:
+                        directory = artifact_directory(self.session_cwd) / self.session_id / "protocol-errors"
+                        directory.mkdir(parents=True, exist_ok=True)
+                        target = directory / (uuid.uuid4().hex + ".json")
+                        target.write_text(json.dumps({"code": e.code, "detail": str(e), "tool": e.tool_name,
+                            "turn": turn_count, "raw_completion": e.raw_text}, ensure_ascii=False, indent=2), encoding="utf-8")
+                        diagnostic = str(target)
+                    except OSError:
+                        pass
+                    if e.usage is not None:
+                        self._record_token_usage(SimpleNamespace(usage=e.usage, content=[self._make_text_block(e.raw_text)]), loop_state, turn_count,
+                            system_prompt=system_prompt, api_messages=api_messages, tools_schema=tools_schema,
+                            thinking_config=effective_thinking_config)
+                    message = (f"工具调用格式错误，正在请求模型修正（{protocol_failures}/2）。已完成的操作保留。" if retrying else
+                               "工具调用格式多次修正失败，任务已中断。已完成的操作和文件保留，可继续当前会话。")
+                    await self._record_loop_transition("tool_protocol_repair" if retrying else "tool_protocol_exhausted",
+                        turn=turn_count, event_callback=event_callback, code=e.code, detail=str(e),
+                        retrying=retrying, attempt=protocol_failures, diagnostic=diagnostic)
+                    await self._emit_stream_event(event_callback, {"type": "tool_protocol_error", "message": message,
+                        "retrying": retrying, "detail": str(e), "diagnostic": diagnostic})
+                    sys_print_callback(message)
+                    if e.visible_text.strip():
+                        partial = create_assistant_message(e.visible_text, model=loop_state["active_model"], stop_reason="protocol_error")
+                        partial["_is_meta"] = True
+                        self.messages.append(partial)
+                    self.messages.append(create_user_message(
+                        "\n\n[Tool protocol error: current completion rejected before any of its calls executed]\n" + str(e) +
+                        "\nCorrect the tool call using the currently declared tools schema. Prefer native function/tool_calls. "
+                        "Arguments must be a JSON object; arrays must be actual arrays, not serialized strings. "
+                        "If using DSML, use only declared parameter names, each exactly once, and close every tag. "
+                        "Continue the user's selected skill/workflow from the last successful tool result. "
+                        "Do not repeat completed commands, submissions or agent launches. Do not substitute an ordinary answer for the requested workflow.",
+                        is_meta=True, origin="tool_protocol"))
+                    self._sync_message_context()
+                    self.persist_session_state()
+                    if retrying:
+                        protocol_retries += 1
+                        continue
+                    halted = create_assistant_message(message, model=loop_state["active_model"], stop_reason="tool_protocol_error")
+                    halted["_is_meta"] = True
+                    self.messages.append(halted)
+                    self._sync_message_context()
+                    self.persist_session_state()
+                    return "[bold red]API Loop Exception:[/bold red] " + message
                 if isinstance(e, AbortRequestedError):
                     rolled_back = self._rollback_incomplete_tool_turn(assistant_message)
                     await self._record_loop_transition(
@@ -4454,6 +4696,17 @@ class QueryEngine:
                         "[bold yellow]Turn aborted.[/bold yellow] "
                         "The current agent turn was interrupted and cleanup has completed."
                     )
+                if isinstance(e, StreamInterrupted):
+                    partial = create_assistant_message(e.partial_text or str(e), model=loop_state["active_model"], stop_reason="stream_interrupted")
+                    if not e.partial_text:
+                        partial["_is_meta"] = True
+                    self.messages.append(partial)
+                    if e.tool_results:
+                        self.messages.append(create_user_message("[Interrupted stream: already executed tool results; inspect before continuing, do not replay]\n" +
+                            json.dumps(e.tool_results, ensure_ascii=False, default=str), is_meta=True, origin="stream_interrupted"))
+                    self._sync_message_context()
+                    self.persist_session_state()
+                    return "[bold red]API Loop Exception:[/bold red] " + str(e)
                 if (
                     self._is_model_fallback_error(e)
                     and loop_state["active_model"] != self.fallback_model
@@ -4565,7 +4818,7 @@ class QueryEngine:
     async def run(self, user_input: str, sys_print_callback=print):
         return await self._run_loop(user_input, sys_print_callback=sys_print_callback)
 
-    async def submit_message(self, user_input: str, sys_print_callback=print, input_blocks=None, attachments=None, display_text=None):
+    async def submit_message(self, user_input: str, sys_print_callback=print, input_blocks=None, attachments=None, display_text=None, selected_skills=None):
         queue = asyncio.Queue()
 
         async def emit(payload: dict):
@@ -4579,6 +4832,7 @@ class QueryEngine:
                 input_blocks=input_blocks,
                 attachments=attachments,
                 display_text=display_text,
+                selected_skills=selected_skills,
             )
         )
         self.active_run_task = task

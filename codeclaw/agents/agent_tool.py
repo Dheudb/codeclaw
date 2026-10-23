@@ -456,6 +456,8 @@ Terse command-style prompts produce shallow, generic work."""
             )
             if str(res).startswith(("[bold red]API Loop Exception:", "[bold red]System Halt:")):
                 raise RuntimeError(res)
+            if not str(res or "").strip():
+                raise RuntimeError("Subagent ended without a textual result. Existing tool operations are retained; inspect its transcript before retrying.")
             if session_manager:
                 session_manager.save_subagent_transcript(child_agent_id, {
                     "agent_id": child_agent_id,

@@ -77,6 +77,13 @@ def load_config_into_env():
     already set by the user's shell, inject the saved value.
     """
     cfg = load_config()
+    if "model_connections" in cfg and not cfg["model_connections"]:
+        from codeclaw.core.model_catalog import apply_catalog_env
+        apply_catalog_env(cfg)
+        cfg = dict(cfg)
+        for provider in ("openai", "anthropic"):
+            for suffix in ("model", "models", "base_url", "api_key"):
+                cfg.pop(provider + "_" + suffix, None)
     if cfg.get("model_connections"):
         from codeclaw.core.model_catalog import active_connection, connections, project_active
         cfg = project_active(dict(cfg), active_connection(cfg), connections(cfg))
