@@ -73,9 +73,9 @@ function ensureWorkspace(directory) {
   if (!fs.statSync(directory).isDirectory()) throw new Error("请选择一个目录");
   return fs.realpathSync(directory);
 }
-function settingsFailure(error) {
+function settingsFailure(error, prefix = "工作台设置更新失败，请检查后重新选择会话。") {
   if (window && !window.isDestroyed()) window.webContents.send("workbench:event", {
-    type: "settings_error", message: "工作台设置更新失败，请检查后重新选择会话。" + error.message,
+    type: "settings_error", message: prefix + error.message,
   });
 }
 function broadcastCatalog() {
@@ -188,7 +188,11 @@ async function createSession(project, resumeId) {
   const row = resumeId ? catalog.find(sessionKey(project, resumeId)) : catalog.create(project);
   resumeId = row.sessionId;
   const id = row.id;
-  if (sessions.has(id)) return { existingId: id };
+  if (sessions.has(id)) {
+    const previous = sessions.get(id).transport;
+    if (previous.closed || previous.closeError) await disposeSession(id);
+    else return { existingId: id };
+  }
   if (sessions.size >= 8) {
     const idle = [...sessions.entries()].find(([key, source]) => key !== activeSessionId && !running(source));
     if (!idle) throw new Error("已有 8 个运行中的会话，请先停止一个任务");
@@ -627,11 +631,17 @@ app.on("before-quit", (event) => {
     ? window.webContents.executeJavaScript("window.dispatchEvent(new Event('codeclaw-before-quit', { cancelable: true }))").catch(() => false) : true);
   flush.then(async (saved) => {
     if (!saved) { quitting = false; return; }
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       [...sessions.values()]
         .map(({ transport }) => transport.close())
         .concat(configTransport ? [configTransport.close()] : []),
     );
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      quitting = false;
+      settingsFailure(new Error("关闭引擎失败，窗口和草稿已保留；请检查存储或资源占用后重试退出。" + failed.reason), "");
+      return;
+    }
     sessions.clear();
     app.quit();
   });

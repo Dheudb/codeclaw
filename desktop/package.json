@@ -1,6 +1,6 @@
 {
   "name": "codeclaw-desktop",
-  "version": "0.1.0-beta.6",
+  "version": "0.1.0-beta.7",
   "private": true,
   "type": "module",
   "description": "CodeClaw desktop workbench",
@@ -15,6 +15,7 @@
     "test:session-ownership": "node tests/session-ownership.e2e.cjs",
     "test:draft-exit": "node tests/draft-exit.e2e.cjs",
     "test:preferences": "node tests/preferences.e2e.cjs",
+    "test:shutdown": "node tests/shutdown.e2e.cjs",
     "test:workspace": "node tests/workspace.e2e.cjs",
     "test:storage": "node tests/storage.e2e.cjs",
     "test:archives": "node tests/archives.e2e.cjs",

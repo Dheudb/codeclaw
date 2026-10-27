@@ -856,10 +856,6 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
             break
 
 
-    await engine.tool_context["subagent_tasks"].close()
-    await engine.tool_context["command_sessions"].close()
-    if engine.session_manager.owns_writer(engine.session_id):
-        engine.persist_session_state()
     await engine.aclose()
 
 

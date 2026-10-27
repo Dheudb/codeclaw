@@ -212,7 +212,7 @@ class DesktopBridge:
         from codeclaw.protocols.lsp_manager import LSPManager
         engine = QueryEngine(cwd=str(self.cwd), permission_handler=self.permission, approval_policy=self.approval_policy)
         if self.resume_id and not engine.load_session(self.resume_id):
-            await engine.client.close()
+            await engine.aclose()
             raise ValueError("Session could not be resumed")
         if write:
             try:
@@ -479,17 +479,22 @@ class DesktopBridge:
                 raise ValueError("This interaction has already ended")
             future.set_result(params.get("answer"))
             return True
+        if method == "shutdown":
+            await self.close()
+            return {"closed": True}
         if method == "stop":
             self.stop_requested = self.busy()
             for future in self.pending.values():
                 future.cancel()
             if self.engine:
-                await self.engine.tool_context["subagent_tasks"].close()
-                await self.engine.tool_context["command_sessions"].close()
-                await self.engine.request_abort()
+                results = await asyncio.gather(self.engine.request_abort(), return_exceptions=True)
+                results.extend(await asyncio.gather(self.engine.tool_context["command_sessions"].close(), return_exceptions=True))
             if self.busy():
                 self.turn_task.cancel()
                 await asyncio.gather(self.turn_task, return_exceptions=True)
+            if self.engine:
+                for result in results:
+                    if isinstance(result, BaseException): raise result
             return True
         if method == "agents.cancel":
             if not self.engine:
@@ -526,25 +531,21 @@ class DesktopBridge:
         raise ValueError("Unknown method: " + method)
 
     async def close(self):
-        await self.dispatch("stop", {})
-        self.protocol_shutdown.set()
-        if self.protocol_task:
-            await self.mcp_requests.put(None)
-            if self.protocol_ready is not None and not self.protocol_ready.done():
-                self.protocol_task.cancel()
-            await asyncio.gather(self.protocol_task, return_exceptions=True)
-        if self.engine:
-            if self.engine.session_manager.owns_writer(self.engine.session_id):
-                self.engine.persist_session_state()
-            for server in self.engine.lsp_manager.servers.values():
-                await server.stop()
-            await self.engine.browser_manager.close()
-            for identity in self.engine.shell_task_manager.tasks:
-                await self.engine.shell_task_manager.terminate_task(identity)
-            await self.engine.client.close()
-            if getattr(self.engine.compactor, "client", None):
-                await self.engine.compactor.client.close()
-            self.engine.session_manager.release_writer()
+        try:
+            await self.dispatch("stop", {})
+        finally:
+            self.protocol_shutdown.set()
+            try:
+                if self.protocol_task:
+                    await self.mcp_requests.put(None)
+                    if self.protocol_ready is not None and not self.protocol_ready.done():
+                        self.protocol_task.cancel()
+                    results = await asyncio.gather(self.protocol_task, return_exceptions=True)
+                    for result in results:
+                        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError): raise result
+            finally:
+                if self.engine:
+                    await self.engine.aclose()
 
 
 async def serve():

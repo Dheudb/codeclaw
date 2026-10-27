@@ -151,7 +151,7 @@ class CommandSessions:
 
     async def cancel(self, identity, owner):
         row = self._get(identity, owner)
-        if row["status"] == "running":
+        if row.get("process") and row["process"].returncode is None:
             row["status"] = "cancelled"
             await self._kill(row)
         if row.get("monitor"):
@@ -184,5 +184,9 @@ class CommandSessions:
                 continue
 
     async def close(self, owner=None):
-        await asyncio.gather(*(self.cancel(row["id"], row["owner"]) for row in list(self.records.values())
-                               if row["status"] == "running" and (owner is None or row["owner"] == owner)))
+        results = await asyncio.gather(*(self.cancel(row["id"], row["owner"]) for row in list(self.records.values())
+            if (owner is None or row["owner"] == owner) and
+            (row.get("process") and row["process"].returncode is None or row.get("monitor") and not row["monitor"].done())), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result

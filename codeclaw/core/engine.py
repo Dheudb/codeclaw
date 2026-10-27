@@ -2040,6 +2040,7 @@ class QueryEngine:
         return await execute_tool_batches(self, tool_calls, sys_print_callback, turn=turn, event_callback=event_callback)
             
     async def start_protocols(self, sys_print=print):
+        self._assert_open()
         # 1. Start LSP Daemon Support
         self.lsp_manager = LSPManager()
         self.tool_context["lsp_manager"] = self.lsp_manager
@@ -2643,6 +2644,11 @@ class QueryEngine:
         }
 
     def persist_session_state(self):
+        closing = getattr(self, "_close_task", None)
+        if closing is not None and closing.done():
+            self.last_persist_ok = False
+            self.last_persist_error = "Engine is closed; create a new engine before saving."
+            return False
         if self.agent_depth > 0:
             ok = self.session_manager.save_subagent_transcript(
                 self.agent_id or self.session_id,
@@ -2670,6 +2676,7 @@ class QueryEngine:
         return ok
 
     def require_writer(self):
+        self._assert_open()
         owner = self.tool_context.get("delegation", {}).get("owner_session_id") or self.session_id
         owned = self.session_manager.owns_writer(owner)
         self.session_manager.acquire_writer(owner)
@@ -2680,26 +2687,45 @@ class QueryEngine:
                 self.session_manager.release_writer(owner)
             raise
 
+    def _assert_open(self):
+        if getattr(self, "_close_task", None) is not None:
+            raise SessionConflictError("Engine is closing or closed; create a new engine before executing.")
+
     async def aclose(self):
-        await self.request_abort()
-        await self.tool_context["command_sessions"].close(owner=self.agent_id if self.agent_depth else None)
+        task = getattr(self, "_close_task", None)
+        if task is None or task.done() and (task.cancelled() or task.exception() is not None):
+            task = self._close_task = asyncio.create_task(self._close())
+        await asyncio.shield(task)
+
+    async def _close(self):
+        failures = await asyncio.gather(self.request_abort(), return_exceptions=True)
+        stop = [self.tool_context["command_sessions"].close(owner=self.agent_id if self.agent_depth else None)]
+        if self.agent_depth == 0:
+            stop.extend(self.shell_task_manager.terminate_task(identity) for identity in list(self.shell_task_manager.tasks))
+        failures.extend(await asyncio.gather(*stop, return_exceptions=True))
+        if self.agent_depth == 0 and self.session_manager.owns_writer(self.session_id) and not any(isinstance(item, BaseException) for item in failures):
+            try:
+                if not self.persist_session_state():
+                    raise PersistenceError("Final checkpoint could not be saved; close failed and the writer lease was retained.")
+            except Exception as error:
+                failures.append(error)
         cleanup = [self.client.close()]
         if getattr(self.compactor, "client", None):
             cleanup.append(self.compactor.client.close())
         if self.agent_depth == 0:
             cleanup.append(self.browser_manager.close())
             cleanup.extend(server.stop() for server in getattr(getattr(self, "lsp_manager", None), "servers", {}).values())
-            cleanup.extend(self.shell_task_manager.terminate_task(identity) for identity in list(self.shell_task_manager.tasks))
             if getattr(self, "mcp_bridge", None):
                 cleanup.append(self.mcp_bridge.cleanup())
-        failures = await asyncio.gather(*cleanup, return_exceptions=True)
-        if self.agent_depth == 0:
-            self.session_manager.release_writer()
+        failures.extend(await asyncio.gather(*cleanup, return_exceptions=True))
         for failure in failures:
             if isinstance(failure, BaseException):
                 raise failure
+        if self.agent_depth == 0:
+            self.session_manager.release_writer()
 
     async def __aenter__(self):
+        self._assert_open()
         return self
 
     async def __aexit__(self, *exc):
@@ -3389,9 +3415,6 @@ class QueryEngine:
                 for idx in sorted(tool_calls.keys()):
                     _dispatch_tool_if_ready(idx)
 
-                if current_safe_batch_tasks is not None:
-                    previous_batch_gate = asyncio.gather(*current_safe_batch_tasks)
-
                 content_blocks = []
                 if full_text:
                     content_blocks.append(self._make_text_block(full_text))
@@ -3535,9 +3558,6 @@ class QueryEngine:
                                 "turn": turn_count,
                                 "stop_reason": getattr(snapshot, "stop_reason", None),
                             })
-
-                    if current_safe_batch_tasks is not None:
-                        previous_batch_gate = asyncio.gather(*current_safe_batch_tasks)
 
                     final_message = await stream.get_final_message()
                     return final_message, tool_entries, False

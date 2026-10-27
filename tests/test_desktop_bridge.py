@@ -21,6 +21,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             await end.wait()
             yield {"type": "final", "text": "internal abort response"}
         engine = SimpleNamespace(messages=[], turn_traces=[], set_mode=Mock(), submit_message=submit,
+            session_id="fixture", session_manager=SimpleNamespace(owns_writer=Mock(return_value=False)),
             tool_context={"subagent_tasks": SimpleNamespace(close=AsyncMock()), "command_sessions": SimpleNamespace(close=AsyncMock())},
             request_abort=AsyncMock(side_effect=lambda: end.set()), persist_session_state=Mock(), _sync_message_context=Mock())
         self.bridge.engine = engine
@@ -28,6 +29,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.bridge.turn_task = asyncio.create_task(self.bridge.turn("task", [], "normal"))
         while not any(event["type"] == "text_delta" for event in self.events): await asyncio.sleep(0)
         await self.bridge.dispatch("stop", {})
+        await self.bridge.turn_task
         self.assertTrue(any(event["type"] == "turn_cancelled" for event in self.events))
         self.assertFalse(any(event["type"] == "final" for event in self.events))
         self.assertEqual(engine.turn_traces[-1]["status"], "cancelled")

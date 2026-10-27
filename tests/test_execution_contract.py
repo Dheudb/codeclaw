@@ -43,12 +43,20 @@ class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.user_message_id)
 
     async def test_tool_checkpoint_failure_is_storage_failure_not_api_failure(self):
+        import gc
         self.fixture([("record_tool", '{"value":"once"}')])
-        with patch.object(self.engine, "_execute_tool_wrapper", new=AsyncMock(side_effect=PersistenceError("fixture disk failure"))):
-            result = await self.engine.run("test", sys_print_callback=lambda _: None)
+        loop = asyncio.get_running_loop(); previous = loop.get_exception_handler(); unhandled = []
+        loop.set_exception_handler(lambda _, context: unhandled.append(context))
+        try:
+            with patch.object(self.engine, "_execute_tool_wrapper", new=AsyncMock(side_effect=PersistenceError("fixture disk failure"))):
+                result = await self.engine.run("test", sys_print_callback=lambda _: None)
+            gc.collect(); await asyncio.sleep(0)
+        finally:
+            loop.set_exception_handler(previous)
         self.assertEqual(result.reason, "persistence_error")
         self.assertFalse(result.ok)
         self.assertEqual(self.tool.calls, [])
+        self.assertEqual(unhandled, [], "Failure must be consumed by the receipt, not leaked as an orphan gather future")
 
     async def child(self):
         return await self.engine.available_tools["agent_tool"]._run_single_subagent(

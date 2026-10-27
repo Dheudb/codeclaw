@@ -18,6 +18,14 @@ Before executing a tool, the engine saves its intent in the existing session met
 
 If a process exits between intent and receipt, effects are uncertain: recovery does not replay the operation. Read-only inspection remains available; a new mutation requires explicit approval, including under Full Access. Cancelling an executing tool preserves the same uncertainty. This is not a claim of transactional exactly-once effects across external systems: an interrupted operation may already have changed them, and must be inspected.
 
+## Engine and desktop shutdown
+
+CLI, desktop and programmatic callers use `QueryEngine.aclose()` for the same resource lifecycle. Concurrent close calls share one cleanup task; cancelling an awaiting caller does not cancel that cleanup. Closing stops active work and owned commands before the final checkpoint, then attempts all model-client, browser, LSP and MCP cleanup. A failed stop, checkpoint or cleanup raises an error and retains the root writer lease. After the cause is resolved, another `aclose()` retries; successful repeated closes do not repeat resource disposal. A child engine closes only its own command group and never releases the parent's lease or shared services.
+
+A closing or closed engine rejects new model turns, authorized tools and worker launches before their side effects. A completed close cannot reacquire a lease by calling `persist_session_state()`. Create a fresh engine to resume. `stop` remains a cancellation operation and does not retire the engine, so the existing continue/edit flow remains available.
+
+The desktop transport requests `shutdown` and waits for `{ "closed": true }` before ending stdin. A shutdown error preserves the application window and unsent draft, reports the failure and permits retry; it is not treated as successful app exit. Normal EOF cleanup uses the same engine close path. Windows acceptance holds a real checkpoint handle without delete sharing to verify the full error/retain/release/retry/restart sequence without repeating a model request.
+
 ## Complete tool output
 
 Built-in and MCP outputs use the existing `serialize_tool_result()` and session artifact directory. Oversized content is atomically archived in full. Inline results identify the archive, original size, preview size and truncation, with instructions to read more. Archive failure returns an error and keeps the original content instead of silently discarding it.

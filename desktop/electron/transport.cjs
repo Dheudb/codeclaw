@@ -93,11 +93,14 @@ class EngineTransport {
     if (this.closed) return this.exited;
     this.closing = true;
     try {
-      await Promise.race([
-        this.request("stop"),
-        new Promise((resolve) => setTimeout(resolve, 2000)),
-      ]);
-    } catch {}
+      await this.request("shutdown");
+    } catch (error) {
+      this.closeError = error;
+      this.closing = false;
+      this.closePromise = undefined;
+      throw error;
+    }
+    this.closeError = undefined;
     this.child.stdin.end();
     const timeout = setTimeout(() => {
       if (!this.closed) this.child.kill();

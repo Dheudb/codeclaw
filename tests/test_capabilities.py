@@ -249,7 +249,7 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_override_tools_team_registration_and_background(self):
         from codeclaw.core.engine import QueryEngine
         from codeclaw.memory.memory import MemoryCompactor
-        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"OPENAI_API_KEY": "test", "CODECLAW_MODEL_PROVIDER": "openai"}), patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"OPENAI_API_KEY": "test", "CODECLAW_MODEL_PROVIDER": "openai", "CODECLAW_DATA_DIR": str(Path(temp) / "data")}), patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None):
             original_cwd = os.getcwd()
             os.chdir(temp)
             try:
@@ -258,7 +258,7 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                 engine.switch_model_runtime(model="parent-model")
                 self.assertIs(engine.session_memory_manager.compactor, engine.compactor)
                 self.assertIs(engine.memory_extractor.compactor, engine.compactor)
-                engine.session_manager.save_session_state("empty-draft", [], {})
+                self.assertTrue(engine.session_manager.save_session_state("empty-draft", [], {}))
                 self.assertTrue(engine.load_session("empty-draft"))
                 self.assertEqual(engine.session_id, "empty-draft")
                 self.assertEqual(engine.messages, [])

@@ -1,13 +1,13 @@
 # 通用化改造验证记录
 
-基线：`e7ae449` / `v0.1.0-beta.2`。通用化首轮为 beta.3，草稿退出修复为 beta.4，旧独立工作区迁移保护为 beta.5，多实例桌面设置合并为 beta.6。本地原安装构建 `20261027-213212`，保留此前回滚资源。下文区分累计结果与每轮证据，完整范围与迁移见 `general-framework.md`。
+基线：`e7ae449` / `v0.1.0-beta.2`。通用化首轮为 beta.3，草稿退出修复为 beta.4，旧独立工作区迁移保护为 beta.5，多实例桌面设置合并为 beta.6，统一退出生命周期为 beta.7。本地原安装构建 `20261027-221722`，保留此前回滚资源。下文区分累计结果与每轮证据，完整范围与迁移见 `general-framework.md`。
 
 ## 当前累计结果
 
 | 验证 | 结果 | 证据范围 |
 | --- | --- | --- |
-| Python 3.12.14 全量 | 221 项，220 通过、1 跳过 | 默认策略、执行回执、权限、协议、MCP、会话竞争/存储提交崩溃、子代理、程序接口、上下文恢复及桌面设置并发 |
-| Python 3.9.7 全量 | 221 项，216 通过、5 跳过 | 同一套测试；不支持的可选运行时检查明确跳过 |
+| Python 3.12.14 全量 | 228 项，227 通过、1 跳过 | 默认策略、执行回执、权限、协议、MCP、会话竞争/存储提交崩溃、子代理、程序接口、上下文恢复及桌面设置并发 |
+| Python 3.9.7 全量 | 228 项，222 通过、6 跳过 | 同一套测试；不支持的可选运行时检查明确跳过 |
 | 前端构建 | 通过 | TypeScript 与 Vite；存在超过 500 kB 的 chunk 提醒，不是运行时失败 |
 | 桌面逻辑测试 | 47/47 | 工作区、布局、状态、目录移动、附件、配置和迁移丢失界面回执后的目录关联恢复 |
 | 隐藏桌面工作台 | 通过 | 实际 Electron、SDK、本机模拟 API、权限、Skills、后台代理、重启及项目隔离 |
@@ -22,6 +22,7 @@
 | 桥接进程退出 | 通过真实桥接协议专项 | 检查点写入后、回执前退出，重新连接并重试同一待处理移动，恢复回执且版本不重复增长 |
 | 多实例设置 | 通过本地专项与隐藏桌面测试 | 两个真实进程从旧快照并发提交 24 个项目/目录均保留；两个实际 Electron 实例验证项目、属性、独立目录和布局合并。占用设置时本机协议任务正常完成，损坏文件在焦点事件中保留并报告，解除占用重试和重启恢复 |
 | 原安装成品 | 工作台、文件、会话占用、独立目录通过 | 实际稳定 EXE、自带 Python 与依赖、临时配置及本机模型服务；中文目录成品失败后修正 UTF-8 协议，最终重跑通过 |
+| 统一关闭与退出故障 | 通过 Python 专项与源码/成品隐藏界面 | 并发关闭和等待方取消、保存与资源清理失败重试、关闭后拒绝执行/保存、真实命令进程和 MCP 所属连接释放；实际 Windows 检查点占用时窗口/草稿/原记录保留，解除后退出和重启，无重复模型请求 |
 | 更新器回滚 | 单独 1 项通过 | 实际 PowerShell 更新器操作临时的非可执行占位文件，在应用与引擎替换后注入失败；核对旧资源恢复，再用同一包重试成功 |
 | 真实 CLI 清空后继续 | 通过 | 独立 CLI 进程及本机 HTTP/SSE；删除原会话后使用新会话回答，不复活旧记录、不将旧内容带入请求 |
 | 跨领域确定性验收 | 6/6 | 对话、检索与引用、写作、CSV 计算、显式编程验证、三代理真实生命周期并发；模型决策为替身 |
@@ -56,6 +57,10 @@ beta.4 的退出草稿修复：`draft-exit-third.log` 使用真实跨进程索�
 beta.5 旧工作区升级修复的全量日志：`legacy-regression-python312-first.log`（214 项，91.528 秒）和 `legacy-regression-python39-first.log`（214 项，72.988 秒）；专项 `legacy-storage-second.log` 21 项、桌面逻辑 `legacy-upgrade-node-second.log` 47 项通过。7 个崩溃位置覆盖意图保存、锁指针保存、配置写入、产物复制、检查点发布、原检查点移除及提交完成；启动扫描恢复待提交记录，准备阶段不创建工作区，已提交但丢失回复的目录关联从检查点恢复。16 MB 二进制文件通过分块复制和完整哈希校验，改变过的目标保留，缺失源文件明确失败。源码隐藏界面 `legacy-storage-e2e-first.log`、原 EXE 成品 `legacy-installed-storage-first.log`、`legacy-installed-draft-first.log` 和 `legacy-installed-workspace-first.log` 已通过。
 
 beta.6 设置合并的 Python 全量日志为 `preferences-regression-python312-first.log`（221 项，93.235 秒）和 `preferences-regression-python39-first.log`（221 项，74.104 秒）；专项 `preferences-python-first.log` 7 项、桌面逻辑 `preferences-node-first.log` 47 项通过。双实例源码验收 `preferences-e2e-fourth.log` 验证实际生产入口、两个不同浏览器 profile 共享同一数据目录、6 个项目添加、2 个独立工作目录、属性及宽度合并、移除不复活、设置锁占用时任务继续、损坏设置在焦点事件中不导致退出，以及重启。首轮在业务断言结束后因测试清理误用已经关闭的 Playwright 对象失败；通过已确认的隔离 profile 端口正常关闭该测试窗口，修正测试清理后重跑，未强制结束用户应用。源码草稿退出 `preferences-draft-first.log` 与旧工作区迁移 `preferences-storage-first.log` 均通过。同一原 EXE 成品及自带 Python 的 `preferences-installed-first.log`、`preferences-installed-workspace-first.log` 和 `preferences-installed-draft-first.log` 均通过，资源更新状态 `applied`，构建 `20261027-213212`，旧资源保留用于回滚。
+
+beta.7 统一关闭生命周期的最新全量日志为 `shutdown-regression-python312-third.log`（228 项，97.994 秒，227 通过、1 跳过）和 `shutdown-regression-python39-third.log`（228 项，78.130 秒，222 通过、6 跳过）。新增关闭专项 7 项；执行契约专项 16 项检查工具保存失败时没有未读取的异步异常。删除两处未使用的末尾流式工具聚合 Future，保留实际需要等待的中间分支。首轮关闭专项因测试清理顺序未释放竞争者租约而失败；全量首轮另暴露两个并行测试使用相同全局空草稿 ID 的隔离问题。修正临时数据目录和测试生命周期后重跑，未削弱真实 OS 锁。
+
+源码 `shutdown-e2e-first.log` 用真实 Windows 检查点句柄禁止原子替换，验证退出失败保留窗口/草稿/原记录、释放后重试、最终版本增长和重启恢复，模型请求仅一次。原 EXE 与自带 Python 的 `shutdown-installed-shutdown-first.log`、`shutdown-installed-mcp-first.log`、`shutdown-installed-resume-first.log` 和 `shutdown-installed-draft-exit-first.log` 全部通过；分别覆盖检查点退出失败重试、真实 MCP 连接与停用重载、暂停/继续/编辑/重启、实际索引占用与草稿退出恢复。桌面逻辑 `shutdown-node-first.log` 47/47、前端构建通过。资源更新 `applied`，构建 `20261027-221722`，原 EXE 哈希未改变，旧资源保留。
 
 1. 目录变更、索引写入、新独立目录创建、旧独立工作区升级及桌面设置合并已使用现有 OS 锁与存储入口。相同设置字段按实际提交顺序保存；活动会话和打开列表成对表示最近保存窗口，不跨窗口聚合，不合并会话执行检查点。
 2. 真实模型的跨领域任务与小时级运行、真实限流/断网及成本验收尚未完成。用户选择先完成本地验收，暂不调用远端模型。A1.5 排除。
