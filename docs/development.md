@@ -111,7 +111,7 @@ python desktop/scripts/stage-update.py
 将已测试的源码提交后，确认原安装目录的应用版本与准备发布的标签一致，再归档：
 
 ```powershell
-python desktop/scripts/release.py --tag v0.1.0-beta.3
+python desktop/scripts/release.py --tag v0.1.0-beta.4
 ```
 
 脚本核对已安装引擎、前端和 Electron 代码与源码一致，仅打包原安装目录，不创建另一份 EXE。

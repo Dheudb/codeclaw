@@ -81,7 +81,13 @@ export default function App() {
   }
 
   useEffect(() => {
-    const flush = () => window.codeclaw?.flushDrafts(draftSessions.current.map((session) => ({ id: session.id, draft: session.draft, draftEditId: session.editingId || "", draftAttachments: session.attachments.map((item) => item.id) })));
+    const flush = (event: Event) => {
+      if (window.codeclaw?.flushDrafts(draftSessions.current.map((session) => ({ id: session.id, draft: session.draft, draftEditId: session.editingId || "", draftAttachments: session.attachments.map((item) => item.id) }))) === false) {
+        event.preventDefault();
+        if (event.type === "beforeunload") (event as BeforeUnloadEvent).returnValue = "";
+        setNotice("草稿保存失败，窗口已保留。请检查存储空间、权限或会话占用，恢复后重试退出。");
+      }
+    };
     window.addEventListener("beforeunload", flush);
     window.addEventListener("codeclaw-before-quit", flush);
     return () => { window.removeEventListener("beforeunload", flush); window.removeEventListener("codeclaw-before-quit", flush); };

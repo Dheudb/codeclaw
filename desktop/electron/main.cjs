@@ -560,6 +560,13 @@ app.whenReady().then(() => {
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.on("close", (event) => {
+    if (!quitting && (sessions.size || configTransport)) {
+      event.preventDefault();
+      app.quit();
+    }
+  });
+  window.webContents.on("will-prevent-unload", () => { quitting = false; });
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("will-frame-navigate", (event) => {
     if (!event.isMainFrame && !event.url.startsWith(PREVIEW_SCHEME + "://")) event.preventDefault();
@@ -575,6 +582,7 @@ app.whenReady().then(() => {
       throw new Error("Invalid IPC sender");
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
+    if (quitting) throw new Error("正在保存并退出，请稍候");
     if (/^(app\.initialize|layout\.save|attachments\.import|permissions\.set|config\.(save|select|delete)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
@@ -583,15 +591,20 @@ app.whenReady().then(() => {
     return invoke(method, params);
   });
   ipcMain.on("workbench:drafts", (event, drafts) => {
-    event.returnValue = false;
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !Array.isArray(drafts) || drafts.length > 8) return;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !Array.isArray(drafts) || drafts.length > 8) {
+      event.returnValue = false;
+      return;
+    }
+    let saved = false;
     try {
       for (const draft of drafts) {
         let row; try { row = catalog.find(draft.id); } catch { continue; }
         catalog.update(row, { draft: String(draft.draft || ""), draftEditId: draft.draftEditId || "", draftAttachments: draft.draftAttachments || [] });
       }
-      event.returnValue = true;
-    } catch { event.returnValue = false; }
+      saved = true;
+    } catch {}
+    // Electron sends a synchronous reply on the first assignment, not on handler return.
+    event.returnValue = saved;
   });
   window.on("focus", () => { if (restoration) broadcastCatalog(); });
   const url = !app.isPackaged && process.env.CODECLAW_DEV_URL;
@@ -605,13 +618,15 @@ app.on("before-quit", (event) => {
   if (quitting || (!sessions.size && !configTransport)) return;
   event.preventDefault();
   quitting = true;
-  const flush = window && !window.isDestroyed()
-    ? window.webContents.executeJavaScript("window.dispatchEvent(new Event('codeclaw-before-quit'))").catch(() => {}) : Promise.resolve();
-  flush.then(() => Promise.allSettled(
-    [...sessions.values()]
-      .map(({ transport }) => transport.close())
-      .concat(configTransport ? [configTransport.close()] : []),
-  )).finally(() => {
+  const flush = workspaceQueue.then(() => window && !window.isDestroyed()
+    ? window.webContents.executeJavaScript("window.dispatchEvent(new Event('codeclaw-before-quit', { cancelable: true }))").catch(() => false) : true);
+  flush.then(async (saved) => {
+    if (!saved) { quitting = false; return; }
+    await Promise.allSettled(
+      [...sessions.values()]
+        .map(({ transport }) => transport.close())
+        .concat(configTransport ? [configTransport.close()] : []),
+    );
     sessions.clear();
     app.quit();
   });

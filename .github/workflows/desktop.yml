@@ -46,6 +46,7 @@ jobs:
       - run: npm test
       - run: npm run test:e2e
       - run: npm run test:sessions
+      - run: npm run test:draft-exit
       - run: npm run test:workspace
       - run: npm run test:archives
       - run: npm run test:models
@@ -75,6 +76,9 @@ jobs:
         env:
           CODECLAW_TEST_EXECUTABLE: ${{ github.workspace }}\desktop\release\CodeClaw-win32-x64\CodeClaw.exe
       - run: npm run test:workspace
+        env:
+          CODECLAW_TEST_EXECUTABLE: ${{ github.workspace }}\desktop\release\CodeClaw-win32-x64\CodeClaw.exe
+      - run: npm run test:draft-exit
         env:
           CODECLAW_TEST_EXECUTABLE: ${{ github.workspace }}\desktop\release\CodeClaw-win32-x64\CodeClaw.exe
       - run: npm run test:archives
