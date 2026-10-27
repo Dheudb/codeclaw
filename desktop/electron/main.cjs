@@ -1,10 +1,11 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, protocol, nativeImage } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
-const { SessionCatalog, projectKey, sessionKey, atomicJSON } = require("./catalog.cjs");
+const { SessionCatalog, projectKey, sessionKey } = require("./catalog.cjs");
 const { EngineTransport } = require("./transport.cjs");
 const { resolveEnginePython } = require("./runtime.cjs");
 const { defaultWorkspace, dataDirectory } = require("./workspace.cjs");
+const preferences = require("./settings.cjs");
 const { prepareMove, moveSpec } = require("./session-move.cjs");
 const { HtmlPreviews, SCHEME: PREVIEW_SCHEME } = require("./html-preview.cjs");
 protocol.registerSchemesAsPrivileged([{ scheme: PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
@@ -53,21 +54,11 @@ const engineMethods = new Set([
   "mcp.reload",
   "capabilities.example",
 ]);
-function settingsPath() {
-  const target = path.join(dataRoot, "workbench.json"), legacy = path.join(app.getPath("userData"), "workbench.json");
-  if (target !== legacy && !fs.existsSync(target) && fs.existsSync(legacy)) {
-    const original = fs.readFileSync(legacy);
-    atomicJSON(target, JSON.parse(original.toString("utf8").replace(/^\uFEFF/, "")));
-    if (fs.readFileSync(legacy).equals(original)) fs.unlinkSync(legacy);
-  }
-  return target;
-}
 function settings() {
-  if (!fs.existsSync(settingsPath())) return { projects: [] };
-  return JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+  return preferences.readSettings(dataRoot, path.join(app.getPath("userData"), "workbench.json"));
 }
-function saveSettings(value) {
-  atomicJSON(settingsPath(), value);
+function saveSettings(value, before) {
+  return preferences.saveSettings(dataRoot, value, before);
 }
 function workspaceSettings() {
   const saved = settings().defaultDirectory;
@@ -81,6 +72,11 @@ function ensureWorkspace(directory) {
   fs.mkdirSync(directory, { recursive: true });
   if (!fs.statSync(directory).isDirectory()) throw new Error("请选择一个目录");
   return fs.realpathSync(directory);
+}
+function settingsFailure(error) {
+  if (window && !window.isDestroyed()) window.webContents.send("workbench:event", {
+    type: "settings_error", message: "工作台设置更新失败，请检查后重新选择会话。" + error.message,
+  });
 }
 function broadcastCatalog() {
   const snapshot = { ...catalog.snapshot(), revision: ++catalogRevision };
@@ -98,17 +94,22 @@ function send(id, payload) {
   }
   if (payload.type === "session_started" && sessions.has(id)) {
     sessions.get(id).resumeId = payload.sessionId;
-    saveWorkspace();
+    try { saveWorkspace(); }
+    catch (error) { settingsFailure(error); }
   }
   if (window && !window.isDestroyed())
     window.webContents.send("workbench:event", { session: id, ...payload });
   if (payload.type === "engine_exit") sessions.delete(id);
-  if (["session_started", "sessions_changed"].includes(payload.type)) broadcastCatalog();
+  if (["session_started", "sessions_changed"].includes(payload.type)) {
+    try { broadcastCatalog(); }
+    catch (error) { settingsFailure(error); }
+  }
 }
 function saveWorkspace() {
   const active = sessions.get(activeSessionId);
+  const before = settings();
   saveSettings({
-    ...settings(),
+    ...before,
     activeConversation: active ? { project: active.project, resumeId: active.resumeId, scope: active.scope } : null,
     workspace: [...sessions.entries()].map(([id, session]) => ({
       project: session.project,
@@ -116,7 +117,7 @@ function saveWorkspace() {
       scope: session.scope,
       active: id === activeSessionId,
     })),
-  });
+  }, before);
 }
 function latestSavedSession(project, scope = "project") {
   try {
@@ -282,12 +283,12 @@ async function invoke(method, params) {
   if (method === "layout.save") {
     const saved = settings();
     const layout = require("./layout.cjs").updateLayout(saved.layout, params);
-    saveSettings({ ...saved, layout });
-    return layout;
+    return saveSettings({ ...saved, layout }, saved).layout;
   }
   if (method === "workspace.save") {
     const defaultDirectory = ensureWorkspace(params.defaultDirectory);
-    saveSettings({ ...settings(), defaultDirectory });
+    const before = settings();
+    saveSettings({ ...before, defaultDirectory }, before);
     return { defaultDirectory };
   }
   if (method === "workspace.choose") {
@@ -400,7 +401,8 @@ async function invoke(method, params) {
     catch (error) {
       activeSessionId = undefined;
       saveWorkspace();
-      saveSettings({ ...settings(), activeConversation: { project: moved.project, resumeId: moved.sessionId, scope: "project" } });
+      const before = settings();
+      saveSettings({ ...before, activeConversation: { project: moved.project, resumeId: moved.sessionId, scope: "project" } }, before);
       broadcastCatalog();
       throw new Error("会话记录已移动到目标项目，但引擎打开失败，请重新打开此会话。" + error.message);
     }
@@ -606,7 +608,10 @@ app.whenReady().then(() => {
     // Electron sends a synchronous reply on the first assignment, not on handler return.
     event.returnValue = saved;
   });
-  window.on("focus", () => { if (restoration) broadcastCatalog(); });
+  window.on("focus", () => {
+    try { if (restoration) broadcastCatalog(); }
+    catch (error) { settingsFailure(error); }
+  });
   const url = !app.isPackaged && process.env.CODECLAW_DEV_URL;
   if (url && url !== "http://127.0.0.1:5178")
     throw new Error("Invalid development server URL");

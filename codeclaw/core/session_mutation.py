@@ -439,6 +439,9 @@ def _metadata(spec):
 
 
 def mutate(spec, held=()):
+    if spec.get("action") == "workbench":
+        from codeclaw.desktop.settings import save_workbench
+        return save_workbench(spec)
     if spec.get("action") == "recover":
         return recover_storage()
     if spec.get("action") == "migrate":

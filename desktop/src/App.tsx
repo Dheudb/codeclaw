@@ -113,6 +113,10 @@ export default function App() {
       .catch((error) => setNotice(String(error)))
       .finally(() => setOpening(false));
     return window.codeclaw.onEvent((event) => {
+      if (event.type === "settings_error") {
+        setNotice(event.message);
+        return;
+      }
       if (event.type === "catalog_changed") {
         receiveCatalog(event.catalog);
         return;

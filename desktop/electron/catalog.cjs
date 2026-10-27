@@ -119,15 +119,15 @@ class SessionCatalog {
   addProject(project) {
     project = fs.realpathSync(project);
     if (!fs.statSync(project).isDirectory()) throw new Error("项目目录不存在");
-    const settings = this.readSettings();
+    const before = this.readSettings(), settings = structuredClone(before);
     settings.projects = [project, ...(settings.projects || []).filter((p) => projectKey(p) !== projectKey(project))];
     settings.projectMeta ||= {};
     settings.projectMeta[projectKey(project)] = { ...settings.projectMeta[projectKey(project)], open: true, archived: false };
-    this.writeSettings(settings);
+    this.writeSettings(settings, before);
     return project;
   }
   updateProject(project, patch) {
-    const settings = this.readSettings();
+    const before = this.readSettings(), settings = structuredClone(before);
     if (!(settings.projects || []).some((p) => projectKey(p) === projectKey(project))) throw new Error("项目不存在");
     settings.projectMeta ||= {};
     const next = { ...settings.projectMeta[projectKey(project)] };
@@ -140,21 +140,21 @@ class SessionCatalog {
       next.name = name;
     }
     settings.projectMeta[projectKey(project)] = next;
-    this.writeSettings(settings);
+    this.writeSettings(settings, before);
   }
   removeProject(project) {
-    const settings = this.readSettings();
+    const before = this.readSettings(), settings = structuredClone(before);
     settings.projects = (settings.projects || []).filter((p) => projectKey(p) !== projectKey(project));
     if (settings.projectMeta) delete settings.projectMeta[projectKey(project)];
-    this.writeSettings(settings);
+    this.writeSettings(settings, before);
   }
   createStandalone(directory) {
     const base = fs.realpathSync(directory);
     const identity = crypto.randomUUID();
     directory = path.join(base, "chat-" + identity);
-    const settings = this.readSettings();
+    const before = this.readSettings(), settings = structuredClone(before);
     settings.standaloneDirectories = [directory, ...(settings.standaloneDirectories || []).filter((p) => projectKey(p) !== projectKey(directory))];
-    this.writeSettings(settings);
+    this.writeSettings(settings, before);
     mutateSync(this, { action: "create", project: directory, session_id: identity, scope: "standalone", workspace_base: base, created: Date.now() });
     return this.list(directory).find((row) => row.sessionId === identity);
   }
@@ -172,20 +172,20 @@ class SessionCatalog {
     for (const row of rows) {
       const identity = "legacy-" + crypto.createHash("sha256").update(row.id).digest("hex").slice(0, 32);
       const target = path.join(base, "chat-" + identity);
-      const pendingSettings = this.readSettings();
+      const pendingBefore = this.readSettings(), pendingSettings = structuredClone(pendingBefore);
       pendingSettings.standaloneDirectories = [...new Set([...(pendingSettings.standaloneDirectories || []), target])];
-      this.writeSettings(pendingSettings);
+      this.writeSettings(pendingSettings, pendingBefore);
       await mutate({ ...moveSpec(row, target, "standalone"), legacy_workspace: { base, id: identity } });
-      const moved = this.find(sessionKey(target, row.sessionId)), settings = this.readSettings();
+      const moved = this.find(sessionKey(target, row.sessionId)), before = this.readSettings(), settings = structuredClone(before);
       settings.standaloneDirectories = [...new Set([...(settings.standaloneDirectories || []), moved.project])];
       const matches = (entry) => entry && projectKey(entry.project) === projectKey(row.project) && entry.resumeId === row.sessionId;
       if (matches(settings.activeConversation)) settings.activeConversation = { ...settings.activeConversation, project: moved.project, scope: "standalone" };
       if (settings.workspace) settings.workspace = settings.workspace.map((entry) => matches(entry) ? { ...entry, project: moved.project, scope: "standalone" } : entry);
-      this.writeSettings(settings);
+      this.writeSettings(settings, before);
     }
   }
   reconcileWorkspaceAssociations() {
-    const snapshot = this.snapshot(), settings = this.readSettings();
+    const snapshot = this.snapshot(), before = this.readSettings(), settings = structuredClone(before);
     const rows = [...snapshot.standalone, ...snapshot.projects.flatMap((project) => project.sessions)];
     let changed = false;
     const reconcile = (entry) => {
@@ -203,7 +203,7 @@ class SessionCatalog {
     };
     if (settings.activeConversation) settings.activeConversation = reconcile(settings.activeConversation);
     if (Array.isArray(settings.workspace)) settings.workspace = settings.workspace.map(reconcile);
-    if (changed) this.writeSettings(settings);
+    if (changed) this.writeSettings(settings, before);
   }
   create(project, messages = [], title, scope = "project") {
     const id = crypto.randomUUID();
@@ -225,9 +225,9 @@ class SessionCatalog {
   forkSpec(row) {
     const identity = crypto.randomUUID(), target = row.scope === "standalone" ? path.join(path.dirname(row.project), "chat-" + identity) : row.project;
     if (row.scope === "standalone") {
-      const settings = this.readSettings();
+      const before = this.readSettings(), settings = structuredClone(before);
       settings.standaloneDirectories = [...new Set([...(settings.standaloneDirectories || []), target])];
-      this.writeSettings(settings);
+      this.writeSettings(settings, before);
     }
     return { action: "fork", project: row.project, session_id: row.sessionId, target, new_id: identity, scope: row.scope, title: row.title + "（副本）" };
   }
@@ -238,7 +238,7 @@ class SessionCatalog {
     const settings = this.readSettings();
     const view = { sort: this.snapshot().view.sort };
     if (patch.sort && ["recent", "oldest", "name", "created"].includes(patch.sort)) view.sort = patch.sort;
-    this.writeSettings({ ...settings, sidebar: view });
+    this.writeSettings({ ...settings, sidebar: view }, settings);
   }
   restoreArchive({ id, path: project }) {
     const row = id ? this.find(id) : null;
