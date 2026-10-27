@@ -50,7 +50,7 @@ test("CLI and desktop use identical storage and CLI saves preserve desktop metad
   assert(catalog.find(row.id).archived); assert.equal(JSON.parse(fs.readFileSync(catalog.file(project, row.sessionId))).messages[0].content, "CLI shared");
   assert(!fs.existsSync(path.join(project, ".codeclaw/sessions")));
 });
-test("legacy independent conversations are isolated on upgrade and owned outputs are retained", (t) => {
+test("legacy independent conversations are isolated on upgrade and owned outputs are retained", async (t) => {
   const { project, root, catalog } = fixture(t);
   const record = { messages: [{ role: "assistant", content: [{ type: "tool_use", id: "write", name: "file_write_tool", input: { file_path: "pelican.html", content: "original" } }] }], metadata: {} };
   atomicJSON(path.join(project, ".codeclaw/sessions/one.json"), record);
@@ -58,7 +58,7 @@ test("legacy independent conversations are isolated on upgrade and owned outputs
   atomicJSON(path.join(project, ".codeclaw/session-index.json"), { version: 1, sessions: { one: { scope: "standalone", draft: "keep", pinned: true }, two: { scope: "standalone", archived: true } } });
   fs.writeFileSync(path.join(project, "pelican.html"), "latest existing file");
   catalog.writeSettings({ ...catalog.readSettings(), standaloneDirectories: [project], activeConversation: { project, resumeId: "one", scope: "standalone" } });
-  catalog.upgradeStandaloneWorkspaces(path.join(root, "workspaces"));
+  await catalog.upgradeStandaloneWorkspaces(path.join(root, "workspaces"));
   const rows = catalog.snapshot().standalone;
   assert.equal(rows.length, 2); assert.notEqual(rows[0].project, rows[1].project);
   for (const row of rows) assert.equal(fs.readFileSync(path.join(row.project, "pelican.html"), "utf8"), "latest existing file");
@@ -66,5 +66,5 @@ test("legacy independent conversations are isolated on upgrade and owned outputs
   const selected = rows.find((row) => row.sessionId === "one"); assert.equal(selected.draft, "keep"); assert(selected.pinned);
   assert.equal(catalog.readSettings().activeConversation.project, selected.project);
   assert(rows.find((row) => row.sessionId === "two").archived);
-  catalog.upgradeStandaloneWorkspaces(path.join(root, "workspaces")); assert.equal(catalog.snapshot().standalone.length, 2);
+  await catalog.upgradeStandaloneWorkspaces(path.join(root, "workspaces")); assert.equal(catalog.snapshot().standalone.length, 2);
 });

@@ -491,6 +491,19 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
     from codeclaw.security.permissions import ApprovalPolicy
     engine = QueryEngine(permission_handler=permission_prompt, approval_policy=ApprovalPolicy("full" if auto_approve else "ask"))
 
+    def require_idle_session():
+        if (any(not task.done() for task in engine.tool_context["subagent_tasks"].tasks.values())
+            or any(row.get("status") == "running" for row in engine.tool_context["command_sessions"].records.values())
+            or any(row.get("status") == "running" for row in engine.shell_task_manager.list_tasks())):
+            raise ValueError("Finish or cancel owned workers and commands before replacing or clearing the session")
+
+    async def fresh_session():
+        nonlocal engine
+        policy, cwd = engine.permission_manager.approval_policy, engine.session_cwd
+        await engine.aclose()
+        engine = QueryEngine(permission_handler=permission_prompt, approval_policy=policy, cwd=cwd)
+        await engine.start_protocols(sys_print=agent_events_callback)
+
     if not engine.is_configured:
         console.print(
             "[bold yellow]Warning:[/bold yellow] Model not configured. "
@@ -593,16 +606,12 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                 console.print(Panel(help_text, title="Commands", border_style="cyan", expand=False))
                 continue
             elif normalized_input == "/new":
-                # Save current session, then reset
-                engine.persist_session_state()
+                require_idle_session()
+                if engine.session_manager.owns_writer(engine.session_id) and not engine.persist_session_state():
+                    raise OSError(engine.session_manager.last_save_error)
                 old_sid = engine.session_id
-                import uuid as _uuid
-                engine.session_id = str(_uuid.uuid4())
-                engine.messages = []
-                engine.plan_manager.clear_plan()
-                engine.todo_manager.load([])
-                engine.content_replacement_manager.set_session(engine.session_id)
-                console.print(f"[bold green]New session started.[/bold green] Previous session saved as [dim]{old_sid[:8]}...[/dim]")
+                await fresh_session()
+                console.print(f"[bold green]New session started.[/bold green] Previous session: [dim]{old_sid[:8]}...[/dim]")
                 continue
             elif normalized_input == "/sessions":
                 console.print(engine.session_manager.get_recent_sessions())
@@ -621,7 +630,9 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
             elif normalized_input == "/clear sessions":
                 confirm = console.input("[bold yellow]Delete ALL saved sessions? (y/N): [/bold yellow]").strip().lower()
                 if confirm == "y":
+                    require_idle_session()
                     count = engine.session_manager.clear_all_sessions()
+                    await fresh_session()
                     console.print(f"[green]Cleared {count} saved session(s).[/green]")
                 else:
                     console.print("[dim]Cancelled.[/dim]")
@@ -847,7 +858,9 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
 
     await engine.tool_context["subagent_tasks"].close()
     await engine.tool_context["command_sessions"].close()
-    engine.persist_session_state()
+    if engine.session_manager.owns_writer(engine.session_id):
+        engine.persist_session_state()
+    await engine.aclose()
 
 
 def main():

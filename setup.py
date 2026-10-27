@@ -4,13 +4,13 @@ from pathlib import Path
 setup(
     name="codeclaw",
     version="0.1.0",
-    description="CodeClaw — Desktop and CLI AI coding workbench",
+    description="CodeClaw — General-purpose Agent framework for desktop and CLI",
     long_description=Path(__file__).with_name("README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/Dheudb/codeclaw",
     license="MIT",
     packages=find_packages(include=["codeclaw", "codeclaw.*"]),
-    package_data={"codeclaw.skills": ["builtin/*/SKILL.md"]},
+    package_data={"codeclaw.skills": ["builtin/*/SKILL.md", "builtin/*/agents/*.md"]},
     python_requires=">=3.9",
     install_requires=[
         "anthropic>=0.40.0",

@@ -1,8 +1,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { historyRoot, migrateProject, rebase } = require("./history-storage.cjs");
+const { historyRoot, migrateProject } = require("./history-storage.cjs");
 const { dataDirectory } = require("./workspace.cjs");
+const { mutateSync } = require("./storage-helper.cjs");
 
 const validId = (id) => typeof id === "string" && /^[a-zA-Z0-9_-]+$/.test(id);
 const projectKey = (project) => process.platform === "win32"
@@ -55,7 +56,6 @@ class SessionCatalog {
       throw new Error("会话索引损坏，请先修复 session-index.json");
     return Object.assign(Object.create(null), data.sessions);
   }
-  saveIndex(project, sessions) { atomicJSON(this.indexPath(project), { version: 1, sessions }); }
   list(project) {
     const root = this.directory(project);
     if (!fs.existsSync(root)) return [];
@@ -150,15 +150,13 @@ class SessionCatalog {
   }
   createStandalone(directory) {
     const base = fs.realpathSync(directory);
-    directory = path.join(base, "chat-" + crypto.randomUUID());
-    fs.mkdirSync(directory, { recursive: false });
-    this.seedWorkspaceConfiguration(base, directory);
+    const identity = crypto.randomUUID();
+    directory = path.join(base, "chat-" + identity);
     const settings = this.readSettings();
     settings.standaloneDirectories = [directory, ...(settings.standaloneDirectories || []).filter((p) => projectKey(p) !== projectKey(directory))];
     this.writeSettings(settings);
-    const row = this.create(directory, [], undefined, "standalone");
-    const index = this.index(directory); index[row.sessionId].workspaceIsolated = true; this.saveIndex(directory, index);
-    return row;
+    mutateSync(this, { action: "create", project: directory, session_id: identity, scope: "standalone", workspace_base: base, created: Date.now() });
+    return this.list(directory).find((row) => row.sessionId === identity);
   }
   seedWorkspaceConfiguration(base, target) {
     const settingsFile = path.join(base, ".codeclaw/capabilities.json");
@@ -169,7 +167,7 @@ class SessionCatalog {
     const mcp = path.join(base, "mcp_servers.json");
     if (fs.existsSync(mcp) && !fs.lstatSync(mcp).isSymbolicLink()) fs.copyFileSync(mcp, path.join(target, "mcp_servers.json"), fs.constants.COPYFILE_EXCL);
   }
-  upgradeStandaloneWorkspaces(base) {
+  async upgradeStandaloneWorkspaces(base, mutate = (spec) => mutateSync(this, spec)) {
     const roots = [...new Set([...(this.readSettings().standaloneDirectories || []), ...(this.readSettings().projects || [])])];
     const rows = roots.flatMap((directory) => {
       try { return this.list(directory).filter((row) => row.scope === "standalone" && !row.error && !this.index(directory)[row.sessionId]?.workspaceIsolated); }
@@ -177,7 +175,7 @@ class SessionCatalog {
     });
     if (!rows.length) return;
     fs.mkdirSync(base, { recursive: true });
-    const { moveSession } = require("./session-move.cjs");
+    const { moveSpec } = require("./session-move.cjs");
     for (const row of rows) {
       const target = path.join(base, "chat-" + crypto.randomUUID()); fs.mkdirSync(target);
       this.seedWorkspaceConfiguration(row.project, target);
@@ -202,7 +200,8 @@ class SessionCatalog {
       const pendingSettings = this.readSettings();
       pendingSettings.standaloneDirectories = [...new Set([...(pendingSettings.standaloneDirectories || []), target])];
       this.writeSettings(pendingSettings);
-      const moved = moveSession(this, row, target, "standalone"), settings = this.readSettings();
+      await mutate(moveSpec(row, target, "standalone"));
+      const moved = this.find(sessionKey(target, row.sessionId)), settings = this.readSettings();
       settings.standaloneDirectories = [...new Set([...(settings.standaloneDirectories || []), moved.project])];
       const matches = (entry) => entry && projectKey(entry.project) === projectKey(row.project) && entry.resumeId === row.sessionId;
       if (matches(settings.activeConversation)) settings.activeConversation = { ...settings.activeConversation, project: moved.project, scope: "standalone" };
@@ -212,85 +211,32 @@ class SessionCatalog {
   }
   create(project, messages = [], title, scope = "project") {
     const id = crypto.randomUUID();
-    atomicJSON(this.file(project, id), { messages, metadata: {} });
-    const index = this.index(project);
-    index[id] = { created: Date.now(), scope, ...(title ? { title } : {}) };
-    this.saveIndex(project, index);
+    this.directory(project);
+    mutateSync(this, { action: "create", project, session_id: id, messages, created: Date.now(), title, scope });
     return this.list(project).find((row) => row.sessionId === id);
   }
   update(row, patch) {
-    const index = this.index(row.project);
-    const next = { ...index[row.sessionId] };
-    if ("title" in patch) {
-      const title = String(patch.title).trim();
-      if (!title || title.length > 200) throw new Error("会话名称需为 1–200 个字符");
-      next.title = title;
-    }
-    for (const field of ["pinned", "archived"]) if (field in patch) next[field] = !!patch[field];
-    if ("draft" in patch) next.draft = String(patch.draft || "");
-    if ("draftAttachments" in patch) {
-      if (!Array.isArray(patch.draftAttachments) || patch.draftAttachments.length > 10 || !patch.draftAttachments.every(validId)) throw new Error("附件草稿无效");
-      next.draftAttachments = [...new Set(patch.draftAttachments)];
-    }
-    if ("draftEditId" in patch) {
-      if (patch.draftEditId && !validId(patch.draftEditId)) throw new Error("编辑目标无效");
-      next.draftEditId = patch.draftEditId || "";
-    }
-    if ("permissionMode" in patch) {
-      if (!["ask", "full"].includes(patch.permissionMode)) throw new Error("请选择请求批准或完全访问");
-      next.permissionMode = patch.permissionMode;
-    }
-    index[row.sessionId] = next;
-    this.saveIndex(row.project, index);
+    return mutateSync(this, this.updateSpec(row, patch));
+  }
+  updateSpec(row, patch) {
+    return { action: "metadata", project: row.project, session_id: row.sessionId, patch };
   }
   fork(row) {
-    const raw = JSON.parse(fs.readFileSync(this.file(row.project, row.sessionId), "utf8"));
-    const copy = row.scope === "standalone" ? this.createStandalone(path.dirname(row.project)) : this.create(row.project, [], row.title + "（副本）", row.scope);
-    try {
-      const source = path.join(this.artifacts(row.project), row.sessionId), destination = path.join(this.artifacts(copy.project), copy.sessionId);
-      const attachmentDirectory = path.join(source, "attachments");
-      if (fs.existsSync(attachmentDirectory)) fs.cpSync(attachmentDirectory, path.join(destination, "attachments"), {
-        recursive: true, errorOnExist: true, force: false,
-        filter: (file) => { if (fs.lstatSync(file).isSymbolicLink()) throw new Error("无法复制链接形式的附件"); return true; },
-      });
-      atomicJSON(this.file(copy.project, copy.sessionId), { messages: rebase(Array.isArray(raw) ? raw : raw.messages || [], source, destination), metadata: {} });
-      this.update(copy, { title: row.title + "（副本）" });
-      return this.find(copy.id);
-    } catch (error) { this.delete(copy); throw error; }
+    const spec = this.forkSpec(row);
+    mutateSync(this, spec);
+    return this.find(sessionKey(spec.target, spec.new_id));
+  }
+  forkSpec(row) {
+    const identity = crypto.randomUUID(), target = row.scope === "standalone" ? path.join(path.dirname(row.project), "chat-" + identity) : row.project;
+    if (row.scope === "standalone") {
+      const settings = this.readSettings();
+      settings.standaloneDirectories = [...new Set([...(settings.standaloneDirectories || []), target])];
+      this.writeSettings(settings);
+    }
+    return { action: "fork", project: row.project, session_id: row.sessionId, target, new_id: identity, scope: row.scope, title: row.title + "（副本）" };
   }
   delete(row) {
-    // Runtime disposal must complete before this is called, otherwise closing
-    // Python can persist the conversation again and resurrect the deleted row.
-    const target = this.file(row.project, row.sessionId);
-    const index = this.index(row.project);
-    const artifacts = path.resolve(this.artifacts(row.project), row.sessionId);
-    // Clean owned outputs before removing the durable conversation/index. If
-    // Windows holds an attachment open, the conversation stays visible/retryable.
-    if (fs.existsSync(artifacts)) {
-      const dataRoot = projectKey(fs.realpathSync(this.dataRoot)) + path.sep;
-      if (fs.lstatSync(artifacts).isSymbolicLink() || !projectKey(fs.realpathSync(artifacts)).startsWith(dataRoot))
-        throw new Error("会话附件目录必须位于集中存储中，记录已保留");
-      try { fs.rmSync(artifacts, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); }
-      catch (error) {
-        if (!["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].includes(error.code)) throw error;
-        const failure = new Error("会话附件仍被占用或无法访问。会话记录已保留，请关闭相关文件或预览后重试删除。");
-        failure.cause = error;
-        throw failure;
-      }
-    }
-    const subagents = path.join(this.directory(row.project), "subagents");
-    if (fs.existsSync(subagents) && !fs.lstatSync(subagents).isSymbolicLink()) {
-      for (const name of fs.readdirSync(subagents).filter((name) => name.endsWith(".json"))) {
-        const child = path.join(subagents, name);
-        if (fs.lstatSync(child).isSymbolicLink()) continue;
-        let raw;
-        try { raw = JSON.parse(fs.readFileSync(child, "utf8")); } catch { continue; }
-        if (raw.session_id === row.sessionId) fs.unlinkSync(child);
-      }
-    }
-    if (fs.existsSync(target)) fs.unlinkSync(target);
-    delete index[row.sessionId];
-    this.saveIndex(row.project, index);
+    mutateSync(this, { action: "delete", sessions: [{ project: row.project, session_id: row.sessionId }] });
   }
   setView(patch) {
     const settings = this.readSettings();

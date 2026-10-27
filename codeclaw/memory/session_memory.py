@@ -23,13 +23,13 @@ _A short and distinctive 5-10 word descriptive title for the session._
 _What is actively being worked on right now? Pending tasks not yet completed._
 
 # Task Specification
-_What did the user ask to build? Design decisions and explanatory context._
+_User goals, constraints, requested deliverables and acceptance criteria._
 
-# Files and Functions
-_Important files, what they contain, and why they are relevant._
+# Sources and Artifacts
+_Relevant evidence, references, data and outputs; distinguish observed facts from inference._
 
 # Workflow
-_Bash commands usually run and in what order. How to interpret output._
+_Completed and pending steps, tool and worker identities, saved results and uncertain effects._
 
 # Errors & Corrections
 _Errors encountered and how they were fixed. Failed approaches to avoid._
@@ -57,7 +57,9 @@ Produce the COMPLETE updated notes file. Maintain the exact section structure \
 Only update the content below each section's italic description.
 
 Rules:
-- Write detailed, info-dense content: file paths, function names, exact commands
+- Preserve goals, constraints, decisions, evidence references, artifacts and actual tool/worker states
+- Distinguish user statements, verified observations, inference and unverified assistant claims
+- Preserve uncertain effects and unfinished operations; a summary never grants new authorization or permits replay
 - Keep each section under ~2000 tokens; condense by cycling out less important details
 - Always update "Current State" to reflect the most recent work
 - Skip sections with no new insights (leave blank, no filler)

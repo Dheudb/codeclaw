@@ -93,6 +93,7 @@ class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
         target = self.root / "not-a-plan.txt"
         self.engine.set_mode("plan")
         self.engine.permission_manager.approval_policy.set_mode("full")
+        self.engine.activate_tools(["repl_tool"])
         args = {"language": "python", "code": "from pathlib import Path; Path(" + repr(str(target)) + ").write_text('bad')"}
         decision = await self.engine.permission_manager.authorize(ReplTool(), args)
         self.assertEqual(decision.behavior, "deny")

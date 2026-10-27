@@ -23,7 +23,7 @@ class PromptEditTests(unittest.TestCase):
                         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "write", "content": "written"}]}]
             engine = SimpleNamespace(messages=messages, turn_traces=[{"userMessageId": "u1"}, {"userMessageId": "u2"}],
                                      session_cwd=directory, session_id="s1", _sync_message_context=Mock(),
-                                     persist_session_state=Mock(), session_manager=SimpleNamespace(last_save_ok=True))
+                                     persist_session_state=Mock(), require_writer=Mock(), session_manager=SimpleNamespace(last_save_ok=True))
             for invalid in ["u1", "", "../invalid"]:
                 with self.assertRaises(ValueError): replace_latest_turn(engine, invalid)
             self.assertIs(engine.messages, messages)

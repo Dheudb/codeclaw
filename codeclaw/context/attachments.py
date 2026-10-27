@@ -238,42 +238,17 @@ class AttachmentCollector:
             "",
             "### Phase 1: Initial Understanding & Research",
             "Goal: Gain a comprehensive understanding of the user's request through exploration, "
-            "research, and clarification questions. This phase is MANDATORY — never skip it.",
-            "1. For coding tasks: actively search for existing functions, utilities, and patterns "
-            "that can be reused. Launch up to 3 Explore agents IN PARALLEL to explore the codebase.",
-            "2. For research/theory tasks: use available tools (file_read_tool, grep_tool, "
-            "bash_tool, glob_tool) to survey the workspace for any existing relevant materials, "
-            "references, or prior work. Investigate the topic thoroughly before designing a plan.",
-            "3. Use ask_user_question_tool to clarify requirements, preferences, and scope.",
-            "4. Do NOT skip this phase. Even if the workspace is empty, research the problem "
-            "space and confirm your understanding with the user before proceeding to design.",
+            "research, and clarification only when needed for this goal.",
+            "Use relevant supplied material and sources; do not assume a repository or workspace search is needed.",
+            "Delegate only useful independent investigations, never to meet a minimum agent count.",
             "",
-            "### Phase 2: Design",
-            "Goal: Design an implementation approach.",
-            "Launch Plan agent(s) to design the implementation based on the user's intent and your "
-            "exploration results from Phase 1.",
-            "",
-            "**Guidelines:**",
-            "- **Default**: Launch at least 1 Plan agent for most tasks",
-            "- **Skip agents**: Only for truly trivial tasks (typo fixes, single-line changes)",
-            "",
-            "### Phase 3: Review",
-            "Goal: Review the plan(s) from Phase 2 and ensure alignment with the user's intentions.",
-            "1. Read the critical files identified by agents to deepen your understanding",
-            "2. Ensure that the plans align with the user's original request",
-            "3. Use ask_user_question_tool to clarify any remaining questions with the user",
-            "",
-            "### Phase 4: Final Plan",
+            "### Final Plan",
             f"Goal: Write your final plan to the plan file (the only file you can edit: {plan_file_path}).",
-            "- Begin with a **Context** section: explain why this change is being made",
-            "- Include only your recommended approach, not all alternatives",
-            "- Ensure that the plan file is concise enough to scan quickly, but detailed enough to execute effectively",
-            "- Include the paths of critical files to be modified",
-            "- Reference existing functions and utilities you found that should be reused, with their file paths",
-            "- Include a verification section describing how to test the changes end-to-end",
+            "Include the user's goal, constraints, relevant evidence, proposed steps and checks appropriate to the domain.",
+            "Distinguish confirmed facts, assumptions and unresolved dependencies. Keep the plan proportionate to the task.",
             "",
-            "### Phase 5: Call exit_plan_mode",
-            "At the very end of your turn, once you have asked the user questions and are happy "
+            "### Call exit_plan_mode",
+            "At the end of your turn, once needed clarifications are resolved and you are happy "
             "with your final plan file — you should always call exit_plan_mode to indicate to the "
             "user that you are done planning.",
             "This is critical — your turn should only end with either using ask_user_question_tool "

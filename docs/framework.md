@@ -2,6 +2,49 @@
 
 CLI 与桌面端使用同一套执行引擎。下列能力通过模型工具调用提供，不需要额外启动服务。
 
+## 程序调用（当前开发源码）
+
+`run(text, selected_skills=[...])` 返回 `RunResult`；`submit_message` 的最终事件包含同一回执。使用 `async with QueryEngine(...) as engine`，或在 `finally` 中 `await engine.aclose()`，释放连接、所属任务和会话写者锁。
+
+`await engine.agents(action, **parameters)` 沿用 `agent_tool` 的动作与字段，返回 Python 字典。上层无需从自然语言提取 ID，且所有调用仍经过原权限入口和持久化执行日志。返回字段如下：
+
+| 字段 | 语义 |
+| --- | --- |
+| `api_version` | 当前为 `1`；新增可选字段向后兼容，改变字段语义需升版本 |
+| `session_id` | 框架真实会话 ID |
+| `tool_use_id` | 本次授权与持久化执行记录的调用 ID |
+| `ok` | 协调操作成功并已保存；不表示所有子任务成功或领域验收通过 |
+| `data` | 原生工具生成的完整结构化结果，超过展示阈值也不会只返回截断预览 |
+| `error` | 失败时的 `code` 和 `message`，此时 `data=null` |
+
+```python
+# request_id 应由上层在首次发送前持久保存，断线后复用。
+launch = await engine.agents("spawn", prompt="列出给定材料中的证据缺口",
+    count=2, run_in_background=True, request_id="saved-request-42")
+if launch["ok"]:
+    ids = [row["agent_id"] for row in launch["data"]["agents"]]
+    while True:
+        state = await engine.agents("wait", agent_ids=ids, timeout_ms=30000)
+        if not state["ok"] or all(not row["executing"] for row in state["data"]["agents"]):
+            break
+```
+
+调用方需要配置审批处理器或明确选择审批策略；此示例不自动授予权限。检查 worker 的 `status` 和 `receipt` 判断真实执行结果。
+
+`spawn` 的可选 `request_id` 支持 1–128 个字母、数字、`_`、`-`。相同参数重复提交返回原记录与 `reused=true`，重启恢复后也不会再启动。相同 ID 修改参数会拒绝。注册中断只保存部分批次时明确报错，调用方应检查实际记录，不能盲目重新发起。省略 ID 的独立调用每次都是新任务。
+
+`list/result/wait/capacity` 读取原生生命周期，`cancel` 停止所属工作，`followup` 明确继续同一 worker。重复读取结果不会重新执行。重启后的历史 `running` 记录显示为 `interrupted`；它不是当前存活证明，不会自动重跑。`wait` 等待任一目标结束即返回，要汇总全部结果需检查所有目标的 `executing`。
+
+事件复用 `engine.tool_context["capability_event"]` 回调：持久化注册后通知启动/状态，保存结果与完成记录后通知完成。回调应快速返回且不抛异常。断线可能丢通知，上层应通过 `list/result` 恢复实际记录，不能仅因缺少通知重新启动任务。
+
+`session_busy` 表示另一个写者占用，`session_conflict` 表示快照已过期；此时没有执行模型或工具。`tool_error` 表示参数、权限或工具操作失败；`persistence_error` 表示无法确认完整存储，可能已有副作用，需要读取实际记录后处理。框架没有为此增加另一套 Job 状态，也不承诺外部系统的 exactly-once 事务。
+
+## 工具发现
+
+文件、命令、搜索、网页读取、Skill 和原生委派默认可用。浏览器、Notebook、REPL、LSP、工作区隔离、旧后台任务及团队工具通过 `tool_search_tool` 搜索并激活。激活只改变可见性，不改变权限、Plan 限制或中断恢复确认。
+
+显式列出专用工具的自定义角色可直接加载相应工具，不要求额外允许发现工具。角色限制同时作用于默认和潜在工具，包括只读与 MCP 服务范围，不能通过发现重新引入被排除的能力。
+
 命令工具的 `wait_ms` 单次等待范围为 0–120000 毫秒（最多 120 秒），程序完成时提前返回。它与控制进程总运行时长的 `timeout_ms` 分开设置，等待期间仍可停止任务。
 
 ## 工具调用恢复

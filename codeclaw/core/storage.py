@@ -33,11 +33,15 @@ def atomic_json(path, payload):
 
 
 def atomic_text(path, text):
+    atomic_bytes(path, text.encode("utf-8"))
+
+
+def atomic_bytes(path, content):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".migration-", suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
-            stream.write(text)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
         for attempt in range(6):
@@ -63,6 +67,31 @@ def rebase(value, source, target):
 
 
 def migrate_project(cwd=None):
+    """Upgrade legacy storage under the same OS leases as current history writers."""
+    from contextlib import ExitStack
+    from codeclaw.core.session_lock import SessionLock
+    project = Path(os.path.realpath(cwd or os.getcwd()))
+    legacy, target = project / ".codeclaw", history_root(project)
+    kinds = ("sessions", "session-index.json", "tool-results", "browser", "shell-tasks", "vcr", "notebooks")
+    with ExitStack() as stack:
+        if any((legacy / kind).exists() for kind in kinds):
+            # A project-wide migration can touch legacy resources shared by several sessions.
+            # Preflight all current and incoming owners before copying or removing anything.
+            lock = SessionLock(data_directory() / "session-locks", "index_" + target.name)
+            lock.acquire(); stack.callback(lock.close)
+            identities = {file.stem for root in (legacy / "sessions", target / "sessions")
+                if root.is_dir() for file in root.glob("*.json")}
+            for identity in sorted(identities):
+                lock = SessionLock(data_directory() / "session-locks", identity)
+                lock.acquire(); stack.callback(lock.close)
+            from codeclaw.core.session_mutation import _safe, recover_pending
+            _safe(target / "sessions")
+            for identity in sorted(identities):
+                recover_pending(identity, identities | {"index_" + target.name})
+        return _migrate_project(cwd)
+
+
+def _migrate_project(cwd=None):
     project = Path(os.path.realpath(cwd or os.getcwd())); target = history_root(project); legacy = project / ".codeclaw"
     journal_path = target / "migration.json"
     journal = json.loads(journal_path.read_text(encoding="utf-8")) if journal_path.exists() else {}
@@ -86,15 +115,14 @@ def migrate_project(cwd=None):
                     value = rebase(value, Path(".codeclaw") / name, target / name)
                 content = json.dumps(value, ensure_ascii=False, indent=2).encode()
             except (ValueError, UnicodeError): pass
-        if journal.get(str(source)) != digest:
-            if destination.exists():
-                try: same = json.loads(destination.read_bytes()) == json.loads(content) if transform else destination.read_bytes() == content
-                except (ValueError, UnicodeError): same = destination.read_bytes() == content
-                if not same: raise ValueError("旧会话与集中存储冲突，双方记录已保留：" + str(source))
-            else:
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with destination.open("xb") as stream: stream.write(content)
-                os.utime(destination, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        # A journal entry is not proof the destination still exists or is unchanged.
+        if destination.exists():
+            try: same = json.loads(destination.read_bytes()) == json.loads(content) if transform else destination.read_bytes() == content
+            except (ValueError, UnicodeError): same = destination.read_bytes() == content
+            if not same: raise ValueError("旧会话与集中存储冲突，双方记录已保留：" + str(source))
+        else:
+            atomic_bytes(destination, content)
+            os.utime(destination, ns=(stat.st_atime_ns, stat.st_mtime_ns))
         journal[str(source)] = digest; atomic_json(journal_path, journal)
         if source.read_bytes() != original: raise ValueError("迁移过程中旧会话被其他程序修改，原文件保留")
         try: source.unlink()

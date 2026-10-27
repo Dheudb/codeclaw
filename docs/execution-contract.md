@@ -2,7 +2,7 @@
 
 `QueryEngine.run()` returns `RunResult`; `submit_message()` emits the same receipt in the final event's `result`. Callers display `text` and inspect `ok`, `reason`, `persisted` and `execution_reason`. Text is not a completion protocol.
 
-`completed` requires both normal model-loop termination and a successful final checkpoint. Other reasons include `budget_exhausted`, `turn_limit`, `cancelled`, `api_error`, `stream_interrupted`, `tool_input_error`, `tool_protocol_error`, `workflow_incomplete` and `persistence_error`. If the model finishes but the checkpoint fails, `execution_reason` preserves `completed`, while `ok=false` and `reason=persistence_error` prevent a success acknowledgement. Empty delegated results also fail explicitly.
+`completed` requires both normal model-loop termination and a successful final checkpoint. Other reasons include `budget_exhausted`, `turn_limit`, `cancelled`, `api_error`, `stream_interrupted`, `tool_input_error`, `tool_protocol_error`, `workflow_incomplete`, `session_busy`, `session_conflict` and `persistence_error`. If the model finishes but the checkpoint fails, `execution_reason` preserves `completed`, while `ok=false` and `reason=persistence_error` prevent a success acknowledgement. Empty delegated results also fail explicitly.
 
 Receipts include `session_id`, `agent_id` and `user_message_id`, populated by code. A delegated receipt's session is its owning conversation. Subagent transcript and parent registry writes must succeed before completion is announced. Failed registry writes restore the previous in-memory row. CLI, desktop, verification and planning consume the same engine receipt.
 

@@ -5,7 +5,7 @@ const { SessionCatalog, projectKey, sessionKey, atomicJSON } = require("./catalo
 const { EngineTransport } = require("./transport.cjs");
 const { resolveEnginePython } = require("./runtime.cjs");
 const { defaultWorkspace, dataDirectory } = require("./workspace.cjs");
-const { prepareMove, moveSession } = require("./session-move.cjs");
+const { prepareMove, moveSpec } = require("./session-move.cjs");
 const { HtmlPreviews, SCHEME: PREVIEW_SCHEME } = require("./html-preview.cjs");
 protocol.registerSchemesAsPrivileged([{ scheme: PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 const htmlPreviews = new HtmlPreviews();
@@ -128,7 +128,7 @@ function latestSavedSession(project, scope = "project") {
 }
 async function restoreWorkspace() {
   const upgradeErrors = [];
-  try { catalog.upgradeStandaloneWorkspaces(workspaceSettings().defaultDirectory); }
+  try { await catalog.upgradeStandaloneWorkspaces(workspaceSettings().defaultDirectory, mutateSessions); }
   catch (error) { upgradeErrors.push("旧独立会话的工作区隔离未完成，历史和原文件已保留：" + error.message); }
   const saved = settings();
   const legacyEntries = Array.isArray(saved.workspace) ? saved.workspace :
@@ -216,6 +216,13 @@ async function createSession(project, resumeId) {
     await transport.close();
     throw error;
   }
+}
+
+async function mutateSessions(spec) {
+  return globalConfig().request("storage.mutate", spec);
+}
+async function updateRow(row, patch) {
+  return mutateSessions(catalog.updateSpec(row, patch));
 }
 function running(source) {
   return source.busy || !!source.attachmentImport || [...source.workers.values()].includes("running") || [...(source.commands?.values() || [])].includes("running");
@@ -351,7 +358,7 @@ async function invoke(method, params) {
   }
   if (method === "session.update") {
     const ids = [...new Set(params.ids || [params.id])];
-    for (const id of ids) catalog.update(catalog.find(id), params.patch || {});
+    for (const id of ids) await updateRow(catalog.find(id), params.patch || {});
     if (params.patch?.archived && ids.includes(activeSessionId)) {
       const active = catalog.find(activeSessionId);
       return fallback(active.project, ids, active.scope);
@@ -361,14 +368,17 @@ async function invoke(method, params) {
   if (method === "session.fork") {
     const row = catalog.find(params.id);
     if (sessions.has(row.id) && running(sessions.get(row.id))) throw new Error("先停止当前任务，再复制会话");
-    return selectRow(catalog.fork(row));
+    await disposeSession(row.id);
+    const spec = catalog.forkSpec(row);
+    await mutateSessions(spec);
+    return selectRow(catalog.find(sessionKey(spec.target, spec.new_id)));
   }
   if (method === "session.move") {
     const row = catalog.find(params.id), source = sessions.get(row.id);
     if (source && running(source)) throw new Error("请先停止会话和子代理任务，再移动到其他项目");
     const prepared = prepareMove(catalog, row, params.path);
     if (prepared.sameDirectory && row.scope !== "standalone") return selectRow(row);
-    if (typeof params.draft === "string") catalog.update(row, { draft: params.draft });
+    if (typeof params.draft === "string") await updateRow(row, { draft: params.draft });
     if (source) {
       source.moving = true;
       await source.transport.close();
@@ -376,9 +386,12 @@ async function invoke(method, params) {
       sessions.delete(row.id);
     }
     let moved;
-    try { moved = moveSession(catalog, catalog.find(row.id), params.path); }
+    try {
+      await mutateSessions(moveSpec(row, prepared.target));
+      moved = catalog.find(sessionKey(prepared.target, row.sessionId));
+    }
     catch (error) {
-      if (source) await createSession(row.project, row.sessionId);
+      if (source && fs.existsSync(catalog.file(row.project, row.sessionId))) await createSession(row.project, row.sessionId);
       saveWorkspace(); broadcastCatalog(); throw error;
     }
     if (window && !window.isDestroyed()) window.webContents.send("workbench:event", { type: "session_unloaded", session: row.id });
@@ -399,7 +412,7 @@ async function invoke(method, params) {
       throw new Error("会话正在运行，请先停止任务或选择停止并删除");
     const wasActive = rows.find((row) => row.id === activeSessionId);
     for (const row of rows) await disposeSession(row.id);
-    for (const row of rows) catalog.delete(row);
+    await mutateSessions({ action: "delete", sessions: rows.map((row) => ({ project: row.project, session_id: row.sessionId })) });
     if (wasActive) return fallback(wasActive.project, rows.map((row) => row.id), wasActive.scope);
     saveWorkspace();
     return { catalog: broadcastCatalog() };
@@ -417,7 +430,7 @@ async function invoke(method, params) {
     if (!params.stop && live.some(([, source]) => running(source))) throw new Error("项目有运行中的任务，请先停止任务");
     const wasActive = live.some(([id]) => id === activeSessionId);
     for (const [id] of live) await disposeSession(id);
-    if (method === "project.delete") for (const row of project.sessions) catalog.delete(row);
+    if (method === "project.delete") await mutateSessions({ action: "delete", sessions: project.sessions.map((row) => ({ project: row.project, session_id: row.sessionId })) });
     if (method === "project.close") catalog.updateProject(project.path, { open: false });
     else catalog.removeProject(project.path);
     if (wasActive) return fallback(project.path);
@@ -445,7 +458,7 @@ async function invoke(method, params) {
     const row = catalog.find(params.session);
     source.attachmentImport = (async () => {
       const items = await attachments.import(row, params.files, params.existing || []);
-      catalog.update(row, { draftAttachments: items.map((item) => item.id) });
+      await updateRow(row, { draftAttachments: items.map((item) => item.id) });
       broadcastCatalog();
       return items;
     })();
@@ -472,7 +485,7 @@ async function invoke(method, params) {
   if (method === "permissions.set") {
     if (!["ask", "full"].includes(params.mode)) throw new Error("请选择请求批准或完全访问");
     const row = catalog.find(params.session), previous = row.permissionMode;
-    catalog.update(row, { permissionMode: params.mode });
+    await updateRow(row, { permissionMode: params.mode });
     try {
       const result = await source.transport.request(method, { mode: params.mode });
       broadcastCatalog();
@@ -480,7 +493,7 @@ async function invoke(method, params) {
     } catch {
       // A lost reply must never leave a hidden full-access engine running.
       await disposeSession(params.session);
-      catalog.update(row, { permissionMode: previous });
+      await updateRow(row, { permissionMode: previous });
       broadcastCatalog();
       throw new Error("切换权限失败，当前会话引擎已停止，请重新打开会话");
     }
@@ -519,7 +532,7 @@ async function invoke(method, params) {
     try {
       attachments.list(row, params.attachments || []);
       const result = await source.transport.request(method, payload);
-      catalog.update(row, { draft: "", draftEditId: "", draftAttachments: [], ...(row.title === "新会话" ? { title: String(params.text || "").split("\n")[0].slice(0, 80) || "附件会话" } : {}) });
+      await updateRow(row, { draft: "", draftEditId: "", draftAttachments: [], ...(row.title === "新会话" ? { title: String(params.text || "").split("\n")[0].slice(0, 80) || "附件会话" } : {}) });
       broadcastCatalog();
       return result;
     }

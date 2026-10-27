@@ -74,7 +74,8 @@ async function main() {
     await page.getByRole("button", { name: "关闭设置", exact: true }).click();
     // Global New always uses the current default, preserving old independent histories.
     await page.locator(".new-task").click();
-    await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
+    await page.waitForFunction((previous) => !document.querySelector(".new-task").disabled &&
+      document.querySelector(".session-item.active")?.getAttribute("data-session-id") !== previous, defaultId);
     const customId = await page.locator(".session-item.active").getAttribute("data-session-id");
     const secondWorkspace = await page.locator(".project-context span").getAttribute("title");
     assert.notEqual(secondWorkspace, firstWorkspace); assert(!fs.existsSync(path.join(secondWorkspace, "isolation.txt")));
@@ -130,6 +131,10 @@ async function main() {
     assert.equal(await page.locator(".project-group").count(), 0);
     assert.deepEqual(errors, []);
     console.log("Workspace E2E passed: global New/Ctrl+N independent, project + scoped, default-directory changes, drafts/history preserved, project removal and restart");
+  } catch (error) {
+    console.error("Fixture:", fixture);
+    if (page && !page.isClosed()) console.error("Workspace UI:", await page.locator("body").innerText().catch(() => "unavailable"));
+    throw error;
   } finally { if (app) await app.close().catch(() => {}); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

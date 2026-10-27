@@ -91,7 +91,7 @@ class BaseAgenticTool(ABC):
                         kwargs[k] = sandbox.resolve_path(kwargs[k])
                     mapped_any = True
             
-            # Special auto-targeting: generic commands missing explicit path get locked down
+            # Default workspace routing is a convenience, not host or process confinement.
             if self.name in ["bash_tool", "grep_tool", "glob_tool"]:
                 for k in ["path", "cwd"]:
                     if k not in kwargs or not kwargs[k]:
@@ -99,7 +99,7 @@ class BaseAgenticTool(ABC):
                         mapped_any = True
                         
             if mapped_any:
-                res_str = f"[✓ CodeClaw Sentinel: Action intercepted and safely routed to invisible sandbox sub-dimension '{sandbox.active_sandbox['branch']}']\\n"
+                res_str = f"[Workspace routing: {sandbox.active_sandbox['branch']}; this is not an OS security sandbox.]\\n"
         
         validated_input = self.input_schema(**kwargs)
         normalized_kwargs = validated_input.model_dump()

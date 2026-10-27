@@ -9,7 +9,7 @@ class SkillToolInput(BaseModel):
     skill_name: str = Field(None, description="Exact name of an enabled skill")
     query: str = Field(None, description="Search names and descriptions")
     resource_path: str = Field(None, description="For resource: path relative to the skill directory")
-    max_chars: int = Field(100000, ge=1, le=1000000)
+    max_chars: int = Field(100000, ge=1, le=1000000, description="Inline threshold; larger content is archived in full with a file_read_tool entry point")
 
 
 class SkillTool(BaseAgenticTool):
@@ -52,6 +52,6 @@ class SkillTool(BaseAgenticTool):
                 text = registry.read_resource(skill_name, resource_path)
             else:
                 raise ValueError("Unknown skill action")
-            return build_tool_result(ok=True, content=text[:max_chars], metadata={"action": action, "truncated": len(text) > max_chars})
+            return build_tool_result(ok=True, content=text, metadata={"action": action})
         except (OSError, UnicodeError, ValueError) as exc:
             return build_tool_result(ok=False, content=str(exc), metadata={"action": action}, is_error=True)

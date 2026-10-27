@@ -1,10 +1,10 @@
 # CodeClaw
 
-本地 AI 编程工作台：**桌面 App + CLI，共用 Python 智能体引擎**。
+本地通用 Agent 框架：**桌面 App + CLI，共用 Python 智能体引擎**。
 
 [English](README.en.md) · [使用文档](docs/README.md) · [开发说明](docs/development.md)
 
-CodeClaw 围绕本地项目提供模型对话、文件与命令工具、Skills、自定义子代理和 MCP 服务。
+CodeClaw 提供普通对话、文件与命令工具、Skills、自定义子代理和 MCP 服务；领域工作流程通过扩展加载。
 桌面端采用 Electron + React，CLI 可以单独使用。当前桌面版处于预览阶段。
 
 ## 从哪里开始
@@ -16,14 +16,15 @@ CodeClaw 围绕本地项目提供模型对话、文件与命令工具、Skills�
 | 接入模型或本地推理服务 | [模型配置与兼容范围](docs/models.md) |
 | 添加 Skills 或子代理 | [Skills 与子代理](docs/capabilities.md) |
 | 子代理续接、容量查询和命令输入输出 | [通用执行接口](docs/framework.md) |
+| 通用化改造、会话占用与兼容迁移 | [通用框架进展与边界](docs/general-framework.md) |
 | 安装搜索等外部工具 | [MCP 市场与搜索](docs/mcp.md) |
 | 修改代码、运行测试或打包 | [开发说明](docs/development.md) · [项目结构](docs/architecture.md) |
 
 ## 桌面版
 
-[**下载 Windows x64 便携版**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.2) · [所有版本](https://github.com/Dheudb/codeclaw/releases)
+[**下载 Windows x64 便携版**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.3) · [所有版本](https://github.com/Dheudb/codeclaw/releases)
 
-在 Release 的 Assets 中下载 `CodeClaw-v0.1.0-beta.2-windows-x64.zip`，完整解压后运行 `CodeClaw.exe`。
+在 Release 的 Assets 中下载 `CodeClaw-v0.1.0-beta.3-windows-x64.zip`，完整解压后运行 `CodeClaw.exe`。
 请下载成品 ZIP；GitHub 自动提供的 Source code 是源码。程序依赖同目录的 `resources`，不能只复制 EXE。
 Windows 便携包内置 Python 运行时和 MCP 依赖。
 **使用便携包不需要安装 Python、Node.js，也不需要选择解释器。**
@@ -72,7 +73,9 @@ C:\path\to\codeclaw\.venv\Scripts\codeclaw.exe
 | 工具与审批 | 文件读写、命令执行、规划、权限卡片和 Git 变更查看 |
 
 - 模型接入支持 Anthropic Messages 和 OpenAI 兼容 Chat Completions；不同模型的工具调用、推理和多模态能力需要单独验证。
-- CLI 和桌面在同一个项目目录下可以恢复彼此保存的会话，目前没有同一会话的实时同步或并发写入保护。
+- 当前源码为会话增加跨进程单写者锁与检查点版本校验：另一个入口可以查看历史，执行或修改历史前需要原写者释放。没有实时同步，也不能通过删除锁文件接管。此项属于尚未发布的通用化改造，不能据此认定 beta.2 下载包已具备。
+- 默认提示词和内置子代理保持领域中立；编程流程通过可选的 `code-development` Skill 加载，普通文件修改不再自动触发编程检查。
+- 工作区隔离使用 worktree 或目录副本，不限制进程、网络或宿主文件访问，不是操作系统安全沙箱。
 - MCP OAuth 登录、旧版 SSE 连接、插件市场、自动更新和签名安装器尚未实现。
 - Windows 便携包已经内置运行时；macOS/Linux 桌面分发尚未提供。
 - 飞书集成已经移除，项目以本地桌面和 CLI 使用为主。

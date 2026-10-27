@@ -97,10 +97,21 @@ GitHub Actions 验证 Python 3.9/3.12、前端和 Windows 成品，并上传便�
 
 ## 发布已有 Windows 成品
 
+已有安装不要再次运行 `npm run pack`；打包脚本会拒绝覆盖原安装。先构建前端并暂存公开资源：
+
+```powershell
+cd desktop
+npm run build
+cd ..
+python desktop/scripts/stage-update.py
+```
+
+使用脚本输出的暂存目录，调用 `desktop/scripts/update-existing.ps1`，指定原安装目录与暂存资源路径。更新器等待应用自然退出，保留旧资源，不结束用户应用。随后用原 EXE 进行成品验收；暂存脚本仅从本地源码构建 wheel，不复制用户 Skills 或配置。
+
 将已测试的源码提交后，确认原安装目录的应用版本与准备发布的标签一致，再归档：
 
 ```powershell
-python desktop/scripts/release.py --tag v0.1.0-beta.2
+python desktop/scripts/release.py --tag v0.1.0-beta.3
 ```
 
 脚本核对已安装引擎、前端和 Electron 代码与源码一致，仅打包原安装目录，不创建另一份 EXE。

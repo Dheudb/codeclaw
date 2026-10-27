@@ -46,7 +46,7 @@ class AgentLifecycle:
         if manager is None:
             raise ValueError("Subagent transcript storage is unavailable")
         path = Path(manager.get_subagent_transcript_path(row["agent_id"]))
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = manager.load_subagent_transcript(row["agent_id"])
         if not isinstance(raw, dict) or not isinstance(raw.get("messages"), list):
             raise ValueError("Invalid subagent transcript")
         # Resolve from our own central storage, never a model-supplied path.

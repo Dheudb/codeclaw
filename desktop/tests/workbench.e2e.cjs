@@ -267,7 +267,7 @@ async function main() {
   }
   try {
     await page
-      .getByRole("heading", { name: "把想法变成可运行的代码。" })
+      .getByRole("heading", { name: "从一个问题或任务开始。" })
       .waitFor();
     // Global model setup works before any project is opened.
     await page.getByRole("button", { name: "设置与模型", exact: true }).click();
@@ -313,7 +313,7 @@ async function main() {
       .locator(".project-item")
       .filter({ hasText: "sample-project" })
       .click();
-    await page.getByRole("heading", { name: "今天想构建什么？" }).waitFor();
+    await page.getByRole("heading", { name: "今天想完成什么？" }).waitFor();
     await page.getByText("project-review", { exact: true }).waitFor();
     await page.locator(".capability-card").filter({ has: page.getByText("project-review", { exact: true }) }).getByRole("button", { name: "查看指令", exact: true }).click();
     await page
@@ -418,7 +418,7 @@ async function main() {
       .click();
     await page.locator(".capability-card strong").filter({ hasText: /^project-review$/ }).waitFor({ state: "hidden" });
     await page.getByText("code-review", { exact: true }).waitFor();
-    assert.equal(await page.locator(".capability-card").count(), 3, "Another project has the bundled skills but not the first project's skill");
+    assert.equal(await page.locator(".capability-card").count(), 4, "Another project has four public bundled skills but not the first project's skill");
     await page
       .getByRole("textbox", { name: "任务输入" })
       .fill("第二个项目的独立会话");

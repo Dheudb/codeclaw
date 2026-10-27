@@ -2,7 +2,7 @@
 
 ## 使用 Windows 便携包
 
-下载：[Windows x64 Release](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.2)。
+下载：[Windows x64 Release](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.3)。
 请选择 Assets 中的成品 ZIP，`Source code` 下载项仅包含源码。
 
 1. 解压完整的 `CodeClaw-win32-x64` 目录。

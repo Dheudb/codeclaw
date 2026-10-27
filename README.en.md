@@ -1,18 +1,18 @@
 # CodeClaw
 
-A local AI coding workbench with **Desktop + CLI on one Python agent engine**.
+A local general-purpose Agent framework with **Desktop + CLI on one Python agent engine**.
 
 [中文](README.md) · [Documentation](docs/README.md) · [Development](docs/development.md)
 
-CodeClaw works with local projects and provides model conversations, file and shell
+CodeClaw supports independent conversations and projects, with model conversations, file and shell
 tools, Skills, custom subagents, MCP connections, permissions and session history.
 The desktop uses Electron and React. It is currently a preview.
 
 ## Desktop
 
-[**Download Windows x64 portable**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.1) · [All releases](https://github.com/Dheudb/codeclaw/releases)
+[**Download Windows x64 portable**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.2) · [All releases](https://github.com/Dheudb/codeclaw/releases)
 
-Download `CodeClaw-v0.1.0-beta.1-windows-x64.zip` from Assets, extract the entire
+Download `CodeClaw-v0.1.0-beta.2-windows-x64.zip` from Assets, extract the entire
 folder, and run `CodeClaw.exe`. The automatic Source code downloads contain source,
 not a runnable application. Keep the `resources` directory beside the executable.
 
@@ -56,7 +56,9 @@ Run `codeclaw` from the project you want to work on to use the CLI.
 
 Anthropic Messages and OpenAI-compatible Chat Completions are implemented; this is
 not a guarantee that every model or gateway supports every agent feature.
-Concurrent edits to one saved session, MCP OAuth, legacy SSE, automatic updates,
+The current development source adds session writer leases and checkpoint revision checks; this is not yet in the beta.2 download. Read-only viewing remains available, and a second writer must wait for release. See [development scope and migration](docs/general-framework.md).
+
+MCP OAuth, legacy SSE, automatic updates,
 signed installers and macOS/Linux desktop distributions are not implemented.
 The Feishu integration has been removed.
 

@@ -40,6 +40,7 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.tool_context["command_sessions"].close()
         await self.engine.client.close()
         await self.engine.compactor.client.close()
+        self.engine.session_manager.release_writer()
         self.tokens.stop()
         self.env.stop()
         self.temp.cleanup()

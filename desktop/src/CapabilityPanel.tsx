@@ -89,8 +89,8 @@ export default function CapabilityPanel({
       {!session ? (
         <div className="panel-empty">
           <Puzzle size={28} />
-          <p>项目能力会显示在这里</p>
-          <small>打开项目后，管理技能、子代理与代码变更。</small>
+          <p>会话能力会显示在这里</p>
+          <small>开始会话后，管理技能、子代理、文件和执行过程。</small>
         </div>
       ) : (
         <>

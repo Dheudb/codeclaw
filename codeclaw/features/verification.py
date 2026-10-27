@@ -1,9 +1,7 @@
 """
 Verification Agent
 
-Automatically spawns a read-only sub-agent to review complex implementations
-when 3+ files have been modified in the current run. Uses the full adversarial
-verification prompt aligned with the original Claude Code verification agent.
+Optional assessment support. The generic engine does not automatically invoke it.
 """
 import asyncio
 import copy
@@ -31,7 +29,7 @@ class VerificationManager:
         self.modified_files: dict[str, dict] = {}
         self.verification_history: list[dict] = []
         self._last_verified_set: set[str] = set()
-        self.enabled = True
+        self.enabled = False
 
     def record_file_modification(self, path: str, operation: str = "edit"):
         abs_path = os.path.abspath(path)

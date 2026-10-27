@@ -8,7 +8,7 @@ class SandboxToolInput(BaseModel):
 
 class SandboxTool(BaseAgenticTool):
     name = "sandbox_tool"
-    description = "Enter an isolated Git worktree sandbox for high-risk or widespread changes. Changes do not affect the main workspace. Use 'merge' to integrate changes or 'abort' to discard."
+    description = "Create workspace isolation using a Git worktree or directory copy; merge or discard its file changes. This does not isolate processes, network access or host files and is not an OS security sandbox."
     input_schema = SandboxToolInput
     risk_level = "high"
 

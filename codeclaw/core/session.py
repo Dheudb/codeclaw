@@ -1,8 +1,10 @@
 import os
 import json
-import shutil
 import time
-from codeclaw.core.storage import session_directory
+import hashlib
+from pathlib import Path
+from codeclaw.core.storage import session_directory, data_directory
+from codeclaw.core.session_lock import SessionLock, SessionBusyError, SessionConflictError
 
 class SessionManager:
     """
@@ -10,11 +12,84 @@ class SessionManager:
     Drops conversation trees into lightweight logs maintaining persistence after crash or terminal exit.
     """
     def __init__(self, session_dir=None, cwd=None):
+        self.cwd = os.path.realpath(cwd or os.getcwd())
         self.session_dir = str(session_dir if session_dir is not None else session_directory(cwd))
         os.makedirs(self.session_dir, exist_ok=True)
         self.last_save_error = ""
         self.last_save_path = ""
         self.last_save_ok = True
+        self._writers = {}
+        self._versions = {}
+        self.lock_directory = Path(self.session_dir) / ".locks" if session_dir is not None else data_directory() / "session-locks"
+        self.central = session_dir is None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.release_writer()
+
+    def acquire_writer(self, session_id):
+        created = session_id not in self._writers
+        if session_id not in self._writers:
+            lock = SessionLock(self.lock_directory, session_id)
+            lock.acquire()
+            self._writers[session_id] = lock
+        if self.central:
+            try:
+                from codeclaw.core.session_mutation import recover_pending
+                recover_pending(session_id, self._writers)
+            except BaseException as error:
+                if created:
+                    self.release_writer(session_id)
+                if isinstance(error, (OSError, ValueError, KeyError)):
+                    raise SessionConflictError("Pending session storage operation could not finish; history was preserved. Resolve the storage error before executing: " + str(error)) from error
+                raise
+
+    def release_writer(self, session_id=None):
+        for identity in list(self._writers):
+            if session_id is None or identity == session_id:
+                self._writers.pop(identity).close()
+
+    def owns_writer(self, session_id):
+        return session_id in self._writers
+
+    @staticmethod
+    def _version(path):
+        try:
+            raw = Path(path).read_bytes()
+        except FileNotFoundError:
+            return (0, None)
+        payload = json.loads(raw)
+        return (payload.get("revision", 0) if isinstance(payload, dict) else 0, hashlib.sha256(raw).hexdigest())
+
+    def _save(self, path, payload, owner):
+        owned = self.owns_writer(owner)
+        self.acquire_writer(owner)
+        try:
+            current = self._version(path)
+            expected = self._versions.get(path, (0, None))
+            if current != expected:
+                raise SessionConflictError("Session changed since it was loaded. Reload the latest state before executing or saving; the existing checkpoint was preserved.")
+            payload["revision"] = current[0] + 1
+            self._write_json_atomic(path, payload)
+            self._versions[path] = self._version(path)
+        except BaseException:
+            if not owned:
+                self.release_writer(owner)
+            raise
+
+    def check_current(self, session_id):
+        path = os.path.join(self.session_dir, f"{session_id}.json")
+        if self._version(path) != self._versions.get(path, (0, None)):
+            raise SessionConflictError("Session changed since it was loaded. Reload before executing; the existing checkpoint was preserved.")
+
+    def load_subagent_transcript(self, agent_id):
+        path = self.get_subagent_transcript_path(agent_id)
+        data = Path(path).read_bytes()
+        payload = json.loads(data)
+        self._versions[path] = (payload.get("revision", 0), hashlib.sha256(data).hexdigest())
+        return payload
 
     def _make_json_safe(self, value):
         if value is None or isinstance(value, (str, int, float, bool)):
@@ -54,7 +129,7 @@ class SessionManager:
                 "messages": self._make_json_safe(messages),
                 "metadata": self._make_json_safe(metadata or {}),
             }
-            self._write_json_atomic(path, payload)
+            self._save(path, payload, session_id)
             self.last_save_ok = True
             self.last_save_error = ""
             self.last_save_path = path
@@ -73,17 +148,18 @@ class SessionManager:
         if not os.path.exists(path):
             return {"messages": [], "metadata": {}}
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-                if isinstance(payload, list):
-                    return {"messages": payload, "metadata": {}, "_valid": True}
-                if isinstance(payload, dict):
-                    return {
-                        "messages": payload.get("messages", []),
-                        "metadata": payload.get("metadata", {}),
-                        "_valid": isinstance(payload.get("messages", []), list) and isinstance(payload.get("metadata", {}), dict),
-                    }
-                return {"messages": [], "metadata": {}}
+            data = Path(path).read_bytes()
+            payload = json.loads(data)
+            self._versions[path] = (payload.get("revision", 0) if isinstance(payload, dict) else 0, hashlib.sha256(data).hexdigest())
+            if isinstance(payload, list):
+                return {"messages": payload, "metadata": {}, "_valid": True}
+            if isinstance(payload, dict):
+                return {
+                    "messages": payload.get("messages", []),
+                    "metadata": payload.get("metadata", {}),
+                    "_valid": isinstance(payload.get("messages", []), list) and isinstance(payload.get("metadata", {}), dict),
+                }
+            return {"messages": [], "metadata": {}}
         except Exception:
             return {"messages": [], "metadata": {}}
 
@@ -95,7 +171,8 @@ class SessionManager:
         os.makedirs(subagent_dir, exist_ok=True)
         path = os.path.join(subagent_dir, f"{agent_id}.json")
         try:
-            self._write_json_atomic(path, self._make_json_safe(payload))
+            owner = payload.get("session_id") or payload.get("metadata", {}).get("delegation", {}).get("owner_session_id") or agent_id
+            self._save(path, self._make_json_safe(payload), owner)
             self.last_save_ok = True
             self.last_save_error = ""
             self.last_save_path = path
@@ -129,7 +206,10 @@ class SessionManager:
                 sid = f.replace('.json', '')
                 mtime = os.path.getmtime(os.path.join(self.session_dir, f))
                 time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(mtime))
-                state = self.load_session_state(sid)
+                # Listing history must not replace the loaded execution snapshot's revision.
+                state = json.loads(Path(self.session_dir, f).read_bytes())
+                if not isinstance(state, dict):
+                    state = {}
                 metadata = state.get("metadata", {})
                 mode = metadata.get("plan", {}).get("mode", "normal")
                 todo_count = len(metadata.get("todos", []))
@@ -146,15 +226,24 @@ class SessionManager:
             return f"Error retrieving sessions: {e}"
 
     def delete_session(self, session_id: str) -> bool:
-        path = os.path.join(self.session_dir, f"{session_id}.json")
-        found = False
-        if os.path.exists(path):
-            os.unlink(path)
-            found = True
-
-        self._cleanup_subagents_for_session(session_id)
-        self._cleanup_plan_files_for_session(session_id)
-        return found
+        owned = self.owns_writer(session_id)
+        self.acquire_writer(session_id)
+        try:
+            path = os.path.join(self.session_dir, f"{session_id}.json")
+            found = os.path.exists(path)
+            if self.central:
+                from codeclaw.core.session_mutation import mutate
+                mutate({"action": "delete", "sessions": [{"project": self.cwd, "session_id": session_id}]}, held=self._writers)
+            else:
+                if found:
+                    os.unlink(path)
+                self._cleanup_subagents_for_session(session_id)
+            self._cleanup_plan_files_for_session(session_id)
+            self._versions.pop(path, None)
+            return found
+        finally:
+            if not owned:
+                self.release_writer(session_id)
 
     def _cleanup_subagents_for_session(self, session_id: str):
         """Remove subagent transcripts that belong to the given session."""
@@ -206,19 +295,16 @@ class SessionManager:
             return []
 
     def clear_all_sessions(self) -> int:
-        count = 0
+        identities = self.list_session_ids()
+        acquired = []
         try:
-            for f in os.listdir(self.session_dir):
-                fpath = os.path.join(self.session_dir, f)
-                if f.endswith('.json'):
-                    sid = f.replace('.json', '')
-                    self._cleanup_plan_files_for_session(sid)
-                    os.unlink(fpath)
-                    count += 1
-
-            subagent_dir = os.path.join(self.session_dir, "subagents")
-            if os.path.isdir(subagent_dir):
-                shutil.rmtree(subagent_dir, ignore_errors=True)
-        except Exception:
-            pass
-        return count
+            # Preflight every writer before deleting anything. A busy session is explicit,
+            # and a failed batch never retains leases acquired solely for deletion.
+            for sid in identities:
+                if not self.owns_writer(sid):
+                    self.acquire_writer(sid)
+                    acquired.append(sid)
+            return sum(self.delete_session(sid) for sid in identities)
+        finally:
+            for sid in acquired:
+                self.release_writer(sid)

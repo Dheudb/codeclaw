@@ -11,8 +11,8 @@ codeclaw/
   skills/             Skill 发现、校验、资源访问和加载
   agents/             子代理定义、执行、后台任务与团队协调
   protocols/          MCP 配置/市场/连接，以及 LSP 管理
-  security/           权限、风险分类与 Git Worktree 沙盒
-  features/           浏览器、规划、验证、自动提交等能力
+  security/           权限、风险分类与工作区隔离（不是操作系统沙箱）
+  features/           浏览器、规划及可选的领域能力与兼容状态
   utils/              Shell 任务、VCR 和结果压缩等辅助代码
 desktop/
   electron/           窗口、IPC、引擎进程和运行时选择
@@ -39,6 +39,7 @@ CLI 直接使用 QueryEngine。Windows 便携包通过内置 Python 的隔离模
 |---|---|
 | `~/.codeclaw/config.json` | 模型连接和用户配置 |
 | `<用户数据>/CodeClaw/history/<工作目录标识>/` | CLI/桌面共用的会话、索引、子代理和工具输出；Linux 目录名为 `codeclaw` |
+| `<用户数据>/CodeClaw/session-locks/` | 跨进程写者锁；标记文件长期保留，占用随操作系统文件句柄释放 |
 | `<项目>/.codeclaw/capabilities.json` | 导入的 Skill/Subagent 配置目录 |
 | `<项目>/mcp_servers.json` | 项目 MCP 服务与凭据 |
 | `<用户数据>/CodeClaw/workbench.json` | 桌面项目列表、会话关联与界面设置 |

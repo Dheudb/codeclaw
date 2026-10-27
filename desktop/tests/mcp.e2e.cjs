@@ -165,7 +165,7 @@ async function main() {
   }
   try {
     await page.locator(".project-item").click();
-    await page.getByRole("heading", { name: "今天想构建什么？" }).waitFor();
+    await page.getByRole("heading", { name: "今天想完成什么？" }).waitFor();
     await page.getByRole("button", { name: "设置与模型", exact: true }).click();
     assert.equal(
       await page.getByText("选择解释器", { exact: true }).count(),

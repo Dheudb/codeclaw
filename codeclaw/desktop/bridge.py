@@ -146,7 +146,7 @@ class DesktopBridge:
         else:
             apply_connection_env(active_connection(cfg))
         previous_client, previous_compactor = engine.client, engine.compactor
-        engine.switch_model_runtime(provider=provider, model=config["model"], api_base_url=config["baseUrl"], api_key=key)
+        engine.switch_model_runtime(provider=provider, model=config["model"], api_base_url=config["baseUrl"], api_key=key, persist=False)
         await previous_client.close()
         if previous_compactor.client:
             await previous_compactor.client.close()
@@ -196,8 +196,10 @@ class DesktopBridge:
         return await self.ask("permission", {"request": dataclasses.asdict(request)},
             explicit=bool(request.classifier_input.get("forced_prompt_reasons")))
 
-    async def ensure_engine(self):
+    async def ensure_engine(self, write=False):
         if self.engine is not None:
+            if write:
+                self.engine.require_writer()
             await self.sync_model(self.engine)
             if self.protocol_ready is not None:
                 await asyncio.shield(self.protocol_ready)
@@ -212,6 +214,12 @@ class DesktopBridge:
         if self.resume_id and not engine.load_session(self.resume_id):
             await engine.client.close()
             raise ValueError("Session could not be resumed")
+        if write:
+            try:
+                engine.require_writer()
+            except BaseException:
+                await engine.aclose()
+                raise
         # History restores conversation state; current saved settings determine
         # how its next request connects, including changes made in another tab.
         await self.sync_model(engine, force=True)
@@ -226,7 +234,7 @@ class DesktopBridge:
         engine.lsp_manager = LSPManager()
         engine.tool_context["lsp_manager"] = engine.lsp_manager
         lsp.context = engine.tool_context
-        engine.available_tools[lsp.name] = lsp
+        engine.latent_tools[lsp.name] = lsp
         self.engine = engine
         self.protocol_ready = asyncio.get_running_loop().create_future()
         self.protocol_task = asyncio.create_task(self.protocol_lifetime(engine))
@@ -277,17 +285,13 @@ class DesktopBridge:
         try:
             # Validate all selections before creating a turn or emitting loaded events.
             selections = prepared[0] if prepared is not None else [(name, self.skills.read(name)) for name in selected_skills]
-            engine = await self.ensure_engine()
+            engine = await self.ensure_engine(write=True)
             from codeclaw.desktop.attachments import prepare_attachments
             attachment_blocks, attachment_items = prepared[1] if prepared is not None else prepare_attachments(self.cwd, getattr(engine, "session_id", ""), attachment_ids or [])
             display_text = text
             engine.turn_traces.append(self.recorder.record)
             engine.active_turn_trace = self.recorder.record
             engine.set_mode(mode)
-            if selections:
-                text += "\n\n<selected-skills>\n" + "\n\n".join(body for _, body in selections) + "\n</selected-skills>"
-                for name, _ in selections:
-                    self.emit({"type": "skill_loaded", "name": name})
             options = {"input_blocks": [{"type": "text", "text": text}] + attachment_blocks, "attachments": attachment_items, "display_text": display_text} if attachment_items else {}
             async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)}), selected_skills=selected_skills, **options):
                 if self.stop_requested and event.get("type") == "final":
@@ -313,13 +317,16 @@ class DesktopBridge:
                         self.engine._sync_message_context()
                 self.emit({"type": "turn_cancelled"})
             self.emit({"type": "turn_finished"})
-            if self.engine:
+            if self.engine and self.engine.session_manager.owns_writer(self.engine.session_id):
                 self.engine.active_turn_trace = None
                 if not self.engine.persist_session_state():
                     self.emit({"type": "turn_error", "message": "本轮过程记录保存失败；请检查存储空间和权限。", "result": {"ok": False, "reason": "persistence_error"}})
             self.recorder = None
 
     async def dispatch(self, method, params):
+        if method == "storage.mutate":
+            from codeclaw.core.session_mutation import mutate
+            return mutate(params)
         if method == "config.get":
             return self.config()
         if method == "permissions.get":
@@ -328,7 +335,8 @@ class DesktopBridge:
             self.approval_policy.set_mode(params.get("mode"))
             if self.engine and self.approval_policy.mode == "ask":
                 self.engine.permission_manager.always_allow_tools.clear()
-                self.engine.persist_session_state()
+                if self.engine.session_manager.owns_writer(self.engine.session_id):
+                    self.engine.persist_session_state()
             if self.approval_policy.mode == "full":
                 for request_id, future in list(self.pending.items()):
                     if self.pending_kinds.get(request_id) in {"permission", "plan_approval"} and not future.done():
@@ -458,7 +466,7 @@ class DesktopBridge:
             prepared_attachments = prepare_attachments(self.cwd, self.resume_id or (self.engine.session_id if self.engine else ""), attachment_ids)
             if params.get("replaceMessageId"):
                 self.require_idle()
-                engine = await self.ensure_engine()
+                engine = await self.ensure_engine(write=True)
                 from codeclaw.desktop.prompt_edit import replace_latest_turn
                 replace_latest_turn(engine, params["replaceMessageId"])
                 self.emit({"type": "turn_restarted", "history": self.history(engine.messages, engine.turn_traces), "text": text, "attachments": prepared_attachments[1]})
@@ -526,7 +534,8 @@ class DesktopBridge:
                 self.protocol_task.cancel()
             await asyncio.gather(self.protocol_task, return_exceptions=True)
         if self.engine:
-            self.engine.persist_session_state()
+            if self.engine.session_manager.owns_writer(self.engine.session_id):
+                self.engine.persist_session_state()
             for server in self.engine.lsp_manager.servers.values():
                 await server.stop()
             await self.engine.browser_manager.close()
@@ -535,6 +544,7 @@ class DesktopBridge:
             await self.engine.client.close()
             if getattr(self.engine.compactor, "client", None):
                 await self.engine.compactor.client.close()
+            self.engine.session_manager.release_writer()
 
 
 async def serve():

@@ -4,8 +4,10 @@ import copy
 import inspect
 import json
 import logging
+import re
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
@@ -26,6 +28,7 @@ try:
 except ImportError:
     git = None
 from codeclaw.core.run_result import RunResult, PersistenceError, finish_run
+from codeclaw.core.session_lock import SessionBusyError, SessionConflictError
 from codeclaw.features.auto_commit import AutoCommitManager
 from codeclaw.features.browser import BrowserSessionManager
 from codeclaw.context.context import ContextBuilder
@@ -103,7 +106,7 @@ from codeclaw.core.messages import (
 )
 from codeclaw.context.attachments import AttachmentCollector
 from codeclaw.utils.frc import clear_old_function_results
-from codeclaw.features.verification import VerificationManager, run_verification_agent
+from codeclaw.features.verification import VerificationManager
 import uuid
 
 
@@ -278,6 +281,9 @@ class QueryEngine:
         latent_tool_names = {
             "browser_tool",
             "notebook_tool",
+            "notebook_edit_tool", "repl_tool", "sandbox_tool", "brief_tool",
+            "task_create_tool", "task_status_tool", "task_read_tool", "task_kill_tool", "task_list_tool",
+            "team_create_tool", "team_delete_tool", "send_message_tool",
         }
         self.available_tools = {
             name: tool for name, tool in all_tools.items() if name not in latent_tool_names
@@ -369,6 +375,7 @@ class QueryEngine:
         model: str = None,
         api_base_url: str = None,
         api_key: str = None,
+        persist: bool = True,
     ) -> dict:
         """
         Hot-swap the model provider, model name, API base URL, and/or API key at runtime.
@@ -402,7 +409,8 @@ class QueryEngine:
             local_tokenizer_path=self.local_tokenizer_path,
         )
         self._sync_model_runtime_context()
-        self.persist_session_state()
+        if persist:
+            self.persist_session_state()
 
         return {
             "provider": self.model_provider,
@@ -658,156 +666,10 @@ class QueryEngine:
             paths.add(abs_path)
         return paths
 
-    def _capture_auto_commit_baseline(self) -> dict:
-        repo = self._get_git_repo()
-        if repo is None:
-            return {}
-        return {
-            "repo_root": os.path.abspath(repo.working_tree_dir),
-            "branch": self._safe_branch_name(repo),
-            "dirty_paths": sorted(self._status_paths_for_repo(repo)),
-        }
 
-    def _collect_run_file_changes(self, started_at: float) -> list:
-        changes = []
-        for abs_path, entries in dict(self.artifact_tracker.file_history or {}).items():
-            matching = [
-                item for item in list(entries or [])
-                if float(item.get("timestamp", 0) or 0) >= float(started_at)
-                and item.get("session_id") == self.session_id
-            ]
-            if not matching:
-                continue
-            latest = matching[0]
-            changes.append({
-                "path": os.path.abspath(abs_path),
-                "operation": latest.get("operation", "edit"),
-                "timestamp": latest.get("timestamp", 0),
-            })
-        changes.sort(key=lambda item: item.get("path", ""))
-        return changes
 
-    def _heuristic_auto_commit_message(self, files: list, final_answer: str) -> str:
-        relpaths = [item.get("relative_path") for item in files if item.get("relative_path")]
-        if len(relpaths) == 1:
-            subject = f"update {os.path.basename(relpaths[0])}"
-        else:
-            subject = f"update {len(relpaths)} files from agent run"
-        details = final_answer.strip().splitlines()
-        body = details[0][:160] if details else ""
-        if body:
-            return subject + "\n\n" + body
-        return subject
 
-    async def _generate_auto_commit_message(self, files: list, final_answer: str) -> tuple[str, str]:
-        file_lines = [
-            f"- {item.get('relative_path')} [{item.get('operation')}]"
-            for item in files[:20]
-        ]
-        prompt = (
-            "Generate a concise git commit message for the following agent-produced code changes.\n"
-            "Return plain text only. Use a short subject line, optionally followed by a blank line and one short body sentence.\n\n"
-            "Changed files:\n"
-            + "\n".join(file_lines)
-            + "\n\nAgent completion summary:\n"
-            + (final_answer or "")[:1000]
-        )
-        try:
-            if self.model_provider == "openai":
-                response = await self.client.chat.completions.create(
-                    model=self.primary_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=120,
-                )
-                rendered = str(
-                    getattr(getattr(response.choices[0], "message", None), "content", "") or ""
-                ).strip()
-                if rendered:
-                    return rendered, "model"
-                raise RuntimeError("OpenAI commit message generation returned empty content.")
 
-            response = await self.client.messages.create(
-                model=self.primary_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=120,
-            )
-            texts = [getattr(block, "text", "") for block in getattr(response, "content", []) if getattr(block, "type", "") == "text"]
-            rendered = "\n".join(texts).strip()
-            if rendered:
-                return rendered, "model"
-        except Exception:
-            pass
-        return self._heuristic_auto_commit_message(files, final_answer), "heuristic"
-
-    async def _maybe_prepare_auto_commit_proposal(
-        self,
-        *,
-        final_answer: str,
-        started_at: float,
-        git_baseline: dict,
-        turn: int,
-        event_callback=None,
-    ):
-        if self.auto_commit_manager.pending_proposal:
-            return None
-
-        repo = self._get_git_repo(git_baseline.get("repo_root"))
-        if repo is None:
-            return None
-
-        run_changes = self._collect_run_file_changes(started_at)
-        if not run_changes:
-            return None
-
-        baseline_dirty_paths = set(git_baseline.get("dirty_paths", []) or [])
-        current_dirty_paths = self._status_paths_for_repo(repo)
-        eligible_files = []
-        skipped_overlap = 0
-        for item in run_changes:
-            abs_path = item.get("path")
-            if abs_path in baseline_dirty_paths:
-                skipped_overlap += 1
-                continue
-            if abs_path not in current_dirty_paths and not os.path.exists(abs_path):
-                continue
-            relative_path = self._repo_relative_path(repo, abs_path)
-            if not relative_path:
-                continue
-            eligible_files.append({
-                **item,
-                "relative_path": relative_path,
-            })
-
-        if not eligible_files:
-            return None
-
-        commit_message, message_source = await self._generate_auto_commit_message(
-            eligible_files,
-            final_answer,
-        )
-        proposal = await self.auto_commit_manager.create_proposal({
-            "repo_root": os.path.abspath(repo.working_tree_dir),
-            "branch": self._safe_branch_name(repo),
-            "files": eligible_files,
-            "message": commit_message,
-            "message_preview": commit_message.splitlines()[0][:120] if commit_message else "",
-            "message_source": message_source,
-            "final_answer_preview": (final_answer or "")[:240],
-            "skipped_dirty_overlap_count": skipped_overlap,
-        })
-        self._sync_message_context()
-        await self._record_loop_transition(
-            "auto_commit_proposed",
-            turn=turn,
-            event_callback=event_callback,
-            file_count=len(eligible_files),
-            message_source=message_source,
-        )
-        await self._emit_stream_event(event_callback, {
-            "type": "auto_commit_proposal",
-            "proposal": copy.deepcopy(proposal),
-        })
-        return proposal
 
     async def resolve_auto_commit_proposal(
         self,
@@ -994,26 +856,6 @@ class QueryEngine:
         self.tool_context["latent_tools_registry"] = self.latent_tools
         return activated
 
-    async def _maybe_run_verification(self, sys_print_callback=None) -> str:
-        """Run verification agent if enough files were modified."""
-        if not self.verification_manager.should_verify():
-            return ""
-        if self.agent_role == "verifier":
-            return ""
-        files_to_verify = self.verification_manager.get_files_to_verify()
-        if not files_to_verify:
-            return ""
-        if sys_print_callback:
-            sys_print_callback(
-                f"[bold cyan]🔍 Verification agent reviewing {len(files_to_verify)} modified files...[/bold cyan]"
-            )
-        report = await run_verification_agent(
-            files_to_verify=files_to_verify,
-            parent_engine=self,
-            sys_print_callback=lambda x: None,
-        )
-        self.verification_manager.mark_verified(files_to_verify, report or "")
-        return report or ""
 
     def _apply_frc_if_needed(self):
         """Apply Function Result Clearing to keep context window manageable."""
@@ -1178,13 +1020,6 @@ class QueryEngine:
     def _inject_turn_attachments(self, turn_count: int):
         """Collect and inject contextual attachment messages before each turn."""
         try:
-            changed_files = self.attachment_collector.get_changed_files_from_git(
-                os.getcwd()
-            )
-        except Exception:
-            changed_files = []
-
-        try:
             lsp_diags = ""
             if hasattr(self, "lsp_manager"):
                 lsp_diags = self.lsp_manager.consume_diagnostics() or ""
@@ -1193,7 +1028,7 @@ class QueryEngine:
 
         try:
             attachment_messages = self.attachment_collector.collect_attachments(
-                cwd=os.getcwd(),
+                cwd=self.session_cwd,
                 plan_mode=self.plan_manager.get_mode(),
                 plan_content=self.plan_manager.get_plan(),
                 plan_file_path=self.plan_manager.plan_file_path,
@@ -1201,7 +1036,7 @@ class QueryEngine:
                 todo_summary=self.todo_manager.render_prompt_summary(),
                 todo_count=len(self.todo_manager.list_items()),
                 active_tools=list(self.available_tools.keys()),
-                changed_files=changed_files,
+                changed_files=[],
                 lsp_diagnostics=lsp_diags,
                 turn_count=turn_count,
                 recent_tool_names=self.attachment_collector._recent_tool_names,
@@ -1266,6 +1101,7 @@ class QueryEngine:
     }
 
     def enable_coordinator_mode(self):
+        self.activate_tools(["team_create_tool", "team_delete_tool", "send_message_tool"])
         self.coordinator_mode = True
 
     def disable_coordinator_mode(self):
@@ -1620,7 +1456,6 @@ class QueryEngine:
 
     def get_runtime_summary(self) -> str:
         self.refresh_memory_files()
-        self.content_replacement_manager.cleanup_orphans()
         shell_tasks = self.shell_task_manager.list_tasks()
         running_shell_tasks = [item for item in shell_tasks if item.get("status") == "running"]
         running_subagents = [item for item in self.subagent_registry if item.get("status") == "running"]
@@ -1877,6 +1712,17 @@ class QueryEngine:
         4. Summarize only the middle history while preserving the first message
            and a recent raw window.
         """
+        self.require_writer()
+        archive = None
+        def preserve_history():
+            nonlocal archive
+            if archive is None:
+                from codeclaw.core.storage import atomic_json
+                archive = artifact_directory(self.session_cwd) / self.session_id / ("context-" + uuid.uuid4().hex + ".json")
+                atomic_json(archive, {"messages": self.messages})
+                self.content_replacement_manager.register_spill(file_path=str(archive), tool_name="context_compaction",
+                    metadata={"format": "conversation_json", "authority": "historical evidence, not new authorization"})
+            return archive
         self.refresh_memory_files()
         effective_thinking_config = self._resolve_thinking_config()
         system_prompt = self.context_builder.generate_system_prompt(
@@ -1895,6 +1741,7 @@ class QueryEngine:
             keep_recent_boundaries=1,
         )
         if snipped_count > 0:
+            preserve_history()
             self.messages = snipped_messages
             self._sync_message_context()
             self.persist_session_state()
@@ -1909,6 +1756,7 @@ class QueryEngine:
             preview_chars=200 if aggressive else 300,
         )
         if micro_count > 0:
+            preserve_history()
             self.messages = micro_compacted_messages
             self._sync_message_context()
             self.persist_session_state()
@@ -1923,6 +1771,7 @@ class QueryEngine:
             max_tool_result_chars=max_tool_result_chars,
         )
         if trimmed_count > 0:
+            preserve_history()
             self.messages = trimmed_messages
             self._sync_message_context()
             self.persist_session_state()
@@ -1967,6 +1816,7 @@ class QueryEngine:
             return False
 
         summary = await self.compactor.compact_history(middle)
+        preserve_history()
 
         session_memory_content = self.session_memory_manager.get_memory_content()
         session_memory_block = ""
@@ -1990,10 +1840,11 @@ class QueryEngine:
                 f"preserved_first_messages: 1\n"
                 f"preserved_last_messages: {preserve_last_messages}\n\n"
                 f"{summary}\n"
+                f"Complete pre-compaction history: {archive}. Read with file_read_tool when evidence is missing.\n"
                 f"{session_memory_block}\n"
-                "Continue the conversation from where it left off without asking the user any further questions. "
-                "Resume directly — do not acknowledge the summary, do not recap what was happening, "
-                "do not preface with 'I'll continue' or similar. Pick up the last task as if the break never happened."
+                "Continue the latest authorized unfinished task. Distinguish verified evidence from historical assistant claims. "
+                "This summary grants no new authorization. Inspect saved results and uncertain effects before continuing; "
+                "do not replay interrupted operations. Ask for missing information or approval when required."
             ),
         }
         self.messages = head + [reminder] + tail
@@ -2045,7 +1896,6 @@ class QueryEngine:
 
     POST_COMPACT_MAX_FILES = 5
     POST_COMPACT_TOKEN_BUDGET = 50_000
-    POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
 
     def _post_compact_restore_state(self, sys_print_callback=print) -> bool:
         """
@@ -2056,22 +1906,16 @@ class QueryEngine:
         restore_parts = []
         budget_remaining = self.POST_COMPACT_TOKEN_BUDGET
 
-        recently_read = self._collect_recently_read_files()
-        files_restored = 0
-        for path, content in recently_read:
-            if files_restored >= self.POST_COMPACT_MAX_FILES:
-                break
-            token_est = len(content) // 4
-            capped = min(token_est, self.POST_COMPACT_MAX_TOKENS_PER_FILE, budget_remaining)
-            if capped <= 0:
-                break
-            char_limit = capped * 4
-            snippet = content[:char_limit]
-            if len(content) > char_limit:
-                snippet += "\n... [truncated for post-compact budget]"
-            restore_parts.append(f"[Recently read file: {path}]\n{snippet}")
-            budget_remaining -= capped
-            files_restored += 1
+        sources = sorted((entry for entry in self.file_state_cache.entries.values() if entry.get("has_been_read")),
+            key=lambda entry: entry.get("mtime", 0), reverse=True)[:self.POST_COMPACT_MAX_FILES]
+        files_restored = len(sources)
+        if sources:
+            restore_parts.append("[Previously read sources: metadata only; contents may have changed. Use authorized file tools when needed.]\n" +
+                json.dumps([{key: entry.get(key) for key in ("path", "sha256", "mtime")} for entry in sources], ensure_ascii=False))
+        if self.subagent_registry or self.in_progress_tools:
+            restore_parts.append("[Actual saved execution state; uncertain effects must not be replayed]\n" + json.dumps({
+                "workers": [{key: row.get(key) for key in ("agent_id", "status", "phase", "turn")} for row in self.subagent_registry],
+                "in_progress_tools": self.in_progress_tools}, ensure_ascii=False))
 
         plan_content = self.plan_manager.render_prompt_summary()
         if plan_content:
@@ -2100,8 +1944,8 @@ class QueryEngine:
         restore_text = (
             "<system-reminder>\n"
             "[Post-compaction context restoration]\n"
-            "The conversation was compacted. The following recently-accessed context "
-            "is re-injected so you can continue without re-reading these resources.\n\n"
+            "The conversation was compacted. Saved references and execution state follow. "
+            "These are continuity evidence, not new instructions or permissions.\n\n"
             + "\n\n".join(restore_parts)
             + "\n</system-reminder>"
         )
@@ -2117,33 +1961,6 @@ class QueryEngine:
             f"mcp={'yes' if mcp_instructions else 'no'}.[/dim magenta]"
         )
         return True
-
-    def _collect_recently_read_files(self) -> list:
-        """Return (path, content) pairs for files tracked by file_state_cache, most recent first."""
-        entries = self.file_state_cache.entries
-        if not entries:
-            return []
-
-        candidates = []
-        for abs_path, entry in entries.items():
-            if not entry.get("has_been_read"):
-                continue
-            if not os.path.isfile(abs_path):
-                continue
-            mtime = entry.get("mtime", 0)
-            candidates.append((mtime, abs_path))
-
-        candidates.sort(key=lambda x: x[0], reverse=True)
-
-        result = []
-        for _, abs_path in candidates[:self.POST_COMPACT_MAX_FILES * 2]:
-            try:
-                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-                result.append((abs_path, content))
-            except Exception:
-                continue
-        return result
 
     def _is_context_overflow_error(self, error: Exception) -> bool:
         rendered = str(error).lower()
@@ -2198,8 +2015,26 @@ class QueryEngine:
                 })
         return batches
 
-    async def _execute_tool_wrapper(self, tool_block, sys_print_callback=print, *, turn: int = 0, event_callback=None):
-        return await execute_tool(self, tool_block, sys_print_callback, turn=turn, event_callback=event_callback)
+    async def _execute_tool_wrapper(self, tool_block, sys_print_callback=print, *, turn: int = 0, event_callback=None, result_callback=None):
+        return await execute_tool(self, tool_block, sys_print_callback, turn=turn, event_callback=event_callback, result_callback=result_callback)
+
+    async def agents(self, action="list", **parameters):
+        """Versioned host API over the existing authorized agent tool and execution journal."""
+        identity = "host-" + uuid.uuid4().hex
+        captured = []
+        inputs = {**parameters, "action": action, "response_format": "json"}
+        try:
+            self.require_writer()
+            receipt = await self._execute_tool_wrapper({"id": identity, "name": "agent_tool", "input": inputs},
+                lambda _: None, result_callback=captured.append)
+            if receipt["is_error"]:
+                return {"api_version": 1, "ok": False, "session_id": self.session_id, "tool_use_id": identity,
+                    "error": {"code": "tool_error", "message": receipt["content"]}, "data": None}
+            data = json.loads(captured[0])
+            return {"api_version": 1, "ok": True, "session_id": self.session_id, "tool_use_id": identity, "data": data}
+        except (PersistenceError, SessionBusyError, SessionConflictError) as error:
+            return {"api_version": 1, "ok": False, "session_id": self.session_id, "tool_use_id": identity,
+                "error": {"code": "persistence_error" if isinstance(error, PersistenceError) else "session_busy" if isinstance(error, SessionBusyError) else "session_conflict", "message": str(error)}, "data": None}
 
     async def _execute_tool_batches(self, tool_calls, sys_print_callback=print, *, turn: int = 0, event_callback=None):
         return await execute_tool_batches(self, tool_calls, sys_print_callback, turn=turn, event_callback=event_callback)
@@ -2210,11 +2045,11 @@ class QueryEngine:
         self.tool_context["lsp_manager"] = self.lsp_manager
         lsp_t = LspTool()
         lsp_t.context = self.tool_context
-        self.available_tools["lsp_tool"] = lsp_t
+        self.latent_tools["lsp_tool"] = lsp_t
         sys_print("[dim green]↳ LSP Manager Established (Passive Telemetry & AST active)[/dim green]")
         
         # 2. Start MCP Background Connections
-        self.mcp_bridge = MCPBridge()
+        self.mcp_bridge = MCPBridge(str(Path(self.session_cwd) / "mcp_servers.json"))
         remote_tools = await self.mcp_bridge.load_and_connect()
         for name, status in self.mcp_bridge.statuses.items():
             if status.get("status") == "error":
@@ -2640,6 +2475,10 @@ class QueryEngine:
         return CommandSessions(artifact_directory(self.session_cwd) / sid / "commands", notify)
 
     def load_session(self, sid: str) -> bool:
+        if self.has_active_turn() or any(not task.done() for task in self.tool_context["subagent_tasks"].tasks.values()):
+            raise SessionBusyError("Stop or finish owned work before loading another session")
+        if self.agent_depth == 0 and sid != self.session_id:
+            self.session_manager.release_writer(self.session_id)
         state = self.session_manager.load_session_state(sid)
         msgs = state.get("messages", [])
         if msgs or state.get("_valid"):
@@ -2700,7 +2539,6 @@ class QueryEngine:
             self.auto_commit_manager.load_state(metadata.get("auto_commit", {}))
             self.content_replacement_manager.set_session(self.session_id)
             self.content_replacement_manager.load_state(metadata.get("content_replacements", {}))
-            self.content_replacement_manager.cleanup_orphans()
             self.structured_output_manager.load_state(metadata.get("structured_output", {}))
             self.security_classifier.load_state(metadata.get("security_classifier", {}))
             self.vcr_manager.load_state(metadata.get("vcr", {}))
@@ -2831,9 +2669,44 @@ class QueryEngine:
 
         return ok
 
+    def require_writer(self):
+        owner = self.tool_context.get("delegation", {}).get("owner_session_id") or self.session_id
+        owned = self.session_manager.owns_writer(owner)
+        self.session_manager.acquire_writer(owner)
+        try:
+            self.session_manager.check_current(owner)
+        except BaseException:
+            if not owned:
+                self.session_manager.release_writer(owner)
+            raise
+
+    async def aclose(self):
+        await self.request_abort()
+        await self.tool_context["command_sessions"].close(owner=self.agent_id if self.agent_depth else None)
+        cleanup = [self.client.close()]
+        if getattr(self.compactor, "client", None):
+            cleanup.append(self.compactor.client.close())
+        if self.agent_depth == 0:
+            cleanup.append(self.browser_manager.close())
+            cleanup.extend(server.stop() for server in getattr(getattr(self, "lsp_manager", None), "servers", {}).values())
+            cleanup.extend(self.shell_task_manager.terminate_task(identity) for identity in list(self.shell_task_manager.tasks))
+            if getattr(self, "mcp_bridge", None):
+                cleanup.append(self.mcp_bridge.cleanup())
+        failures = await asyncio.gather(*cleanup, return_exceptions=True)
+        if self.agent_depth == 0:
+            self.session_manager.release_writer()
+        for failure in failures:
+            if isinstance(failure, BaseException):
+                raise failure
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.aclose()
+
     def get_resume_summary(self) -> str:
         self.refresh_memory_files()
-        self.content_replacement_manager.cleanup_orphans()
         metadata = self._build_session_metadata()
         plan = metadata.get("plan", {})
         todos = metadata.get("todos", [])
@@ -3146,142 +3019,8 @@ class QueryEngine:
             "</system-reminder>"
         )
 
-    _BUILTIN_CHECK_MAX_RETRIES = 3
 
-    async def _builtin_syntax_check(self, loop_state: dict):
-        """
-        Built-in stop hook: check Python files modified during this session.
 
-        Phase 1 — py_compile: catch syntax errors.
-        Phase 2 — import test: catch NameError, ImportError, etc. at module
-                  load time (runs with MPLBACKEND=Agg to prevent GUI popups).
-        Phase 3 — execution test: actually run scripts that appear to be
-                  entry points (main.py, *_demo.py, etc.) to catch runtime
-                  errors like missing variables, wrong paths, etc.
-        """
-        retries = loop_state.get("builtin_check_retries", 0)
-        if retries >= self._BUILTIN_CHECK_MAX_RETRIES:
-            return None
-        if loop_state.get("builtin_check_done"):
-            return None
-        if self.get_mode() == "plan":
-            return None
-
-        modified_py = []
-        for abs_path in self.artifact_tracker.file_history:
-            if not os.path.isfile(abs_path):
-                continue
-            if abs_path.endswith(".py"):
-                modified_py.append(abs_path)
-
-        if not modified_py:
-            return None
-
-        from codeclaw.core.hooks import StopHookDecision
-        errors = []
-        passed_import = []
-
-        for fpath in modified_py[:20]:
-            # Phase 1: syntax check
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    sys.executable, "-m", "py_compile", fpath,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
-                if proc.returncode != 0:
-                    err_text = stderr.decode("utf-8", errors="replace").strip()
-                    errors.append(f"[syntax] {fpath}: {err_text}")
-                    continue
-            except (asyncio.TimeoutError, Exception):
-                continue
-
-            # Phase 2: import test
-            import_script = (
-                "import sys, importlib.util;"
-                f"spec = importlib.util.spec_from_file_location('_check', r'{fpath}');"
-                "mod = importlib.util.module_from_spec(spec);"
-                "spec.loader.exec_module(mod)"
-            )
-            try:
-                env = {**os.environ, "MPLBACKEND": "Agg"}
-                proc = await asyncio.create_subprocess_exec(
-                    sys.executable, "-c", import_script,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env,
-                )
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-                if proc.returncode != 0:
-                    err_text = stderr.decode("utf-8", errors="replace").strip()
-                    last_lines = "\n".join(err_text.splitlines()[-8:])
-                    errors.append(f"[runtime] {fpath}:\n{last_lines}")
-                else:
-                    passed_import.append(fpath)
-            except asyncio.TimeoutError:
-                errors.append(f"[timeout] {fpath}: import test timed out (possible plt.show() or infinite loop)")
-            except Exception:
-                continue
-
-        # Phase 3: execution test — run entry-point scripts to catch runtime errors
-        if not errors:
-            entry_points = [
-                fp for fp in passed_import
-                if self._looks_like_entry_point(fp)
-            ]
-            for fpath in entry_points[:3]:
-                try:
-                    env = {**os.environ, "MPLBACKEND": "Agg"}
-                    script_dir = os.path.dirname(fpath) or os.getcwd()
-                    proc = await asyncio.create_subprocess_exec(
-                        sys.executable, fpath,
-                        cwd=script_dir,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        env=env,
-                    )
-                    stdout_b, stderr_b = await asyncio.wait_for(
-                        proc.communicate(), timeout=60,
-                    )
-                    if proc.returncode != 0:
-                        err_text = stderr_b.decode("utf-8", errors="replace").strip()
-                        last_lines = "\n".join(err_text.splitlines()[-10:])
-                        errors.append(f"[execution] {fpath} exited with code {proc.returncode}:\n{last_lines}")
-                except asyncio.TimeoutError:
-                    errors.append(f"[timeout] {fpath}: execution timed out after 60s")
-                except Exception:
-                    continue
-
-        loop_state["builtin_check_done"] = True
-        loop_state["builtin_check_retries"] = retries + 1
-
-        if errors:
-            feedback = (
-                "Errors detected in files you wrote/modified:\n\n"
-                + "\n\n".join(errors)
-                + "\n\nYou MUST fix these errors before finishing. "
-                "Do NOT end the turn until all files pass syntax, import, and execution checks."
-            )
-            return StopHookDecision("block", feedback)
-        return None
-
-    @staticmethod
-    def _looks_like_entry_point(fpath: str) -> bool:
-        """Heuristic: is this file a runnable script?"""
-        basename = os.path.basename(fpath).lower()
-        if basename in ("main.py", "run.py", "app.py", "demo.py", "example.py"):
-            return True
-        if basename.startswith("run_") or basename.endswith("_demo.py") or basename.endswith("_example.py"):
-            return True
-        try:
-            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read(8192)
-            if '__name__' in content and '__main__' in content:
-                return True
-        except Exception:
-            pass
-        return False
 
     def _build_stop_hook_feedback(self, reason: str) -> str:
         return (
@@ -3929,18 +3668,44 @@ class QueryEngine:
         3. If tool calls -> Execute in parallel via asyncio & Append results to loop.
         4. If stop -> Return final textual output.
         """
+        try:
+            self.require_writer()
+        except (SessionBusyError, SessionConflictError) as error:
+            return RunResult(str(error), "session_busy" if isinstance(error, SessionBusyError) else "session_conflict", session_id=self.session_id, agent_id=self.agent_id)
         self.abort_event.clear()
         completion = self.tool_context["workflow_completion"]
         completion.reset()
-        for name in selected_skills or []:
-            completion.activate(self.tool_context["skill_registry"].resolve(name))
+        registry = self.tool_context["skill_registry"]
+        names = list(dict.fromkeys(selected_skills or []))
+        # CLI mentions and desktop selections use the same loader and stored input.
+        for mention in re.finditer(r"(?:^|\s)\$([a-z][a-z0-9]*(?:-[a-z0-9]+)*)(?=\s|$)", user_input):
+            name = mention.group(1)
+            if name not in names:
+                names.append(name)
+        selections, seen = [], set()
+        for name in names:
+            skill = registry.resolve(name)
+            if skill["id"] not in seen:
+                selections.append((skill, registry.read(skill["name"])))
+                seen.add(skill["id"])
+        if selections:
+            display_text = user_input if display_text is None else display_text
+            instructions = "\n\n<selected-skills>\n" + "\n\n".join(body for _, body in selections) + "\n</selected-skills>"
+            if input_blocks is None:
+                user_input += instructions
+            else:
+                input_blocks = copy.deepcopy(input_blocks) + [{"type": "text", "text": instructions}]
+            for skill, _ in selections:
+                completion.activate(skill)
+                loaded = self.tool_context.setdefault("loaded_skills", [])
+                if skill["name"] not in loaded:
+                    loaded.append(skill["name"])
+                await self._emit_stream_event(event_callback, {"type": "skill_loaded", "name": skill["name"]})
 
         if not self.is_configured:
             return finish_run(self, ("Model not configured. Use /model to set protocol, model name, "
                 "base URL, and API key before sending messages."), 'not_configured')
 
-        run_started_at = time.time()
-        auto_commit_git_baseline = self._capture_auto_commit_baseline()
         user_msg = create_user_message(input_blocks if input_blocks is not None else user_input, origin="human")
         if attachments:
             user_msg["_attachments"] = attachments
@@ -4172,8 +3937,7 @@ class QueryEngine:
                     else:
                         input_failures = 0
                     
-                    # Capture lagging compiler diagnostics from background daemon
-                    await asyncio.sleep(0.4)
+                    # Diagnostics exist only after a language-server tool was explicitly used.
                     if hasattr(self, 'lsp_manager'):
                         diags_msg = self.lsp_manager.consume_diagnostics()
                         if diags_msg:
@@ -4290,7 +4054,7 @@ class QueryEngine:
                             "  1. exit_plan_mode — when your plan is ready for approval\n"
                             "  2. ask_user_question_tool — to clarify requirements\n\n"
                             "Do NOT output a plain-text answer. Instead:\n"
-                            f"  - Explore the codebase with read-only tools\n"
+                            f"  - Inspect relevant materials with read-only tools\n"
                             f"  - Write your plan to the plan file at {pfp}\n"
                             "  - Then call exit_plan_mode\n"
                             "</system-reminder>"
@@ -4332,28 +4096,6 @@ class QueryEngine:
                             "[dim yellow]↳ Structured output validation failed; retrying with feedback.[/dim yellow]"
                         )
                         continue
-                    builtin_check = await self._builtin_syntax_check(loop_state)
-                    if builtin_check and builtin_check.behavior in {"block", "retry"}:
-                        loop_state["stop_hook_retries"] += 1
-                        loop_state["builtin_check_done"] = False
-                        self.messages.append(create_user_message(
-                            self._build_stop_hook_feedback(builtin_check.reason),
-                            is_meta=True,
-                            origin="builtin_syntax_check",
-                        ))
-                        self._sync_message_context()
-                        self.persist_session_state()
-                        await self._record_loop_transition(
-                            "builtin_syntax_check",
-                            turn=turn_count,
-                            event_callback=event_callback,
-                            retries=loop_state["stop_hook_retries"],
-                        )
-                        sys_print_callback(
-                            "[dim yellow]↳ Built-in syntax check found errors in modified files; agent must fix them.[/dim yellow]"
-                        )
-                        continue
-
                     stop_hook_decision = await self.hook_manager.evaluate_stop_hooks_async({
                         "cwd": os.getcwd(),
                         "mode": self.get_mode(),
@@ -4408,18 +4150,6 @@ class QueryEngine:
                     )
                     self.memory_extractor.record_turn()
                     await self.memory_extractor.maybe_extract(self.messages)
-                    await self._maybe_prepare_auto_commit_proposal(
-                        final_answer=final_answer,
-                        started_at=run_started_at,
-                        git_baseline=auto_commit_git_baseline,
-                        turn=turn_count,
-                        event_callback=event_callback,
-                    )
-                    verification_report = await self._maybe_run_verification(
-                        sys_print_callback=sys_print_callback,
-                    )
-                    if verification_report:
-                        final_answer += f"\n\n---\n**Verification Report:**\n{verification_report}"
                     self.persist_session_state()
                     return finish_run(self, (final_answer), 'completed')
                     
@@ -4606,10 +4336,12 @@ class QueryEngine:
         return finish_run(self, ("[bold red]System Halt:[/bold red] "
             f"Max internal reasoning turns ({loop_state['max_turns']}) reached without returning an answer."), 'turn_limit')
 
-    async def run(self, user_input: str, sys_print_callback=print):
+    async def run(self, user_input: str, sys_print_callback=print, *, selected_skills=None):
+        if self.has_active_turn():
+            return RunResult("A turn is already running in this engine; wait or cancel it first.", "session_busy", session_id=self.session_id, agent_id=self.agent_id)
         self.active_run_task = asyncio.current_task()
         try:
-            return await self._run_loop(user_input, sys_print_callback=sys_print_callback)
+            return await self._run_loop(user_input, sys_print_callback=sys_print_callback, selected_skills=selected_skills)
         except asyncio.CancelledError:
             finish_run(self, "Execution was cancelled; completed effects are retained.", "cancelled")
             raise
@@ -4617,6 +4349,10 @@ class QueryEngine:
             self.active_run_task = None
 
     async def submit_message(self, user_input: str, sys_print_callback=print, input_blocks=None, attachments=None, display_text=None, selected_skills=None):
+        if self.has_active_turn():
+            result = RunResult("A turn is already running in this engine; wait or cancel it first.", "session_busy", session_id=self.session_id, agent_id=self.agent_id)
+            yield {"type": "final", "text": result.text, "result": result.to_dict()}
+            return
         queue = asyncio.Queue()
 
         async def emit(payload: dict):

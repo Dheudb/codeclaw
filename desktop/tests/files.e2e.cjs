@@ -142,7 +142,7 @@ async function main() {
     await page.getByRole("button", { name: "在项目 other 中新建会话", exact: true }).click(); await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
     await page.getByRole("button", { name: "变更", exact: true }).click(); assert.equal(await page.locator(".inspector .changed-file-row").count(), 0);
     await page.locator(".git-changes summary").waitFor(); await page.locator(".git-changes summary").click();
-    assert.equal(await page.locator(".git-changes .changed-file-row").count(), 3);
+    await page.waitForFunction(() => document.querySelectorAll(".git-changes .changed-file-row").length === 3);
     await page.locator(".git-changes").getByRole("button", { name: "打开文件 tracked.txt", exact: true }).click();
     await dialog().locator(".diff-removed").waitFor(); assert.equal(await dialog().locator(".diff-added").count(), 2);
     await dialog().getByRole("button", { name: "变更文件", exact: true }).click();

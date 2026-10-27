@@ -87,3 +87,4 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await engine.client.close()
                 await engine.compactor.client.close()
+                engine.session_manager.release_writer()

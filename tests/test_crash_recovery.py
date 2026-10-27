@@ -38,6 +38,7 @@ class CrashRecoveryTests(unittest.TestCase):
                                 self.assertIn("uncertain", result["content"])
                             self.assertTrue(any(isinstance(b, dict) and b.get("type") == "tool_result" for m in engine.messages for b in m.get("content", [])))
                         finally:
+                            await engine.aclose()
                             for client in initial_clients + [engine.client, engine.compactor.client]:
                                 if client:
                                     await client.close()

@@ -39,6 +39,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             await engine.tool_context["command_sessions"].close()
             await engine.client.close()
             await engine.compactor.client.close()
+            engine.session_manager.release_writer()
         self.tokens.stop()
         self.env.stop()
         self.temp.cleanup()
@@ -58,6 +59,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             sent = json.loads(await self.tool.execute(action="send", agent_id=identity, prompt="queued note"))
             self.assertTrue(sent["requires_followup"])
             self.engine.persist_session_state()
+            self.engine.session_manager.release_writer()
             restored = self.make_engine()
             self.assertTrue(restored.load_session(self.engine.session_id))
             result = json.loads(await restored.available_tools["agent_tool"].execute(action="followup", agent_id=identity, prompt="SECOND"))
@@ -129,8 +131,10 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         (directory / "limited.md").write_text("---\nname: limited\ndescription: limited worker\nweb_search: disabled\nmcp_servers: []\nread_only: true\n---\nOnly inspect.", encoding="utf-8")
         mcp = SimpleNamespace(server_name="papers", name="papers_search", context={}, is_read_only=False)
         self.engine.available_tools[mcp.name] = mcp
+        latent_mcp = SimpleNamespace(server_name="papers", name="papers_metadata", context={}, is_read_only=True)
+        self.engine.latent_tools[latent_mcp.name] = latent_mcp
         async def run(child, user_input, sys_print_callback):
-            for denied in ["command_tool", "bash_tool", "file_write_tool", "file_edit_tool", "web_search_tool", "web_fetch_tool", "papers_search"]:
+            for denied in ["command_tool", "bash_tool", "file_write_tool", "file_edit_tool", "web_search_tool", "web_fetch_tool", "papers_search", "papers_metadata"]:
                 self.assertNotIn(denied, child.available_tools)
                 self.assertNotIn(denied, child.latent_tools)
             self.assertNotIn("browser_tool", child.latent_tools)
@@ -139,6 +143,20 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(QueryEngine, "run", run):
             receipt = json.loads(await self.tool.execute(prompt="inspect", subagent_type="limited", response_format="json"))
             self.assertEqual(receipt["agents"][0]["status"], "completed")
+
+    async def test_explicit_role_loads_its_specialized_tool_without_activating_it_for_parent(self):
+        directory = self.root / ".codeclaw/agents"
+        directory.mkdir(parents=True)
+        (directory / "calculator.md").write_text("---\nname: calculator\ndescription: Calculate the assigned expression\ntools: [repl_tool]\n---\nCalculate only the assigned expression.", encoding="utf-8")
+        self.assertIn("repl_tool", self.engine.latent_tools)
+        async def run(child, user_input, sys_print_callback):
+            self.assertEqual(set(child.available_tools), {"repl_tool"})
+            self.assertNotIn("repl_tool", child.latent_tools)
+            return RunResult("4", "completed", True)
+        with patch.object(QueryEngine, "run", run):
+            receipt = json.loads(await self.tool.execute(prompt="2+2", subagent_type="calculator", response_format="json"))
+        self.assertEqual(receipt["agents"][0]["result"], "4")
+        self.assertNotIn("repl_tool", self.engine.available_tools)
 
     async def test_capacity_configuration_and_mcp_timeout_validation(self):
         self.engine.tool_context["skill_registry"].update(agent_concurrency=24)

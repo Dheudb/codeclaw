@@ -5,6 +5,7 @@ from codeclaw.core.storage import history_root, atomic_json
 
 
 def replace_latest_turn(engine, message_id):
+    engine.require_writer()
     from codeclaw.desktop.turns import visible_text
     humans = [(index, message) for index, message in enumerate(engine.messages)
               if message.get("role") == "user" and not message.get("_is_meta")

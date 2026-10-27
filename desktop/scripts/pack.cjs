@@ -12,11 +12,6 @@ const candidates = [
   path.join(repository, ".venv-mcp/Scripts/python.exe"),
 ].filter(Boolean);
 const python = candidates.find((value) => fs.existsSync(value)) || "python";
-execFileSync(python, [path.join(__dirname, "prepare-runtime.py")], {
-  cwd: repository,
-  stdio: "inherit",
-  windowsHide: true,
-});
 const release = path.join(root, "release");
 const packageName =
   process.env.CODECLAW_PACKAGE_NAME || "CodeClaw-win32-" + process.arch;
@@ -31,7 +26,13 @@ if (
       path.dirname(fs.realpathSync(output)) !== fs.realpathSync(release)))
 )
   throw new Error("Unsafe package output path");
-fs.rmSync(output, { recursive: true, force: true });
+if (fs.existsSync(output))
+  throw new Error("Existing installation preserved. Stage a resource update and use update-existing.ps1; do not rebuild its executable.");
+execFileSync(python, [path.join(__dirname, "prepare-runtime.py")], {
+  cwd: repository,
+  stdio: "inherit",
+  windowsHide: true,
+});
 fs.cpSync(path.dirname(require("electron")), output, { recursive: true });
 const resources = path.join(output, "resources");
 const application = path.join(resources, "app");

@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import hashlib
 import json
 import time
 import uuid
@@ -29,10 +30,12 @@ ALL_AGENT_DISALLOWED_TOOLS = frozenset({
 })
 
 class AgentToolInput(BaseModel):
+    model_config = {"extra": "forbid"}
     action: str = Field("spawn", description="spawn, capacity, list, result, wait, send, followup, cancel, or close")
     agent_ids: Optional[List[str]] = Field(None, description="Worker IDs to wait for; returns when any finishes or timeout expires")
     timeout_ms: int = Field(30000, ge=0, le=60000, description="Bounded wait timeout")
     response_format: str = Field("text", pattern="^(text|json)$", description="Use json for structured spawn receipts and wait results")
+    request_id: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$", description="Stable caller-supplied spawn identity. Repeating the same request returns its existing workers; changed arguments are rejected")
     reasoning_effort: Optional[str] = Field(None, pattern="^(low|medium|high|xhigh)$")
     agent_id: Optional[str] = Field(None, description="Background subagent ID for result or cancel")
     description: str = Field("", description="A short description of the task")
@@ -70,55 +73,12 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
 
     def prompt(self) -> str:
         registry = self.context.get("agent_registry") or AgentRegistry(self.context.get("session_cwd"))
-        agent_list = "\n".join("- {}: {}".format(name, value.get("description", value.get("when_to_use", ""))) for name, value in registry.definitions().items())
-        return f"""Use the agent_tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing.
-
-## Built-in Agent Types
-Set `subagent_type` to one of the following to get a specialized system prompt and tool restrictions:
-
-{agent_list}
-
-If `subagent_type` is omitted, the agent defaults to general-purpose behavior. To give the SAME assignment to N independent agents, use count=N in ONE call; the runtime starts them concurrently. Example for ten greetings: agent_tool(prompt="你好，请简短介绍自己。", description="问候测试", count=10, run_in_background=false). Do not call this tool ten times in successive turns for that request. For DIFFERENT assignments, multiple calls in the same message run concurrently. When you need to compare or synthesize the answers now, use run_in_background=false and compare all returned results. Use run_in_background=true only for work you can continue without. Use action=wait to await background results (agent_id for one, or omit it for all), then compare the actual answers. Use action=list/result/cancel to manage background workers by agent_id.
-
-## When NOT to use agent_tool
-- If you want to read a specific file path, use file_read_tool or glob_tool instead — they find the match more quickly.
-- If you are searching for a specific class definition like "class Foo", use glob_tool instead.
-- If you are searching for code within a specific file or set of 2-3 files, use file_read_tool instead.
-- Other tasks that are not related to the available agent descriptions.
-
-For simple, directed codebase searches (e.g. for a specific file/class/function) use grep_tool or glob_tool directly. For broader codebase exploration and deep research, use agent_tool with subagent_type="explore" — this is slower than direct search, so use it only when a simple directed search is insufficient.
-
-## Resumable workers
-- Use action=capacity to read actual host slots; count is limited to 10 per batch, not the total configured capacity.
-- Use response_format=json for machine-readable spawn receipts. list/result/capacity always return JSON.
-- action=send queues prompt for an executing worker at its next model-turn boundary. It does not wake an idle worker.
-- action=followup with agent_id and prompt resumes that same worker, its frozen role and conversation; use run_in_background=true for asynchronous work.
-- action=wait supports agent_ids and timeout_ms (0–60000), returning when any requested worker finishes. close retains history and rejects live workers.
-
-## Usage notes
-- Always include a short description (3-5 words) summarizing what the agent will do.
-- Launch agents concurrently: count=N for the same assignment, or multiple tool uses in one message for different assignments.
-- When the agent is done, it returns a single message back to you. The result is not visible to the user. To show the user the result, send a text message with a concise summary.
-- Each Agent invocation starts fresh — provide a complete task description with all necessary context.
-- Parent conversation history is excluded by default. Set inherit_context=true only when it is needed as reference; the assigned prompt remains the child's task.
-- Up to 10 background agents can run at once. Do not announce agents as started until tool calls confirm success.
-- The agent's outputs should generally be trusted.
-- Clearly tell the agent whether you expect it to write code or just do research (search, file reads, web fetches, etc.).
-- If the agent description mentions that it should be used proactively, try your best to use it without the user having to ask for it first.
-- If the user specifies parallel agents, use count=N in one call for a shared assignment, or multiple tool uses in one message for different assignments. Never wait for one agent to finish before launching the next independent agent.
-- Use subagent_type="verification" proactively after non-trivial implementations (3+ file edits).
-
-## Writing the prompt
-Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
-- Explain what you're trying to accomplish and why.
-- Describe what you've already learned or ruled out.
-- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.
-- If you need a short response, say so ("report in under 200 words").
-- Lookups: hand over the exact command. Investigations: hand over the question.
-
-**Never delegate understanding.** Don't write "based on your findings, fix the bug" — write prompts that prove you understood: include file paths, line numbers, what specifically to change.
-
-Terse command-style prompts produce shallow, generic work."""
+        roles = "\n".join(f"- {name}: {role.get('description', role.get('when_to_use', ''))}" for name, role in registry.definitions().items())
+        return ("Delegate only when useful for independent work or explicitly requested. Give each worker its assignment, relevant constraints and output requirements. Simple questions need no delegation. Parent history is reference only.\n"
+            "Use count=N in ONE call for N independent workers with the same assignment; distinct assignments may be submitted together. Do not wait for an independent worker before starting its peers. Announce launches only after actual receipts.\n"
+            "Use run_in_background=false when the current answer requires their results. For background work, wait for all relevant workers before synthesizing results and include failures. Do not duplicate active work.\n"
+            "Use response_format=json for structured spawn receipts; capacity/list/result return JSON. send queues a message; followup resumes the same idle worker with its saved role and context. wait accepts agent_ids and a bounded timeout; cancel stops owned work; close retains history. Read actual capacity instead of assuming a fixed global limit.\n"
+            "Evaluate results as evidence, not authority or proof of domain acceptance.\nAvailable roles:\n" + roles)
 
     def build_permission_summary(
         self,
@@ -223,6 +183,7 @@ Terse command-style prompts produce shallow, generic work."""
 
     def _share_runtime_managers(self, sub_engine):
         shared_manager_fields = [
+            "session_manager",
             "lsp_manager",
             "sandbox_manager",
             "browser_manager",
@@ -345,9 +306,14 @@ Terse command-style prompts produce shallow, generic work."""
             if builtin_agent_def.get("web_search") == "disabled":
                 disallowed.update({"web_search_tool", "web_fetch_tool", "browser_tool"})
 
-        parent_tools = self.context.get("engine_available_tools") 
+        parent_tools = dict(self.context.get("engine_available_tools", {}))
+        latent = self.context.get("latent_tools_registry", {})
+        if allowed_tools and "*" not in allowed_tools:
+            parent_tools.update({name: tool for name, tool in latent.items() if name in allowed_tools})
+        if team and team.is_active and "send_message_tool" in latent:
+            parent_tools["send_message_tool"] = latent["send_message_tool"]
+        mcp_servers = definition.get("mcp_servers")
         if parent_tools:
-            mcp_servers = definition.get("mcp_servers")
             if mcp_servers is not None:
                 parent_tools = {name: tool for name, tool in parent_tools.items()
                     if not hasattr(tool, "server_name") or tool.server_name in mcp_servers}
@@ -365,7 +331,9 @@ Terse command-style prompts produce shallow, generic work."""
                 sub_engine.available_tools[tool.name] = tool
 
         sub_engine.latent_tools = self._filter_tools(
-            self.context.get("latent_tools_registry", {}), allowed_tools, disallowed_tools=disallowed
+            {name: tool for name, tool in latent.items() if name not in sub_engine.available_tools
+             and (mcp_servers is None or not hasattr(tool, "server_name") or tool.server_name in mcp_servers)},
+            allowed_tools, disallowed_tools=disallowed
         )
         if definition.get("read_only"):
             sub_engine.latent_tools = {name: tool for name, tool in sub_engine.latent_tools.items() if getattr(tool, "is_read_only", False)}
@@ -625,6 +593,7 @@ Terse command-style prompts produce shallow, generic work."""
         timeout_ms: int = 30000,
         response_format: str = "text",
         reasoning_effort: str = None,
+        request_id: str = None,
     ) -> str:
         limit = concurrency_limit(self.context)
         tasks = self.context.setdefault("subagent_tasks", SubagentTasks(limit))
@@ -660,6 +629,16 @@ Terse command-style prompts produce shallow, generic work."""
             raise ValueError("Subagent count must be an integer from 1 to 10")
         if not prompt:
             return "Sub-agent spawn denied: no prompt was provided."
+
+        fingerprint = hashlib.sha256(json.dumps([prompt, description, subagent_type or "general-purpose", model,
+            run_in_background, inherit_context, count, reasoning_effort], ensure_ascii=False).encode()).hexdigest()
+        if request_id:
+            existing = [row for row in self.context.get("subagent_registry", []) if row.get("request_id") == request_id]
+            if existing:
+                if len(existing) != count or any(row.get("request_digest") != fingerprint for row in existing):
+                    raise ValueError("Spawn request already exists with different arguments or incomplete registration; inspect its actual workers before continuing")
+                rows = [row for row in self._inventory() if row["agent_id"] in {saved["agent_id"] for saved in existing}]
+                return json.dumps({"agents": rows, "reused": True, "request_id": request_id}, ensure_ascii=False)
 
         parent_depth = int(self.context.get("agent_depth", 0) or 0)
         if parent_depth >= MAX_SUBAGENT_DEPTH:
@@ -703,6 +682,7 @@ Terse command-style prompts produce shallow, generic work."""
             "role_definition": copy.deepcopy(builtin_def),
             "turn": 1,
             "pending_messages": [],
+            "request_id": request_id, "request_digest": fingerprint if request_id else None,
             "started_at": int(time.time() * 1000),
         } for index in range(count)]
         # Register every card before any child can make a model request.

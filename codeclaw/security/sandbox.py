@@ -4,8 +4,8 @@ import git
 
 class SandboxManager:
     """
-    Physical structural sandbox protecting root workspace contexts.
-    Utilizes `git worktree` to maintain cheap, completely separated shadow directories for experimental chaos.
+    Workspace change isolation using Git worktrees or directory copies.
+    This does not restrict host processes, network access or arbitrary filesystem access.
     """
     def __init__(self, sandbox_root=".codeclaw_sandbox"):
         self.sandbox_root = sandbox_root
@@ -63,7 +63,7 @@ class SandboxManager:
         }
         return (
             f"Sandbox created as git worktree on branch '{branch_name}'. "
-            f"All supported file/search/shell paths are now locked to '{sb_path}'."
+            f"Supported workspace paths resolve to '{sb_path}'. This is workspace isolation, not an OS security sandbox."
         )
 
     def _create_filesystem_sandbox(self, root_dir: str, branch_name: str, sb_path: str) -> str:
@@ -77,7 +77,7 @@ class SandboxManager:
         }
         return (
             f"Sandbox created as filesystem clone '{branch_name}'. "
-            f"Workspace paths now resolve into '{sb_path}'. Merge will copy files back into the original workspace."
+            f"Workspace paths resolve into '{sb_path}'. This does not restrict host or network access. Merge copies files back into the original workspace."
         )
         
     def create_sandbox(self, branch_name: str) -> str:

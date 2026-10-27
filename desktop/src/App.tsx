@@ -8,7 +8,6 @@ import {
   Code2,
   Folder,
   FolderOpen,
-  GitBranch,
   LoaderCircle,
   PanelRightClose,
   PanelRightOpen,
@@ -447,12 +446,12 @@ export default function App() {
               </div>
               <div className="eyebrow">YOUR LOCAL AGENT WORKSPACE</div>
               <h1>
-                {active?.scope === "standalone" ? "开始一个新会话。" : active ? "今天想构建什么？" : "把想法变成可运行的代码。"}
+                {active?.scope === "standalone" ? "开始一个新会话。" : active ? "今天想完成什么？" : "从一个问题或任务开始。"}
               </h1>
               <p>
                 {active?.scope === "standalone" ? "直接开始对话；文件和命令任务使用此会话的专属工作目录。" : active
                   ? "描述你的任务，连接模型，让代理在这个项目里开始工作。"
-                  : "连接模型即可开始；会话自动使用默认工作目录，也可以打开自己的项目。"}
+                  : "连接模型即可开始；每个独立会话都有自己的工作目录，也可以打开项目资料。"}
               </p>
               {!active ? (
                 <button
@@ -467,7 +466,7 @@ export default function App() {
               ) : (
                 <>
                   <div className="project-context">
-                    <GitBranch size={14} />
+                    <Folder size={14} />
                     <span title={active.project}>{active.project}</span>
                   </div>
                   <div className="starter-grid">
@@ -475,9 +474,9 @@ export default function App() {
                       {
                         icon: Code2,
                         title: active.scope === "standalone" ? "梳理一个任务" : "理解这个项目",
-                        text: active.scope === "standalone" ? "明确目标，拆解步骤。" : "分析代码结构、技术栈和启动方式。",
+                        text: active.scope === "standalone" ? "明确目标，拆解步骤。" : "了解资料、文件与已有成果。",
                         prompt:
-                          active.scope === "standalone" ? "请帮我梳理要完成的任务，先确认我的目标和需求。" : "请分析这个项目的代码结构、技术栈和启动方式，说明核心模块的职责。",
+                          active.scope === "standalone" ? "请帮我梳理要完成的任务，先确认我的目标和需求。" : "请概述这个项目的资料、文件和已有成果，说明它们的用途及尚待确认的问题。",
                       },
                       {
                         icon: Puzzle,
@@ -493,7 +492,7 @@ export default function App() {
                         title: "把任务交给子代理",
                         text: "独立探索、规划与验证。",
                         prompt:
-                          "请使用 explore 子代理分析项目结构，并总结最值得关注的模块。",
+                          "请使用 explore 子代理调查当前任务的相关资料，列出有依据的发现和待确认的问题。",
                       },
                     ].map(({ icon: Icon, title, text, prompt, action }) => (
                       <button

@@ -55,12 +55,18 @@ def restore_tool_activity(engine, metadata):
             json.dumps({"saved_results": unlinked, "uncertain_operations": uncertain}, ensure_ascii=False), is_meta=True, origin="tool_recovery"))
 
 
-async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int = 0, event_callback=None):
+async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int = 0, event_callback=None, result_callback=None):
+    from codeclaw.core.session_lock import SessionBusyError, SessionConflictError
+    try:
+        self.require_writer()
+    except (SessionBusyError, SessionConflictError) as error:
+        return {"type": "tool_result", "tool_use_id": self._tb_get(tool_block, "id", ""), "content": str(error), "is_error": True}
     tool_name = self._tb_get(tool_block, "name", "")
     tool_id = self._tb_get(tool_block, "id", "")
     tool_inputs = copy.deepcopy(self._tb_get(tool_block, "input", {}) or {})
     input_error = bool(self._tb_get(tool_block, "_argument_error", ""))
     handler_invoked = False
+    raw_result = None
     status = "error"
     user_turn_id, digest = tool_identity(self, tool_name, tool_inputs)
     for row in self.recent_tool_activity:
@@ -195,7 +201,7 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
                 raw_result = await handler(**tool_inputs)
                 res_text = serialize_tool_result(
                     raw_result,
-                    spill_threshold_chars=1000000 if tool_name == "skill_tool" and tool_inputs.get("action") in {"read", "resource"} else 5000,
+                    spill_threshold_chars=tool_inputs.get("max_chars", 100000) if tool_name == "skill_tool" else 5000,
                     artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id),
                     spill_recorder=spill_recorder,
                 )
@@ -250,7 +256,8 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
     self.attachment_collector.track_tool_use(tool_name)
     self._emit_tool_activity("tool_result", tool_name, tool_id, result=str(res_text)[:16000], is_error=receipt["is_error"], status=status)
     sys_print_callback(f"    [dim]{tool_name} -> {status}[/dim]")
-
+    if callable(result_callback) and not receipt["is_error"]:
+        result_callback(copy.deepcopy(raw_result))
     return receipt
 
 

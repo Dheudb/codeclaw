@@ -9,6 +9,37 @@ from codeclaw.core.storage import session_directory, history_root, atomic_text
 
 
 class StorageTests(unittest.TestCase):
+    def test_migration_preflights_existing_writer_and_preserves_legacy_until_release(self):
+        from codeclaw.core.session_lock import SessionBusyError
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"CODECLAW_DATA_DIR": str(Path(temp) / "data")}):
+            root = Path(temp) / "workspace"; root.mkdir()
+            manager = SessionManager(cwd=root)
+            try:
+                manager.save_session_state("shared", [{"role": "user", "content": "central"}])
+                legacy = root / ".codeclaw/tool-results/shared/result.txt"
+                legacy.parent.mkdir(parents=True); legacy.write_text("legacy output", encoding="utf-8")
+                with self.assertRaises(SessionBusyError): SessionManager(cwd=root)
+                self.assertTrue(legacy.exists())
+                self.assertFalse((history_root(root) / "tool-results/shared/result.txt").exists())
+                manager.release_writer()
+                SessionManager(cwd=root)
+                self.assertFalse(legacy.exists())
+                self.assertEqual((history_root(root) / "tool-results/shared/result.txt").read_text(), "legacy output")
+            finally:
+                manager.release_writer()
+
+    def test_migration_journal_cannot_authorize_removing_a_source_with_missing_destination(self):
+        from codeclaw.core.storage import atomic_json
+        import hashlib
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"CODECLAW_DATA_DIR": str(Path(temp) / "data")}):
+            root = Path(temp) / "workspace"; root.mkdir()
+            legacy = root / ".codeclaw/tool-results/shared/result.txt"
+            legacy.parent.mkdir(parents=True); legacy.write_bytes(b"full output")
+            atomic_json(history_root(root) / "migration.json", {str(legacy.resolve()): hashlib.sha256(b"full output").hexdigest()})
+            SessionManager(cwd=root)
+            self.assertEqual((history_root(root) / "tool-results/shared/result.txt").read_bytes(), b"full output")
+            self.assertFalse(legacy.exists())
+
     @unittest.skipUnless(os.name == "nt", "Windows sharing violation retry")
     def test_transient_windows_replace_lock_is_retried_without_losing_content(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -61,6 +92,7 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(str(session_directory(root)), manager.session_dir)
             self.assertTrue(manager.save_session_state("session", [{"role": "assistant", "content": "continued"}]))
             self.assertFalse((old / "sessions").exists())
+            manager.release_writer()
 
     def test_conflicting_history_is_never_overwritten(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"CODECLAW_DATA_DIR": str(Path(temp) / "data")}):
@@ -68,5 +100,7 @@ class StorageTests(unittest.TestCase):
             manager.save_session_state("same", [{"role": "user", "content": "central"}])
             legacy = root / ".codeclaw/sessions/same.json"; legacy.parent.mkdir(parents=True)
             legacy.write_text('{"messages":[{"role":"user","content":"legacy"}]}', encoding="utf-8")
+            manager.release_writer()
             with self.assertRaisesRegex(ValueError, "冲突"): SessionManager(cwd=root)
             self.assertTrue(legacy.exists()); self.assertEqual(manager.load_session_state("same")["messages"][0]["content"], "central")
+            manager.release_writer()

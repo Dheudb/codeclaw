@@ -65,9 +65,6 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.engine._sync_message_context()
         self.engine.session_memory_manager.maybe_extract = AsyncMock()
         self.engine.memory_extractor.maybe_extract = AsyncMock()
-        self.engine._builtin_syntax_check = AsyncMock(return_value=None)
-        self.engine._maybe_run_verification = AsyncMock(return_value=None)
-        self.engine._maybe_prepare_auto_commit_proposal = AsyncMock()
         self.requests = []
         self.events = []
         self.recorder = TurnRecorder()
@@ -77,6 +74,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.tool_context["command_sessions"].close()
         await self.engine.client.close()
         await self.engine.compactor.client.close()
+        self.engine.session_manager.release_writer()
         self.tokens.stop()
         self.env.stop()
         self.temp.cleanup()

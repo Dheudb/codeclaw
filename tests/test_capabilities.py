@@ -316,6 +316,7 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(engine.get_mode(), "normal")
                 await engine.client.close()
                 await engine.compactor.client.close()
+                engine.session_manager.release_writer()
             finally:
                 os.chdir(original_cwd)
 

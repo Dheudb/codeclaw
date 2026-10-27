@@ -60,7 +60,7 @@ async function main() {
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "skill-fixture", openai_api_key: "fixture-key", openai_base_url: `http://127.0.0.1:${server.address().port}/v1` });
     await launch(); await page.locator(".new-task").click(); await page.locator(".session-item.active").waitFor();
     const input = await picker();
-    assert.equal(await page.locator("#skill-options").getByRole("option").count(), 7); // valid skills remain available despite legacy disabled flags
+    assert.equal(await page.locator("#skill-options").getByRole("option").count(), 8); // four public builtins, with code-review overridden by the project
     assert.equal(await page.getByRole("switch", { name: /启用技能/ }).count(), 0);
     assert.equal(await page.locator("#skill-options").getByRole("option", { name: /disabled-skill/ }).count(), 1);
     assert.equal(await page.locator("#skill-options").getByRole("option", { name: /code-review/ }).count(), 1);
