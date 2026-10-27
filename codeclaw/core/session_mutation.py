@@ -14,7 +14,7 @@ import time
 import uuid
 
 from codeclaw.core.session_lock import SessionLock, SessionConflictError, SessionBusyError
-from codeclaw.core.storage import data_directory, history_root, atomic_json, atomic_bytes, rebase
+from codeclaw.core.storage import data_directory, history_root, atomic_json, atomic_bytes, atomic_copy, file_hash, rebase
 
 
 def _hash(content):
@@ -69,10 +69,12 @@ def _index(root):
     return data
 
 
-def _workspace(base, target, identity):
+def _workspace(base, target, identity, seed=None):
+    SessionLock(data_directory() / "session-locks", identity)
     base, target = Path(os.path.realpath(base)), Path(os.path.realpath(target))
     if not base.is_dir() or target != base / ("chat-" + identity) or target.exists():
         raise ValueError("Independent conversations require a new private workspace")
+    base = Path(os.path.realpath(seed or base))
     files = {}
     settings = base / ".codeclaw/capabilities.json"
     inherited = json.loads(settings.read_bytes()) if settings.exists() else {}
@@ -87,6 +89,44 @@ def _workspace(base, target, identity):
     if mcp.is_file() and not mcp.is_symlink() and not getattr(mcp.lstat(), "st_file_attributes", 0) & 0x400:
         files[mcp.name] = mcp.read_text(encoding="utf-8")
     return {"target": str(target), "files": files}
+
+
+def _workspace_path(root, relative):
+    root, relative = Path(root), Path(relative)
+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        raise SessionConflictError("Invalid workspace output path")
+    for probe in (root, *(root.joinpath(*relative.parts[:index]) for index in range(1, len(relative.parts) + 1))):
+        if probe.is_symlink() or probe.exists() and getattr(probe.lstat(), "st_file_attributes", 0) & 0x400:
+            raise SessionConflictError("Workspace files cannot be links or junctions")
+    return root / relative
+
+
+def _legacy_outputs(project, checkpoint):
+    """Identify only workspace-local outputs referenced by the old execution record."""
+    names = set()
+    def collect(value):
+        if isinstance(value, dict):
+            arguments = value.get("input", {})
+            if value.get("type") == "tool_use" and value.get("name") in {"file_write_tool", "file_edit_tool", "notebook_edit_tool"} and isinstance(arguments, dict):
+                name = arguments.get("file_path") or arguments.get("notebook_path")
+                if isinstance(name, str): names.add(name)
+            if value.get("operation") and "added" in value and isinstance(value.get("path"), str): names.add(value["path"])
+            for item in value.values(): collect(item)
+        elif isinstance(value, list):
+            for item in value: collect(item)
+    collect(checkpoint)
+    project, files = Path(project).resolve(), {}
+    for name in sorted(names):
+        source = Path(os.path.abspath(project / name))
+        try:
+            relative = source.relative_to(project)
+            source = _workspace_path(project, relative)
+        except (ValueError, SessionConflictError):
+            continue
+        if not relative.parts or any(part.startswith(".") for part in relative.parts) or not source.is_file() or source.is_symlink() or getattr(source.lstat(), "st_file_attributes", 0) & 0x400:
+            continue
+        files[relative.as_posix()] = source
+    return files
 
 
 def _paths(project, sid):
@@ -115,10 +155,7 @@ def _apply(journal):
             raise SessionConflictError("Workspace cannot be a link or junction")
         target.mkdir(exist_ok=True)
         for relative, text in workspace["files"].items():
-            path = target / relative
-            for probe in (target, path.parent, path):
-                if probe.is_symlink() or probe.exists() and getattr(probe.lstat(), "st_file_attributes", 0) & 0x400:
-                    raise SessionConflictError("Workspace configuration cannot be a link or junction")
+            path = _workspace_path(target, relative)
             content = text.encode("utf-8")
             if path.exists():
                 if path.read_bytes() != content:
@@ -127,12 +164,21 @@ def _apply(journal):
                 atomic_bytes(path, content)
     # Copy all owned output before publishing the destination checkpoint (last copy).
     for entry in journal["copies"]:
-        source = _safe(entry["source"]) if entry["source"] is not None else None
-        target = _safe(entry["target"])
+        workspace = entry.get("workspace")
+        if workspace:
+            source = _workspace_path(workspace[0], Path(entry["source"]).relative_to(workspace[0]))
+            target = _workspace_path(workspace[1], Path(entry["target"]).relative_to(workspace[1]))
+        else:
+            source = _safe(entry["source"]) if entry["source"] is not None else None
+            target = _safe(entry["target"])
         content = entry["content"].encode("utf-8") if entry.get("content") is not None else None
         if target.exists():
-            if _hash(target.read_bytes()) != entry["target_hash"]:
+            if file_hash(target) != entry["target_hash"]:
                 raise SessionConflictError("Destination changed during a session operation; both records were preserved")
+            continue
+        if workspace:
+            atomic_copy(target, source, entry["source_hash"])
+            os.utime(target, ns=(entry["mtime_ns"], entry["mtime_ns"]))
             continue
         original = source.read_bytes() if source is not None else b""
         if _hash(original) != entry["source_hash"]:
@@ -187,10 +233,26 @@ def recover_pending(identity, held=()):
     journal = json.loads(path.read_bytes())
     if identity not in journal["identities"]:
         raise SessionConflictError("Pending operation does not own this session")
+    return _recover_journal(path, held)
+
+
+def _recover_journal(path, held=()):
+    if path.is_symlink() or getattr(path.lstat(), "st_file_attributes", 0) & 0x400:
+        raise SessionConflictError("Pending operations cannot be links or junctions")
+    journal = json.loads(path.read_bytes())
     with ExitStack() as stack:
         for sid in sorted(set(journal["identities"]) - set(held)):
             lock = SessionLock(data_directory() / "session-locks", sid)
             lock.acquire(); stack.callback(lock.close)
+        # A competing recovery may have finished while these leases were acquired.
+        if not path.exists():
+            return
+        if path.is_symlink() or getattr(path.lstat(), "st_file_attributes", 0) & 0x400:
+            raise SessionConflictError("Pending operations cannot be links or junctions")
+        current = json.loads(path.read_bytes())
+        if current["identities"] != journal["identities"]:
+            raise SessionConflictError("Pending operation ownership changed during recovery")
+        journal = current
         if journal["phase"] == "committing":
             _apply(journal)
             journal["phase"] = "completed"
@@ -202,16 +264,36 @@ def recover_pending(identity, held=()):
         return recovered
 
 
+def recover_storage():
+    recovered, busy = 0, []
+    for path in sorted((data_directory() / "session-operations").glob("transaction-*.json")):
+        try:
+            _recover_journal(path)
+            recovered += 1
+        except FileNotFoundError:
+            if path.exists():
+                raise  # A missing copy source is an error, not a successful recovery.
+        except SessionBusyError:
+            busy.append(path.name)
+    return {"completed": not busy, "recovered": recovered, "busy": busy}
+
+
 def _plan(spec, identities):
     plan = {"identities": identities, "copies": [], "removes": [], "indexes": [], "directories": []}
-    def copy(source, target, payload=None):
-        source, target = _safe(source) if source is not None else None, _safe(target)
+    def copy(source, target, payload=None, workspace=None):
+        if workspace:
+            source = _workspace_path(workspace[0], Path(source).relative_to(workspace[0]))
+            target = _workspace_path(workspace[1], Path(target).relative_to(workspace[1]))
+        else:
+            source, target = _safe(source) if source is not None else None, _safe(target)
         if target.exists():
             raise ValueError("目标项目存在同名会话资源，原记录保留")
-        original = source.read_bytes() if source is not None else b""
+        original = source.read_bytes() if source is not None and not workspace else b""
+        source_hash = file_hash(source) if workspace else _hash(original)
         text = json.dumps(payload, ensure_ascii=False, indent=2) if payload is not None else None
-        plan["copies"].append({"source": str(source) if source is not None else None, "target": str(target), "source_hash": _hash(original),
-            "target_hash": _hash(text.encode("utf-8") if text is not None else original), "content": text,
+        plan["copies"].append({"source": str(source) if source is not None else None, "target": str(target), "source_hash": source_hash,
+            "target_hash": _hash(text.encode("utf-8")) if text is not None else source_hash, "content": text,
+            **({"workspace": [str(root) for root in workspace]} if workspace else {}),
             "mtime_ns": source.stat().st_mtime_ns if source is not None else time.time_ns()})
     def remove(path):
         path = _safe(path)
@@ -252,6 +334,10 @@ def _plan(spec, identities):
     sid, project, target = spec["session_id"], os.path.realpath(spec["project"]), os.path.realpath(spec["target"])
     if spec["action"] == "fork" and spec.get("scope") == "standalone":
         plan["workspaces"] = [_workspace(Path(project).parent, target, spec["new_id"])]
+    if spec.get("legacy_workspace") is not None:
+        if spec["action"] != "move" or spec.get("scope") != "standalone":
+            raise ValueError("Legacy isolation only applies to independent conversations")
+        plan["workspaces"] = [_workspace(spec["legacy_workspace"]["base"], target, spec["legacy_workspace"]["id"], seed=project)]
     if not Path(target).is_dir() and not plan.get("workspaces"):
         raise ValueError("目标项目目录不存在")
     root, checkpoint, artifacts = _paths(project, sid)
@@ -263,6 +349,11 @@ def _plan(spec, identities):
     if checkpoint != destination and (destination.exists() or destination_id in _index(destination_root)["sessions"]):
         raise ValueError("目标项目中已有相同 ID 的会话，原记录保留")
     meta = dict(_index(root)["sessions"].get(sid, {}))
+    if spec.get("legacy_workspace") is not None:
+        if meta.get("scope") != "standalone" or meta.get("workspaceIsolated"):
+            raise ValueError("Only a legacy independent conversation may be upgraded")
+        for relative, source in _legacy_outputs(project, raw).items():
+            copy(source, Path(target) / relative, workspace=(project, target))
     if spec["action"] == "fork":
         messages = rebase(raw if isinstance(raw, list) else raw["messages"], root / "tool-results" / sid, destination_root / "tool-results" / destination_id)
         payload = {"messages": rebase(messages, artifacts, target_artifacts), "metadata": {}, "revision": 1}
@@ -348,6 +439,8 @@ def _metadata(spec):
 
 
 def mutate(spec, held=()):
+    if spec.get("action") == "recover":
+        return recover_storage()
     if spec.get("action") == "migrate":
         from codeclaw.core.storage import migrate_project
         return {"completed": True, "root": str(migrate_project(spec["project"]))}

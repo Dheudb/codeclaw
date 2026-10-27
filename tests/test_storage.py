@@ -9,6 +9,17 @@ from codeclaw.core.storage import session_directory, history_root, atomic_text
 
 
 class StorageTests(unittest.TestCase):
+    def test_changed_streamed_copy_never_publishes_unverified_bytes(self):
+        from codeclaw.core.storage import atomic_copy, file_hash
+        from codeclaw.core.session_lock import SessionConflictError
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); source = root / "source"; target = root / "target"
+            source.write_bytes(b"original"); expected = file_hash(source)
+            source.write_bytes(b"changed"); target.write_bytes(b"previous")
+            with self.assertRaises(SessionConflictError): atomic_copy(target, source, expected)
+            self.assertEqual(target.read_bytes(), b"previous")
+            self.assertEqual({item.name for item in root.iterdir()}, {"source", "target"})
+
     def test_migration_preflights_existing_writer_and_preserves_legacy_until_release(self):
         from codeclaw.core.session_lock import SessionBusyError
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"CODECLAW_DATA_DIR": str(Path(temp) / "data")}):

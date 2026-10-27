@@ -158,16 +158,9 @@ class SessionCatalog {
     mutateSync(this, { action: "create", project: directory, session_id: identity, scope: "standalone", workspace_base: base, created: Date.now() });
     return this.list(directory).find((row) => row.sessionId === identity);
   }
-  seedWorkspaceConfiguration(base, target) {
-    const settingsFile = path.join(base, ".codeclaw/capabilities.json");
-    const inherited = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, "utf8")) : {};
-    const roots = (kind) => [".codeclaw", ".agents", ".claude"].map((name) => path.join(base, name, kind)).filter((root) => fs.existsSync(root));
-    const skills = [...new Set([...(inherited.skill_roots || []), ...roots("skills")])], agents = [...new Set([...(inherited.agent_roots || []), ...roots("agents")])];
-    if (fs.existsSync(settingsFile) || skills.length || agents.length) atomicJSON(path.join(target, ".codeclaw/capabilities.json"), { ...inherited, skill_roots: skills, agent_roots: agents });
-    const mcp = path.join(base, "mcp_servers.json");
-    if (fs.existsSync(mcp) && !fs.lstatSync(mcp).isSymbolicLink()) fs.copyFileSync(mcp, path.join(target, "mcp_servers.json"), fs.constants.COPYFILE_EXCL);
-  }
   async upgradeStandaloneWorkspaces(base, mutate = (spec) => mutateSync(this, spec)) {
+    await mutate({ action: "recover" });
+    this.reconcileWorkspaceAssociations();
     const roots = [...new Set([...(this.readSettings().standaloneDirectories || []), ...(this.readSettings().projects || [])])];
     const rows = roots.flatMap((directory) => {
       try { return this.list(directory).filter((row) => row.scope === "standalone" && !row.error && !this.index(directory)[row.sessionId]?.workspaceIsolated); }
@@ -177,30 +170,12 @@ class SessionCatalog {
     fs.mkdirSync(base, { recursive: true });
     const { moveSpec } = require("./session-move.cjs");
     for (const row of rows) {
-      const target = path.join(base, "chat-" + crypto.randomUUID()); fs.mkdirSync(target);
-      this.seedWorkspaceConfiguration(row.project, target);
-      const raw = JSON.parse(fs.readFileSync(this.file(row.project, row.sessionId), "utf8")), owned = new Set();
-      function collect(value) {
-        if (!value || typeof value !== "object") return;
-        if (value.type === "tool_use" && ["file_write_tool", "file_edit_tool", "notebook_edit_tool"].includes(value.name)) {
-          const filename = value.input?.file_path || value.input?.notebook_path; if (filename) owned.add(filename);
-        }
-        if (value.path && value.operation && "added" in value) owned.add(value.path);
-        for (const child of Object.values(value)) collect(child);
-      }
-      collect(raw);
-      for (const filename of owned) {
-        const source = path.resolve(row.project, filename), relative = path.relative(row.project, source);
-        if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative) || relative.split(path.sep).some((name) => name.startsWith("."))) continue;
-        if (!fs.existsSync(source) || !fs.statSync(source).isFile() || fs.lstatSync(source).isSymbolicLink()) continue;
-        const canonical = fs.realpathSync(source), check = path.relative(row.project, canonical);
-        if (check === ".." || check.startsWith(".." + path.sep) || path.isAbsolute(check)) continue;
-        const destination = path.join(target, relative); fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
-      }
+      const identity = "legacy-" + crypto.createHash("sha256").update(row.id).digest("hex").slice(0, 32);
+      const target = path.join(base, "chat-" + identity);
       const pendingSettings = this.readSettings();
       pendingSettings.standaloneDirectories = [...new Set([...(pendingSettings.standaloneDirectories || []), target])];
       this.writeSettings(pendingSettings);
-      await mutate(moveSpec(row, target, "standalone"));
+      await mutate({ ...moveSpec(row, target, "standalone"), legacy_workspace: { base, id: identity } });
       const moved = this.find(sessionKey(target, row.sessionId)), settings = this.readSettings();
       settings.standaloneDirectories = [...new Set([...(settings.standaloneDirectories || []), moved.project])];
       const matches = (entry) => entry && projectKey(entry.project) === projectKey(row.project) && entry.resumeId === row.sessionId;
@@ -208,6 +183,27 @@ class SessionCatalog {
       if (settings.workspace) settings.workspace = settings.workspace.map((entry) => matches(entry) ? { ...entry, project: moved.project, scope: "standalone" } : entry);
       this.writeSettings(settings);
     }
+  }
+  reconcileWorkspaceAssociations() {
+    const snapshot = this.snapshot(), settings = this.readSettings();
+    const rows = [...snapshot.standalone, ...snapshot.projects.flatMap((project) => project.sessions)];
+    let changed = false;
+    const reconcile = (entry) => {
+      if (!validId(entry?.resumeId) || typeof entry.project !== "string" || fs.existsSync(this.file(entry.project, entry.resumeId))) return entry;
+      for (const row of rows.filter((row) => row.sessionId === entry.resumeId && !row.error)) {
+        const raw = JSON.parse(fs.readFileSync(this.file(row.project, row.sessionId), "utf8"));
+        const moves = raw.metadata?.workspace_moves || [];
+        if (Array.isArray(moves) && typeof moves.at(-1)?.to === "string" && projectKey(moves.at(-1).to) === projectKey(row.project) &&
+            moves.some((move) => typeof move?.from === "string" && projectKey(move.from) === projectKey(entry.project))) {
+          changed = true;
+          return { ...entry, project: row.project, scope: row.scope };
+        }
+      }
+      return entry;
+    };
+    if (settings.activeConversation) settings.activeConversation = reconcile(settings.activeConversation);
+    if (Array.isArray(settings.workspace)) settings.workspace = settings.workspace.map(reconcile);
+    if (changed) this.writeSettings(settings);
   }
   create(project, messages = [], title, scope = "project") {
     const id = crypto.randomUUID();

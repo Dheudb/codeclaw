@@ -37,11 +37,37 @@ def atomic_text(path, text):
 
 
 def atomic_bytes(path, content):
+    _atomic_write(path, lambda stream: stream.write(content))
+
+
+def file_hash(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def atomic_copy(path, source, expected_hash):
+    """Publish a streamed copy only after verifying the complete source bytes."""
+    def write(stream):
+        digest = hashlib.sha256()
+        with Path(source).open("rb") as original:
+            for chunk in iter(lambda: original.read(1024 * 1024), b""):
+                stream.write(chunk)
+                digest.update(chunk)
+        if digest.hexdigest() != expected_hash:
+            from codeclaw.core.session_lock import SessionConflictError
+            raise SessionConflictError("Source changed during a session operation; records were preserved")
+    _atomic_write(path, write)
+
+
+def _atomic_write(path, write):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".migration-", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
-            stream.write(content)
+            write(stream)
             stream.flush()
             os.fsync(stream.fileno())
         for attempt in range(6):

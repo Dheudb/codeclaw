@@ -8,11 +8,13 @@ from codeclaw.core import session_mutation as actor
 
 spec = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 phase = sys.argv[2]
-original_json, original_bytes, original_unlink = actor.atomic_json, actor.atomic_bytes, Path.unlink
+original_json, original_bytes, original_copy, original_unlink = actor.atomic_json, actor.atomic_bytes, actor.atomic_copy, Path.unlink
 
 
 def write_json(path, value):
     original_json(path, value)
+    if phase == "intent" and value.get("phase") == "prepared":
+        os._exit(87)
     if phase == "prepared" and Path(path).name == spec["session_id"] + ".json":
         os._exit(87)
     if phase == "completed" and value.get("phase") == "completed":
@@ -37,6 +39,12 @@ def unlink(path, *args, **kwargs):
     return result
 
 
-actor.atomic_json, actor.atomic_bytes, Path.unlink = write_json, write_bytes, unlink
+def copy(path, source, expected):
+    original_copy(path, source, expected)
+    if phase == "workspace_output":
+        os._exit(87)
+
+
+actor.atomic_json, actor.atomic_bytes, actor.atomic_copy, Path.unlink = write_json, write_bytes, copy, unlink
 actor.mutate(spec)
 raise SystemExit("Expected crash boundary was not reached")

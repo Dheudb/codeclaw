@@ -98,6 +98,94 @@ class SessionMutationTests(unittest.TestCase):
         self.manager(self.target).acquire_writer("shared")
         self.assert_moved()
 
+    def legacy_workspace(self):
+        base = self.base / "workspaces"; base.mkdir(exist_ok=True)
+        target = base / "chat-legacy"
+        raw = json.loads(self.checkpoint.read_bytes())
+        raw["messages"].append({"role": "assistant", "content": [
+            {"type": "tool_use", "name": "file_write_tool", "input": {"file_path": name}}
+            for name in ("nested/result.bin", "user.txt", ".hidden", "../external.txt")]})
+        atomic_json(self.checkpoint, raw)
+        atomic_json(self.origin / "index.json", {"version": 1, "sessions": {"shared": {"scope": "standalone", "draft": "keep draft"}}})
+        binary = self.source / "nested/result.bin"; binary.parent.mkdir(exist_ok=True)
+        with binary.open("wb") as stream:
+            for _ in range(16): stream.write(bytes(range(256)) * 4096)
+        (self.source / ".hidden").write_bytes(b"private")
+        (self.base / "external.txt").write_bytes(b"outside")
+        skill = self.source / ".codeclaw/skills/private/SKILL.md"
+        skill.parent.mkdir(parents=True, exist_ok=True); skill.write_text("private skill", encoding="utf-8")
+        atomic_json(self.source / "mcp_servers.json", {"mcpServers": {"fixture": {"command": "fixture"}}})
+        return target, {**self.spec, "target": str(target), "scope": "standalone", "legacy_workspace": {"base": str(base), "id": "legacy"}}, binary
+
+    def test_legacy_upgrade_preflights_writer_then_streams_binary_without_copying_private_skills(self):
+        target, spec, binary = self.legacy_workspace()
+        owner = self.manager(self.source); owner.acquire_writer("shared")
+        with self.assertRaises(SessionBusyError): actor.mutate(spec)
+        self.assertFalse(target.exists()); self.assertTrue(self.checkpoint.exists())
+        owner.release_writer()
+        original = Path.read_bytes
+        def bounded_read(path):
+            if path == binary: raise AssertionError("Large workspace outputs must be streamed")
+            return original(path)
+        with patch.object(Path, "read_bytes", bounded_read): actor.mutate(spec)
+        self.assertEqual(actor.file_hash(binary), actor.file_hash(target / "nested/result.bin"))
+        self.assertTrue(binary.exists()); self.assertEqual((self.source / "user.txt").read_text(), "never move")
+        self.assertFalse((target / ".hidden").exists()); self.assertFalse((target / "external.txt").exists())
+        self.assertFalse((target / ".codeclaw/skills").exists())
+        config = json.loads((target / ".codeclaw/capabilities.json").read_bytes())
+        self.assertIn(os.path.normcase(str(self.source / ".codeclaw/skills")), [os.path.normcase(item) for item in config["skill_roots"]])
+        self.assertEqual((target / "mcp_servers.json").read_bytes(), (self.source / "mcp_servers.json").read_bytes())
+
+    def test_legacy_upgrade_conflict_preserves_user_edit_and_missing_source_is_not_success(self):
+        target, spec, binary = self.legacy_workspace()
+        original = actor.atomic_copy
+        def fail(path, source, digest):
+            original(path, source, digest)
+            raise OSError("interrupt after output")
+        with patch.object(actor, "atomic_copy", side_effect=fail):
+            with self.assertRaises(OSError): actor.mutate(spec)
+        output = target / "nested/result.bin"; output.write_bytes(b"user edit")
+        with self.assertRaises(SessionConflictError): actor.mutate({"action": "recover"})
+        self.assertEqual(output.read_bytes(), b"user edit"); self.assertTrue(self.checkpoint.exists())
+        output.unlink(); binary.unlink()
+        with self.assertRaises(FileNotFoundError): actor.mutate({"action": "recover"})
+        self.assertTrue(self.checkpoint.exists())
+        self.assertTrue(list((self.base / "data/session-operations").glob("transaction-*.json")))
+
+    def test_legacy_upgrade_process_crashes_recover_at_startup_without_repeating_user_operations(self):
+        import shutil
+        from codeclaw.core.session_lock import SessionLock
+        target, spec, binary = self.legacy_workspace()
+        digest = actor.file_hash(binary)
+        fixture = Path(__file__).with_name("fixtures") / "crash_session_mutation.py"
+        request = self.base / "legacy.json"; atomic_json(request, spec)
+        for phase in ("intent", "prepared", "workspace", "workspace_output", "checkpoint", "source_removed", "completed"):
+            with self.subTest(phase=phase):
+                process = subprocess.run([sys.executable, str(fixture), str(request), phase], env=self.env,
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(process.returncode, 87, process.stdout + process.stderr)
+                lock = SessionLock(self.base / "data/session-locks", "shared"); lock.acquire()
+                try:
+                    busy = actor.mutate({"action": "recover"})
+                    self.assertFalse(busy["completed"]); self.assertEqual(len(busy["busy"]), 1)
+                finally: lock.close()
+                self.assertTrue(actor.mutate({"action": "recover"})["completed"])
+                if phase in {"intent", "prepared"}:
+                    self.assertFalse(target.exists()); self.assertTrue(self.checkpoint.exists())
+                else:
+                    self.assertFalse(self.checkpoint.exists())
+                    self.assertEqual(actor.file_hash(target / "nested/result.bin"), digest)
+                    self.assertEqual((target / "user.txt").read_text(), "never move")
+                    self.assertTrue((history_root(target) / "sessions/shared.json").is_file())
+                self.assertEqual(actor.file_hash(binary), digest)
+                self.assertEqual(list((self.base / "data/session-operations").glob("*.json")), [])
+                destination = history_root(target)
+                if destination.exists(): shutil.rmtree(destination)
+                if target.exists():
+                    self.assertEqual(target.resolve().parent, (self.base / "workspaces").resolve())
+                    shutil.rmtree(target)
+                self.seed(); self.legacy_workspace()
+
     def test_real_process_crash_at_each_move_commit_boundary(self):
         fixture = Path(__file__).with_name("fixtures") / "crash_session_mutation.py"
         request = self.base / "request.json"; atomic_json(request, self.spec)

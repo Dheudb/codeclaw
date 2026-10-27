@@ -68,3 +68,28 @@ test("legacy independent conversations are isolated on upgrade and owned outputs
   assert(rows.find((row) => row.sessionId === "two").archived);
   await catalog.upgradeStandaloneWorkspaces(path.join(root, "workspaces")); assert.equal(catalog.snapshot().standalone.length, 2);
 });
+
+test("a lost legacy-upgrade reply restores active and open conversation associations on restart", async (t) => {
+  const { project, root, catalog, data } = fixture(t);
+  const { mutateSync } = require("../electron/storage-helper.cjs");
+  const row = catalog.create(project, [{ role: "user", content: "legacy" }], "legacy", "standalone");
+  const index = catalog.indexPath(project), metadata = JSON.parse(fs.readFileSync(index));
+  metadata.sessions[row.sessionId].workspaceIsolated = false; atomicJSON(index, metadata);
+  const entry = { project, resumeId: row.sessionId, scope: "standalone", id: "keep-ui-identity" };
+  catalog.writeSettings({ ...catalog.readSettings(), standaloneDirectories: [project], activeConversation: entry, workspace: [entry] });
+  const base = path.join(root, "workspaces");
+  await assert.rejects(catalog.upgradeStandaloneWorkspaces(base, (spec) => {
+    const result = mutateSync(catalog, spec);
+    if (spec.action === "move") throw new Error("lost reply");
+    return result;
+  }), /lost reply/);
+  assert.equal(catalog.readSettings().activeConversation.project, project);
+  assert(!fs.existsSync(catalog.file(project, row.sessionId)));
+  const restarted = new SessionCatalog(catalog.readSettings, catalog.writeSettings, data);
+  await restarted.upgradeStandaloneWorkspaces(base);
+  const settings = restarted.readSettings(), moved = restarted.snapshot().standalone[0];
+  assert.equal(settings.activeConversation.project, moved.project);
+  assert.equal(settings.workspace[0].project, moved.project); assert.equal(settings.workspace[0].id, entry.id);
+  assert.equal(moved.sessionId, row.sessionId); assert.equal(fs.readdirSync(base).length, 1);
+  await restarted.upgradeStandaloneWorkspaces(base); assert.equal(fs.readdirSync(base).length, 1);
+});
