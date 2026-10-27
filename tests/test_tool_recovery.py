@@ -102,7 +102,8 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         async def emit(event):
             self.events.append(event)
             self.recorder.accept(event)
-        return await self.engine._run_loop("Use the selected fixture skill.", sys_print_callback=lambda _: None, event_callback=emit)
+        result = (await self.engine._run_loop("Use the selected fixture skill.", sys_print_callback=lambda _: None, event_callback=emit)).text
+        return result
 
     async def test_repair_retains_prior_work_and_feedback_and_duration_trace(self):
         self.fixture([("record_tool", '{"value":"before"}'), "Continuing.\n" + dsml("unknown"), dsml(), "DONE"])
@@ -159,7 +160,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         async def emit(event):
             if event["type"] == "tool_protocol_error":
                 self.engine.abort_event.set()
-        result = await self.engine._run_loop("fixture", sys_print_callback=lambda _: None, event_callback=emit)
+        result = (await self.engine._run_loop("fixture", sys_print_callback=lambda _: None, event_callback=emit)).text
         self.assertIn("Turn aborted", result)
         self.assertEqual(len(self.requests), 1)
 
@@ -184,8 +185,8 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_unfinished_selected_skill_cannot_end_with_a_promise(self):
         self.workflow_skill()
         self.fixture([self.workflow_command(False), 'I will read the cards next.', self.workflow_command(True), 'ACTUAL_DONE'])
-        result = await self.engine._run_loop('Run the workflow.', selected_skills=['fixture-workflow'], sys_print_callback=lambda _: None,
-                                             event_callback=self._workflow_event)
+        result = (await self.engine._run_loop('Run the workflow.', selected_skills=['fixture-workflow'], sys_print_callback=lambda _: None,
+                                             event_callback=self._workflow_event)).text
         self.assertEqual(result, 'ACTUAL_DONE')
         self.assertEqual(len(self.requests), 4)
         self.assertIn('Skill workflow completion guard', json.dumps(self.requests[2]['messages']))
@@ -200,7 +201,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_workflow_guard_stops_bounded_and_next_chat_is_unaffected(self):
         self.workflow_skill()
         self.fixture([('skill_tool', '{"action":"read","skill_name":"fixture-workflow"}'), self.workflow_command(False), 'Next I will work.', 'Next I will work.', 'Next I will work.'])
-        result = await self.engine._run_loop('Run the workflow.', sys_print_callback=lambda _: None, event_callback=self._workflow_event)
+        result = (await self.engine._run_loop('Run the workflow.', sys_print_callback=lambda _: None, event_callback=self._workflow_event)).text
         self.assertIn('System Halt', result)
         self.assertEqual([e['retrying'] for e in self.events if e['type'] == 'workflow_incomplete'], [True, True, False])
         self.assertEqual(len(self.engine.tool_context['command_sessions'].records), 1)
@@ -218,7 +219,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         async def stop(event):
             if event['type'] == 'workflow_incomplete':
                 self.engine.abort_event.set()
-        result = await self.engine._run_loop('Run the workflow.', selected_skills=['fixture-workflow'], sys_print_callback=lambda _: None, event_callback=stop)
+        result = (await self.engine._run_loop('Run the workflow.', selected_skills=['fixture-workflow'], sys_print_callback=lambda _: None, event_callback=stop)).text
         self.assertIn('Turn aborted', result)
         self.assertEqual(len(self.requests), 2)
 
@@ -304,7 +305,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         async def stop(event):
             if event['type'] == 'stream_status':
                 self.engine.abort_event.set()
-        result = await self.engine._run_loop('stop', sys_print_callback=lambda _:None, event_callback=stop)
+        result = (await self.engine._run_loop('stop', sys_print_callback=lambda _:None, event_callback=stop)).text
         self.assertIn('Turn aborted', result)
 
     async def test_reasoning_progress_is_not_idle_or_exposed_as_answer(self):

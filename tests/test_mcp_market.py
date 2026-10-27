@@ -165,10 +165,12 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(os.environ, {"CODECLAW_TEST_MODEL_SECRET": "must-not-inherit"}):
                 tools = await bridge.load_and_connect()
             self.assertEqual({name for name in tools if getattr(tools[name], "server_name", None) not in self.store.skill_servers()}, {"local_search", "remote_search"})
-            self.assertIn("SEARCH_FIXTURE_PROOF", await tools["local_search"](query="local"))
-            self.assertEqual(await tools["local_search"](query="__env__"), "absent:explicit-fixture")
-            self.assertEqual(await tools["remote_search"](query="__header__"), "Bearer fixture-secret")
-            self.assertTrue((await tools["remote_search"](query="fail")).startswith("MCP tool returned an error"))
+            self.assertIn("SEARCH_FIXTURE_PROOF", (await tools["local_search"](query="local"))["content"])
+            self.assertEqual((await tools["local_search"](query="__env__"))["content"], "absent:explicit-fixture")
+            self.assertEqual((await tools["remote_search"](query="__header__"))["content"], "Bearer fixture-secret")
+            failure = await tools["remote_search"](query="fail")
+            self.assertTrue(failure["is_error"])
+            self.assertFalse(failure["ok"])
             self.assertEqual(bridge.statuses["disabled"]["status"], "disabled")
         finally:
             await bridge.cleanup()

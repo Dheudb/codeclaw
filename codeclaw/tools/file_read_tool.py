@@ -20,6 +20,8 @@ class FileReadToolInput(BaseModel):
     offset: int = Field(None, description="The line number to start reading from (1-indexed). Negative values count from end.")
     limit: int = Field(None, description="The number of lines to read. Only provide if the file is too large to read at once.")
     pages: str = Field(None, description="Page range for PDFs (e.g. '1-5'). Only used for PDF files.")
+    char_offset: int = Field(None, ge=0, description="Zero-based character offset for paging long text lines or archived tool output. Do not combine with line offset/limit.")
+    char_limit: int = Field(3000, ge=1, le=4000, description="Maximum characters for a char_offset page.")
 
 class FileReadTool(BaseAgenticTool):
     name = "file_read_tool"
@@ -58,7 +60,7 @@ class FileReadTool(BaseAgenticTool):
             return True
         return False
     
-    async def execute(self, file_path: str, offset: int = None, limit: int = None, pages: str = None, **kwargs) -> Union[str, List[Dict[str, Any]]]:
+    async def execute(self, file_path: str, offset: int = None, limit: int = None, pages: str = None, char_offset: int = None, char_limit: int = 3000, **kwargs) -> Union[str, List[Dict[str, Any]]]:
         abs_path = os.path.abspath(file_path)
         cache = self._cache()
         tracker = self._artifact_tracker()
@@ -202,6 +204,22 @@ class FileReadTool(BaseAgenticTool):
 
         # 3. Text fallback
         try:
+            if char_offset is not None:
+                from codeclaw.context.tool_results import build_tool_result
+                if char_offset < 0 or not 1 <= char_limit <= 4000 or offset is not None or limit is not None:
+                    return build_tool_result(ok=False, is_error=True, content="Use char_offset >= 0 and char_limit from 1 to 4000 without line offset/limit.")
+                with open(abs_path, "r", encoding="utf-8", newline="") as file:
+                    remaining = char_offset
+                    while remaining:
+                        skipped = file.read(min(remaining, 65536))
+                        if not skipped:
+                            break
+                        remaining -= len(skipped)
+                    text = file.read(char_limit)
+                    more = bool(file.read(1))
+                return build_tool_result(ok=True, content=text, metadata={"path": abs_path, "char_offset": char_offset,
+                    "chars_returned": len(text), "next_char_offset": char_offset + len(text) if more else None,
+                    "truncated": more, "eof": not more})
             start_line = max(1, offset) if offset is not None else 1
             if limit is not None:
                 end_line = start_line + limit - 1

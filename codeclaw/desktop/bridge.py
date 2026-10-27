@@ -177,13 +177,13 @@ class DesktopBridge:
     def history(messages, traces=()):
         return conversation_history(messages, traces)
 
-    async def ask(self, kind, payload):
-        if kind in {"permission", "plan_approval"} and self.approval_policy.mode == "full":
+    async def ask(self, kind, payload, *, explicit=False):
+        if kind in {"permission", "plan_approval"} and self.approval_policy.mode == "full" and not explicit:
             return "allow"
         request_id = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
-        self.pending_kinds[request_id] = kind
+        self.pending_kinds[request_id] = "explicit_permission" if explicit else kind
         self.emit({"type": kind, "requestId": request_id, **payload})
         try:
             return await future
@@ -193,7 +193,8 @@ class DesktopBridge:
             self.emit({"type": "interaction_resolved", "requestId": request_id})
 
     async def permission(self, request):
-        return await self.ask("permission", {"request": dataclasses.asdict(request)})
+        return await self.ask("permission", {"request": dataclasses.asdict(request)},
+            explicit=bool(request.classifier_input.get("forced_prompt_reasons")))
 
     async def ensure_engine(self):
         if self.engine is not None:
@@ -291,8 +292,9 @@ class DesktopBridge:
             async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)}), selected_skills=selected_skills, **options):
                 if self.stop_requested and event.get("type") == "final":
                     continue
-                if event.get("type") == "final" and str(event.get("text", "")).startswith(("[bold red]API Loop Exception:", "[bold red]System Halt:")):
-                    self.emit({"type": "turn_error", "message": re.sub(r"\[/?bold red\]", "", event["text"])})
+                if event.get("type") == "final" and not event.get("result", {}).get("ok", False):
+                    receipt = event.get("result", {})
+                    self.emit({"type": "turn_error", "message": re.sub(r"\[/?bold red\]", "", event["text"]) + " (" + receipt.get("reason", "unknown") + ")", "result": receipt})
                     continue
                 self.emit(event)
             self.emit({"type": "sessions_changed", "sessions": self.sessions()})
@@ -313,7 +315,8 @@ class DesktopBridge:
             self.emit({"type": "turn_finished"})
             if self.engine:
                 self.engine.active_turn_trace = None
-                self.engine.persist_session_state()
+                if not self.engine.persist_session_state():
+                    self.emit({"type": "turn_error", "message": "本轮过程记录保存失败；请检查存储空间和权限。", "result": {"ok": False, "reason": "persistence_error"}})
             self.recorder = None
 
     async def dispatch(self, method, params):

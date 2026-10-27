@@ -1,5 +1,4 @@
 import os
-import time
 import uuid
 from typing import Any, Dict
 from codeclaw.core.storage import artifact_directory
@@ -28,6 +27,8 @@ def serialize_tool_result(
     spill_recorder=None,
 ) -> str:
     artifact_dir = artifact_dir if artifact_dir is not None else str(artifact_directory())
+    if isinstance(payload, str) and len(payload) > spill_threshold_chars:
+        payload = build_tool_result(ok=True, content=payload)
     if isinstance(payload, dict) and {"ok", "content", "metadata", "is_error"}.issubset(payload.keys()):
         content = str(payload.get("content", ""))
         metadata = dict(payload.get("metadata", {}) or {})
@@ -40,14 +41,16 @@ def serialize_tool_result(
                 file_path = os.path.abspath(
                     os.path.join(
                         artifact_dir,
-                        f"tool-result-{int(time.time())}-{uuid.uuid4().hex[:8]}.txt",
+                        f"tool-result-{uuid.uuid4().hex}.txt",
                     )
                 )
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(content)
+                from codeclaw.core.storage import atomic_text
+                atomic_text(file_path, content)
                 metadata["content_spilled"] = True
                 metadata["content_spilled_path"] = file_path
                 metadata["original_content_chars"] = len(content)
+                metadata["inline_preview_chars"] = min(800, len(content))
+                metadata["truncated"] = True
                 if callable(spill_recorder):
                     try:
                         spill_recorder(
@@ -61,10 +64,15 @@ def serialize_tool_result(
                 content = (
                     "Tool result was too large for inline context and has been written to disk.\n"
                     f"Reference path: {file_path}\n"
+                    "Read the complete result with file_read_tool using offset and limit for lines, or char_offset and char_limit for long single lines; this preview is not the full result.\n"
                     f"Preview:\n{preview}"
                 )
             except Exception as e:
                 metadata["content_spill_error"] = str(e)
+                metadata["truncated"] = False
+                ok = False
+                is_error = True
+                content = "Full result could not be archived; original content follows without truncation.\n" + content
 
         lines = [f"Status: {'ok' if ok else 'error'}"]
         if metadata:

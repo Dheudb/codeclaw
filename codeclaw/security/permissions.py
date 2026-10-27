@@ -82,7 +82,7 @@ class PermissionManager:
             "file_read_tool", "grep_tool", "glob_tool",
             "tool_search_tool", "web_search_tool", "web_fetch_tool",
             "agent_tool", "ask_user_question_tool", "lsp_tool",
-            "skill_tool", "repl_tool",
+            "skill_tool",
             "file_write_tool", "file_edit_tool",
         }
         self.denial_history = []
@@ -160,16 +160,14 @@ class PermissionManager:
         )
 
         plan_decision = self._plan_decision(request)
-        if plan_decision:
+        if plan_decision and plan_decision.behavior == "deny":
             return self._finalize_permission_decision(tool_name, plan_decision, request)
-        if self.approval_policy.mode == "full":
-            return self._finalize_permission_decision(tool_name, PermissionDecision(
-                "allow", "Full access selected for this conversation.", source="full_access"), request)
 
-        forced_prompt_reasons = []
+        forced_prompt_reasons = (["An interrupted operation has uncertain effects. Inspect existing state before approving a new mutation."]
+            if (context or {}).get("recovery_uncertain") and not is_read_only else [])
 
         rule_decision = self._evaluate_rule_layer(request)
-        if rule_decision:
+        if rule_decision and rule_decision.behavior != "allow":
             finalized_rule_decision = self._finalize_permission_decision(tool_name, rule_decision, request)
             if finalized_rule_decision.behavior == "ask":
                 forced_prompt_reasons.append(finalized_rule_decision.reason or "Permission rule requires approval.")
@@ -177,15 +175,15 @@ class PermissionManager:
                 return finalized_rule_decision
 
         tool_check_decision = await self._run_tool_permission_check(tool, request)
-        if tool_check_decision:
+        if tool_check_decision and tool_check_decision.behavior != "allow":
             finalized_tool_check = self._finalize_permission_decision(tool_name, tool_check_decision, request)
             if finalized_tool_check.behavior == "ask":
                 forced_prompt_reasons.append(finalized_tool_check.reason or "Tool-specific permission check requires approval.")
             else:
                 return finalized_tool_check
 
-        classifier_decision = self._run_auto_classifier(request)
-        if classifier_decision:
+        classifier_decision = self._run_auto_classifier(request) if self.approval_policy.mode != "full" else None
+        if classifier_decision and classifier_decision.behavior != "allow":
             finalized_classifier = self._finalize_permission_decision(tool_name, classifier_decision, request)
             if finalized_classifier.behavior == "ask":
                 forced_prompt_reasons.append(finalized_classifier.reason or "Automatic security classifier requested approval.")
@@ -200,7 +198,15 @@ class PermissionManager:
                 metadata={"denial_count": self.consecutive_denials.get(tool_name, 0)},
             ), request)
 
-        if is_read_only:
+        if not forced_prompt_reasons:
+            if self.approval_policy.mode == "full":
+                return self._finalize_permission_decision(tool_name, PermissionDecision(
+                    "allow", "Full access selected for this conversation.", source="full_access"), request)
+            for decision in (rule_decision, tool_check_decision, classifier_decision, plan_decision):
+                if decision and decision.behavior == "allow":
+                    return self._finalize_permission_decision(tool_name, decision, request)
+
+        if is_read_only and not forced_prompt_reasons:
             return self._finalize_permission_decision(tool_name, PermissionDecision(
                 "allow",
                 "Read-only tool auto-approved.",
@@ -349,63 +355,24 @@ class PermissionManager:
         config = self._load_config()
         tool_name = request.tool_name
 
-        if tool_name in self.always_deny_tools:
-            return PermissionDecision(
-                "deny",
-                "Session deny rule matched.",
-                source="session_rule",
-            )
-        if tool_name in self.always_allow_tools:
-            return PermissionDecision(
-                "allow",
-                "Session allow rule matched.",
-                source="session_rule",
-            )
-        if tool_name in self.always_ask_tools:
-            return PermissionDecision(
-                "ask",
-                "Session ask rule matched.",
-                source="session_rule",
-            )
-
-        config_shortcuts = [
-            ("alwaysDeny", "deny"),
-            ("alwaysAllow", "allow"),
-            ("alwaysAsk", "ask"),
-        ]
-        for config_key, behavior in config_shortcuts:
-            matched = self._match_behavior_entries(
-                config.get(config_key, []) or [],
-                request,
-                behavior=behavior,
-                config_key=config_key,
-            )
-            if matched:
-                return matched
-
+        decisions = []
+        for names, behavior in ((self.always_deny_tools, "deny"), (self.always_ask_tools, "ask"), (self.always_allow_tools, "allow")):
+            if tool_name in names:
+                decisions.append(PermissionDecision(behavior, "Session " + behavior + " rule matched.", source="session_rule"))
+        for key, behavior in (("alwaysDeny", "deny"), ("alwaysAsk", "ask"), ("alwaysAllow", "allow")):
+            decision = self._match_behavior_entries(config.get(key, []) or [], request, behavior=behavior, config_key=key)
+            if decision:
+                decisions.append(decision)
+        aliases = {"allow": "allow", "approve": "allow", "accept": "allow", "ask": "ask", "prompt": "ask",
+                   "deny": "deny", "block": "deny", "reject": "deny"}
         for rule in config.get("rules", []) or []:
             if not isinstance(rule, dict) or not self._rule_matches(rule, request):
                 continue
-            behavior = str(rule.get("behavior", rule.get("action", "ask"))).strip().lower()
-            normalized_behavior = {
-                "allow": "allow",
-                "approve": "allow",
-                "accept": "allow",
-                "ask": "ask",
-                "prompt": "ask",
-                "deny": "deny",
-                "block": "deny",
-                "reject": "deny",
-            }.get(behavior)
-            if not normalized_behavior:
-                continue
-            return PermissionDecision(
-                normalized_behavior,
-                str(rule.get("reason", f"Permission rule matched for {request.tool_name}.")),
-                source="config_rule",
-                metadata={"rule": copy.deepcopy(rule)},
-            )
-        return None
+            behavior = aliases.get(str(rule.get("behavior", rule.get("action", "ask"))).strip().lower())
+            if behavior:
+                decisions.append(PermissionDecision(behavior, str(rule.get("reason", "Permission rule matched.")),
+                    source="config_rule", metadata={"rule": copy.deepcopy(rule)}))
+        return min(decisions, key=lambda d: {"deny": 0, "ask": 1, "allow": 2}[d.behavior]) if decisions else None
 
     def _rule_matches(self, rule: Dict[str, Any], request: PermissionRequest) -> bool:
         tools = set(str(item) for item in (rule.get("tools") or []))

@@ -798,6 +798,9 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                             await prompt_auto_commit(event.get("proposal") or {})
                     elif event_type == "final":
                         final_answer = event.get("text", "")
+                        receipt = event.get("result", {})
+                        if not receipt.get("ok", False):
+                            final_answer += "\n[Execution ended: " + receipt.get("reason", "unknown") + "]"
             except (KeyboardInterrupt, asyncio.CancelledError):
                 last_interrupt_time = 0
                 try:

@@ -37,21 +37,28 @@ class PromptEditTests(unittest.TestCase):
             with self.assertRaises(OSError): replace_latest_turn(engine, "u1")
             self.assertEqual(engine.messages, messages[:2])
 
-    def test_model_metadata_is_not_a_claim_of_verified_backend_identity(self):
+    def test_model_configuration_is_not_injected_into_identity_prompt(self):
         builder = ContextBuilder()
         with patch.object(builder, "_load_project_instructions", return_value=""), patch.object(builder, "get_git_state", return_value={}):
-            prompt = builder.generate_system_prompt(model_name="gateway-model-alias")
-        self.assertIn("Configured request model ID: gateway-model-alias", prompt)
-        self.assertIn("does not verify the actual backend model", prompt)
+            for model in ("gateway-model-alias", "deepseek-v4.1-flash", "claude-sonnet-4-6", ""):
+                with self.subTest(model=model):
+                    prompt = builder.generate_system_prompt(model_name=model)
+                    if model:
+                        self.assertNotIn(model, prompt)
+                    self.assertNotIn("Configured request model ID:", prompt)
+                    self.assertNotIn("Assistant knowledge cutoff is", prompt)
+                    self.assertIn("introduce yourself as CodeClaw", prompt)
+                    self.assertIn("does not disclose its backend model configuration", prompt)
+                    self.assertIn("Do not inspect configuration files", prompt)
         self.assertNotIn("Claude", prompt)
         self.assertNotIn("CLAUDE", prompt)
 
-    def test_native_anthropic_cache_preserves_exact_model_and_role_addons(self):
+    def test_native_anthropic_cache_preserves_environment_and_role_addons(self):
         engine = QueryEngine.__new__(QueryEngine)
         engine.model_provider = "anthropic"
         engine.api_base_url = "https://api.anthropic.com"
         engine.context_builder = ContextBuilder()
-        prompt = "static instructions\n\n# Environment\nConfigured request model ID: fallback-id\n\n# Assigned role\nROLE_PROOF"
+        prompt = "static instructions\n\n# Environment\nPrimary working directory: /workspace\n\n# Assigned role\nROLE_PROOF"
         blocks = engine._build_cached_system_blocks(prompt)
         self.assertEqual("\n\n".join(block["text"] for block in blocks), prompt)
         self.assertIn("cache_control", blocks[0])

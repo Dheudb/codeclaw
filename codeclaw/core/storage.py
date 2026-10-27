@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -28,12 +29,26 @@ def history_root(cwd=None):
 
 
 def atomic_json(path, payload):
+    atomic_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def atomic_text(path, text):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".migration-", suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, ensure_ascii=False, indent=2)
-        os.replace(temporary, path)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        for attempt in range(6):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError as error:
+                # Windows readers/scanners can briefly hold a destination without delete sharing.
+                if os.name != "nt" or getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                    raise
+                time.sleep(0.02 * (2 ** attempt))
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
 

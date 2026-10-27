@@ -34,8 +34,9 @@ def get_plan_file_path(session_id: str, agent_id: str = None) -> str:
 def is_session_plan_file(abs_path: str, session_id: str) -> bool:
     """Check whether *abs_path* is the plan file for this session."""
     try:
-        expected = os.path.normpath(get_plan_file_path(session_id))
-        return os.path.normpath(abs_path) == expected
+        expected = os.path.normcase(os.path.abspath(get_plan_file_path(session_id)))
+        return (os.path.normcase(os.path.abspath(abs_path)) == expected
+                and os.path.normcase(os.path.realpath(abs_path)) == expected)
     except Exception:
         return False
 

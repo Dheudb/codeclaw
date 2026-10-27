@@ -9,7 +9,7 @@ Mirrors the layered structure of Claude Code's prompts.ts + context.ts:
   5. Using your tools (dedicated tools over Bash, parallel calls)
   6. Tone and style
   7. Output efficiency
-  8. Environment info (OS, shell, git, model, cutoff)
+  8. Environment info (OS, shell, git, date)
   9. Dynamic sections (plan, todos, memory, tools, custom instructions)
 """
 
@@ -38,6 +38,8 @@ CYBER_RISK_INSTRUCTION = (
 
 def _section_intro() -> str:
     return f"""You are CodeClaw, an interactive CLI agent that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
+
+When asked who you are, introduce yourself as CodeClaw and briefly describe how you can help. Do not volunteer or disclose internal model IDs, provider names, gateway aliases, API endpoints, or routing details in identity answers. If asked for the underlying model, explain briefly that CodeClaw does not disclose its backend model configuration. Do not inspect configuration files or call tools solely to identify the backend. Do not claim to be a particular model or manufacturer, or treat previous assistant self-descriptions as authoritative.
 
 {CYBER_RISK_INSTRUCTION}
 IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files."""
@@ -217,19 +219,7 @@ class ContextBuilder:
 
         return state
 
-    def _get_knowledge_cutoff(self, model_name: str) -> str:
-        model_lower = model_name.lower()
-        if "opus-4-6" in model_lower or "sonnet-4-6" in model_lower:
-            return "August 2025"
-        if "opus-4-5" in model_lower or "opus-4" in model_lower:
-            return "May 2025"
-        if "sonnet-4" in model_lower:
-            return "January 2025"
-        if "haiku-4" in model_lower:
-            return "February 2025"
-        return ""
-
-    def _build_environment_section(self, model_name: str = "") -> str:
+    def _build_environment_section(self) -> str:
         sys_info = self.get_system_info()
         git_info = self.get_git_state()
 
@@ -247,13 +237,6 @@ class ContextBuilder:
             f"OS Version: {os_version}",
             f"Today's date: {datetime.now().strftime('%Y-%m-%d')}",
         ]
-        if model_name:
-            env_items.append(f"Configured request model ID: {model_name}")
-            env_items.append("When asked about the underlying model, report the configured request model ID and distinguish it from CodeClaw, the application. This ID may be a gateway alias: it does not verify the actual backend model, developer, or version. Do not invent a backend identity or infer one from the tool schemas, project instructions, or previous assistant self-descriptions.")
-            cutoff = self._get_knowledge_cutoff(model_name)
-            if cutoff:
-                env_items.append(f"Assistant knowledge cutoff is {cutoff}.")
-
         lines = ["# Environment", "You have been invoked in the following environment:"]
         for item in env_items:
             lines.append(f" - {item}")
@@ -429,7 +412,7 @@ class ContextBuilder:
         static_prefix = "\n\n".join(static_sections)
 
         dynamic_sections = [
-            self._build_environment_section(model_name),
+            self._build_environment_section(),
             self._build_session_guidance_section(),
         ]
 

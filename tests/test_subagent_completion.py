@@ -65,7 +65,9 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(task.done())
         self.assertEqual(len(self.requests), 1, "Waiting must not spend model turns or relaunch workers")
         slow.set()
-        self.assertEqual(await asyncio.wait_for(task, 10), "ALL_RESULTS_SUMMARY")
+        result = await asyncio.wait_for(task, 10)
+        self.assertEqual(result.text, "ALL_RESULTS_SUMMARY")
+        self.assertTrue(result.ok)
         request = json.dumps(self.requests[-1]["api_messages"])
         for text in ["FAST_OUTPUT", "SLOW_OUTPUT", "crashed", "Delegation completion guard"]:
             self.assertIn(text, request)
@@ -83,7 +85,7 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
             return await original(**request)
         self.engine._stream_model_response = stream
         result = await self.engine._run_loop("Summarize", sys_print_callback=lambda _: None)
-        self.assertEqual(result, "ALL_RESULTS_SUMMARY")
+        self.assertEqual(result.text, "ALL_RESULTS_SUMMARY")
         self.assertIn("RACE_OUTPUT", json.dumps(self.requests[1]["api_messages"]))
         self.assertEqual(len(self.requests), 2)
 
@@ -92,7 +94,7 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
         self.workers.launch("DONE", self.job("DONE", gate))
         await self.workers.tasks["DONE"]
         result = await self.engine._run_loop("Summarize", sys_print_callback=lambda _: None)
-        self.assertEqual(result, "PROVISIONAL")
+        self.assertEqual(result.text, "PROVISIONAL")
         self.assertEqual(len(self.requests), 1)
         self.assertIn("DONE_OUTPUT", json.dumps(self.requests[0]["api_messages"]))
 
@@ -103,15 +105,17 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
             if event["type"] == "subagents_waiting" and event["count"]:
                 self.engine.abort_event.set()
         result = await self.engine._run_loop("Summarize", sys_print_callback=lambda _: None, event_callback=emit)
-        self.assertIn("Turn aborted", result)
-        self.assertNotIn("ALL_RESULTS_SUMMARY", result)
+        self.assertIn("Turn aborted", result.text)
+        self.assertNotIn("ALL_RESULTS_SUMMARY", result.text)
         self.assertEqual(len(self.requests), 1)
 
     async def test_empty_worker_output_is_a_failure_with_a_retained_transcript(self):
-        with patch.object(QueryEngine, "run", AsyncMock(return_value="   ")):
+        from codeclaw.core.run_result import RunResult
+        with patch.object(QueryEngine, "run", AsyncMock(return_value=RunResult("   ", "completed", True))):
             receipt = json.loads(await self.engine.available_tools["agent_tool"].execute(prompt="fixture", response_format="json"))
         row = receipt["agents"][0]
         self.assertEqual(row["status"], "crashed")
-        self.assertIn("without a textual result", row["result"])
+        self.assertEqual(row["receipt"]["reason"], "empty_result")
+        self.assertFalse(row["receipt"]["ok"])
         saved = json.loads(Path(self.engine.session_manager.get_subagent_transcript_path(row["agent_id"])).read_text(encoding="utf-8"))
         self.assertEqual(saved["status"], "crashed")

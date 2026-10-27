@@ -29,7 +29,7 @@ const server = http.createServer((req, res) => {
       if (mainRequests === 2) return reply(res, "PREMATURE_FINAL");
       assert.equal(mainRequests, 3, "Waiting must not loop through model requests");
       const history = JSON.stringify(body.messages);
-      for (const expected of ["OUTPUT_FIRST", "OUTPUT_SECOND", "crashed", "without a textual result", "Delegation completion guard"]) assert(history.includes(expected), expected);
+      for (const expected of ["OUTPUT_FIRST", "OUTPUT_SECOND", "crashed", "empty_result", "Delegation completion guard"]) assert(history.includes(expected), expected);
       return reply(res, "SUMMARY_WITH_2_RESULTS_AND_1_FAILURE");
     } catch (error) { failures.push(error.stack); res.writeHead(500).end("fixture failed"); }
   });

@@ -156,10 +156,12 @@ class UltraplanManager:
 
         prompt = self._build_prompt(description, seed_plan)
         result = await sub_engine.run(prompt)
+        if not result.ok:
+            raise RuntimeError("Planning execution failed: " + result.reason + ": " + result.text)
         plan_content = sub_engine.plan_manager.get_plan()
         if plan_content:
             return plan_content
-        return result or ""
+        return result.text
 
     def _build_prompt(self, description: str, seed_plan: str = "") -> str:
         parts = [ULTRAPLAN_INSTRUCTIONS]

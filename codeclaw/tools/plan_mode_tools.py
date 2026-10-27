@@ -127,6 +127,8 @@ Ensure your plan is complete and unambiguous:
             )
 
         approval = self.context.get("plan_approval_callback")
+        if not approval:
+            return "Plan approval is required to leave plan mode, but no approval handler is configured. Stay in plan mode."
         if approval:
             import inspect
             answer = approval(plan_content)

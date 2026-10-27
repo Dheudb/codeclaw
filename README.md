@@ -21,9 +21,9 @@ CodeClaw 围绕本地项目提供模型对话、文件与命令工具、Skills�
 
 ## 桌面版
 
-[**下载 Windows x64 便携版**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.1) · [所有版本](https://github.com/Dheudb/codeclaw/releases)
+[**下载 Windows x64 便携版**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.2) · [所有版本](https://github.com/Dheudb/codeclaw/releases)
 
-在 Release 的 Assets 中下载 `CodeClaw-v0.1.0-beta.1-windows-x64.zip`，完整解压后运行 `CodeClaw.exe`。
+在 Release 的 Assets 中下载 `CodeClaw-v0.1.0-beta.2-windows-x64.zip`，完整解压后运行 `CodeClaw.exe`。
 请下载成品 ZIP；GitHub 自动提供的 Source code 是源码。程序依赖同目录的 `resources`，不能只复制 EXE。
 Windows 便携包内置 Python 运行时和 MCP 依赖。
 **使用便携包不需要安装 Python、Node.js，也不需要选择解释器。**

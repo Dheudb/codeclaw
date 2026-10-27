@@ -88,8 +88,10 @@ class AgentLifecycle:
                 await tasks.cancel(agent_id)
             if self.context.get("command_sessions"):
                 await self.context["command_sessions"].close(owner=agent_id)
-            await self._write_subagent_registry_record({"agent_id": agent_id, "status": "cancelled", "finished_at": int(time.time() * 1000)})
-            return encode({"agent_id": agent_id, "status": "cancelled", "executing": False})
+            current = self._worker(agent_id)
+            if current.get("status") not in {"cancelled", "completed", "crashed", "closed"}:
+                await self._write_subagent_registry_record({"agent_id": agent_id, "status": "cancelled", "finished_at": int(time.time() * 1000)})
+            return encode({"agent_id": agent_id, "status": self._worker(agent_id)["status"], "executing": False})
         if action == "close":
             if running:
                 raise ValueError("Cannot close a running worker; cancel or wait first")

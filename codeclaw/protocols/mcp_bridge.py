@@ -11,6 +11,7 @@ import ipaddress
 import httpx
 
 from codeclaw.protocols.mcp_config import MCPConfigStore, validate_server
+from codeclaw.context.tool_results import build_tool_result
 
 try:
     from mcp import ClientSession, StdioServerParameters
@@ -66,13 +67,21 @@ class MCPToolWrapper:
     async def __call__(self, **kwargs):
         try:
             result = await self.session.call_tool(self.mcp_tool_name, arguments=kwargs)
-            blocks = [c.text if getattr(c, "type", "") == "text" else "[" + str(c.type) + " block omitted]" for c in result.content]
-            if getattr(result, "structuredContent", None) and not blocks:
-                blocks.append(json.dumps(result.structuredContent, ensure_ascii=False))
-            text = "\n".join(blocks)[:100000]
-            return ("MCP tool returned an error:\n" if getattr(result, "isError", False) else "") + text
+            blocks = []
+            for block in result.content:
+                if getattr(block, "type", "") == "text":
+                    blocks.append(block.text)
+                else:
+                    raw = block.model_dump(mode="json", by_alias=True) if hasattr(block, "model_dump") else vars(block)
+                    blocks.append(json.dumps(raw, ensure_ascii=False))
+            structured = getattr(result, "structuredContent", None)
+            if structured is not None:
+                blocks.append("Structured content:\n" + json.dumps(structured, ensure_ascii=False))
+            error = bool(getattr(result, "isError", False))
+            return build_tool_result(ok=not error, is_error=error, content="\n".join(blocks),
+                metadata={"server": self.server_name, "tool": self.mcp_tool_name, "content_blocks": len(result.content)})
         except Exception as exc:
-            return connection_error(exc)
+            return build_tool_result(ok=False, is_error=True, content=connection_error(exc), metadata={"server": self.server_name})
 
 
 class MCPBridge:

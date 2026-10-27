@@ -79,7 +79,9 @@ async function main() {
     assert.equal(await mode().locator("option").count(), 2);
     await send("PERM_WRITE:pending.txt"); await page.getByRole("button", { name: "允许一次", exact: true }).waitFor();
     assert(!fs.existsSync(path.join(project, "pending.txt")));
-    await setMode("full"); await finished();
+    await setMode("full");
+    await page.getByText("权限任务完成：PERM_WRITE:pending.txt", { exact: true }).last().waitFor();
+    await finished();
     assert.equal(fs.readFileSync(path.join(project, "pending.txt"), "utf8"), "permission-proof");
     assert.equal(await page.locator(".interaction").count(), 0);
     await page.getByRole("textbox", { name: "任务输入" }).fill("未发送草稿");
@@ -126,6 +128,12 @@ async function main() {
     assert.deepEqual(errors, []);
     assert(!(await page.evaluate(() => window.textEvents.join(""))).includes("DSML"), "Protocol markup must not leak into chat");
     console.log("Permission E2E passed: two modes, pending approval release, full file/shell/subagent execution, revoked grants, per-session isolation, restart and fail-closed transport recovery");
+  } catch (error) {
+    if (page) {
+      console.error("Permission fixture state:", await page.locator("body").innerText().catch(() => ""));
+      console.error("Permission fixture requests:", await page.evaluate(() => window.permissionEvents).catch(() => []));
+    }
+    throw error;
   } finally { if (app) await app.close().catch(() => {}); server.closeAllConnections(); server.close(); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

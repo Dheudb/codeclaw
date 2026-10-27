@@ -8,8 +8,11 @@ class SubagentTasks:
         self.tasks = {}
         self.results = {}
         self.delivered = set()
+        self._closing = False
 
     def check_capacity(self, count):
+        if self._closing:
+            raise ValueError("Subagent task owner is closing; new tasks are not accepted")
         if sum(not task.done() for task in self.tasks.values()) + count > self.limit:
             raise ValueError("At most {} subagents may run at once".format(self.limit))
 
@@ -71,9 +74,14 @@ class SubagentTasks:
         return self.results.get(agent_id, {"agent_id": agent_id, "status": "cancelled"})
 
     async def close(self):
-        for task in self.tasks.values():
-            task.cancel()
-        await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+        self._closing = True
+        try:
+            tasks = list(self.tasks.values())
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            self._closing = False
 
     def completed(self):
         results = [r for key, r in self.results.items() if key not in self.delivered]

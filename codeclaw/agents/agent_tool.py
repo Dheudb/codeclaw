@@ -273,11 +273,13 @@ Terse command-style prompts produce shallow, generic work."""
 
         lock = self.context.get("subagent_state_lock")
         if lock is None:
-            registry_writer(record)
+            if registry_writer(record) is False:
+                raise OSError("Could not persist subagent registry")
             return
 
         async with lock:
-            registry_writer(record)
+            if registry_writer(record) is False:
+                raise OSError("Could not persist subagent registry")
 
     async def _run_single_subagent(
         self,
@@ -396,8 +398,10 @@ Terse command-style prompts produce shallow, generic work."""
                 json.dumps(self._filter_incomplete_tool_messages(self.context.get("messages", [])), ensure_ascii=False)
             )
         if resume_state:
-            sub_engine.messages = copy.deepcopy(self._filter_incomplete_tool_messages(resume_state["messages"]))
+            sub_engine.messages = copy.deepcopy(resume_state["messages"])
             metadata = resume_state.get("metadata", {})
+            from codeclaw.core.tool_execution import restore_tool_activity
+            restore_tool_activity(sub_engine, metadata)
             sub_engine.tool_context["file_changes"] = metadata.get("file_changes", [])
             sub_engine.turn_traces = metadata.get("turn_traces", [])
             sub_engine.todo_manager.load(metadata.get("todos", []))
@@ -414,6 +418,7 @@ Terse command-style prompts produce shallow, generic work."""
         sub_engine.tool_context["delegation"]["system_prompt"] = sub_engine.tool_context["agent_system_prompt"]
         user_input_text = task
         completed = False
+        registry_record = {"agent_id": child_agent_id}
 
         try:
             session_manager = self.context.get("session_manager")
@@ -437,7 +442,7 @@ Terse command-style prompts produce shallow, generic work."""
             }
             await self._write_subagent_registry_record(registry_record)
             if session_manager:
-                session_manager.save_subagent_transcript(child_agent_id, {
+                saved = session_manager.save_subagent_transcript(child_agent_id, {
                     "agent_id": child_agent_id,
                     "parent_agent_id": parent_agent_id,
                     "agent_depth": parent_depth + 1,
@@ -449,48 +454,41 @@ Terse command-style prompts produce shallow, generic work."""
                     "messages": sub_engine.messages,
                     "metadata": sub_engine._build_session_metadata(),
                 })
+                if not saved:
+                    raise OSError("Could not persist initial subagent transcript; model was not started")
 
             res = await sub_engine.run(
                 user_input=user_input_text,
                 sys_print_callback=lambda x: None
             )
-            if str(res).startswith(("[bold red]API Loop Exception:", "[bold red]System Halt:")):
-                raise RuntimeError(res)
-            if not str(res or "").strip():
-                raise RuntimeError("Subagent ended without a textual result. Existing tool operations are retained; inspect its transcript before retrying.")
+            from codeclaw.core.run_result import RunResult
+            if not isinstance(res, RunResult):
+                raise TypeError("Engine returned no structured execution receipt")
+            receipt = res.to_dict()
+            if res.ok and not res.text.strip():
+                receipt.update(status="crashed", ok=False, reason="empty_result")
             if session_manager:
-                session_manager.save_subagent_transcript(child_agent_id, {
-                    "agent_id": child_agent_id,
-                    "parent_agent_id": parent_agent_id,
-                    "agent_depth": parent_depth + 1,
-                    "agent_role": effective_role,
-                    "task": task,
-                    "allowed_tools": allowed_tools,
-                    "inherit_context": inherit_context,
-                    "status": "completed",
-                    "transcript_path": transcript_path,
-                    "messages": sub_engine.messages,
-                    "metadata": sub_engine._build_session_metadata(),
-                    "result": res,
+                saved = session_manager.save_subagent_transcript(child_agent_id, {
+                    "agent_id": child_agent_id, "parent_agent_id": parent_agent_id,
+                    "agent_depth": parent_depth + 1, "agent_role": effective_role,
+                    "session_id": self.context.get("session_id"),
+                    "task": task, "allowed_tools": allowed_tools, "inherit_context": inherit_context,
+                    "status": receipt["status"], "transcript_path": transcript_path,
+                    "messages": sub_engine.messages, "metadata": sub_engine._build_session_metadata(),
+                    "result": res.text, "receipt": receipt,
                 })
-            await self._write_subagent_registry_record({
-                **registry_record,
-                "status": "completed",
-                "result": res,
-                "finished_at": int(time.time() * 1000),
-            })
-            completed = True
-            return {
-                "task": task,
-                "agent_id": child_agent_id,
-                "agent_role": effective_role,
-                "status": "completed",
-                "result": res,
-            }
+                if not saved:
+                    receipt.update(status="crashed", ok=False, persisted=False, reason="persistence_error")
+            payload = {"task": task, "agent_id": child_agent_id, "agent_role": effective_role,
+                       "status": receipt["status"], "result": res.text, "receipt": receipt}
+            await self._write_subagent_registry_record({**registry_record, **payload, "finished_at": int(time.time() * 1000)})
+            completed = receipt["ok"]
+            return payload
         except asyncio.CancelledError:
             await self._write_subagent_registry_record({"agent_id": child_agent_id, "status": "cancelled", "finished_at": int(time.time() * 1000)})
             raise
         except Exception as e:
+            receipt = {"status": "crashed", "ok": False, "persisted": False, "reason": "persistence_error" if isinstance(e, OSError) else "execution_error"}
             session_manager = self.context.get("session_manager")
             if session_manager:
                 session_manager.save_subagent_transcript(child_agent_id, {
@@ -509,6 +507,7 @@ Terse command-style prompts produce shallow, generic work."""
             await self._write_subagent_registry_record({
                 **registry_record,
                 "status": "crashed",
+                "receipt": receipt,
                 "result": str(e),
                 "finished_at": int(time.time() * 1000),
             })
@@ -517,6 +516,7 @@ Terse command-style prompts produce shallow, generic work."""
                 "agent_id": child_agent_id,
                 "agent_role": effective_role,
                 "status": "crashed",
+                "receipt": receipt,
                 "result": f"Exception Fault: Sub-Agent terminal crash: {e}",
             }
         finally:
@@ -609,100 +609,6 @@ Terse command-style prompts produce shallow, generic work."""
             "====================================",
         ]
         return "\n".join(lines)
-
-    async def _run_fork_subagent(
-        self,
-        task: str,
-        allowed_tools: List[str],
-        parent_depth: int,
-        parent_agent_id: str,
-    ) -> dict:
-        """
-        Fork mode: child inherits the full parent context (messages, system prompt,
-        plans, todos) and shares the prompt cache prefix for token efficiency.
-        """
-        from codeclaw.core.engine import QueryEngine
-
-        child_agent_id = f"fork-{uuid.uuid4()}"
-        sub_engine = QueryEngine(
-            model=self.context.get("primary_model"),
-            fallback_model=self.context.get("fallback_model"),
-            permission_handler=self.context.get("permission_handler"),
-            agent_id=child_agent_id,
-            parent_agent_id=parent_agent_id,
-            agent_depth=parent_depth + 1,
-            agent_role="fork",
-            model_provider=self.context.get("model_provider"),
-            api_base_url=self.context.get("api_base_url"),
-            local_tokenizer_path=self.context.get("local_tokenizer_path"),
-        )
-        self._configure_subagent_permissions(sub_engine)
-
-        if self.context.get("plan_manager"):
-            sub_engine.plan_manager = copy.deepcopy(self.context.get("plan_manager"))
-            sub_engine.tool_context["plan_manager"] = sub_engine.plan_manager
-            sub_engine.permission_manager.set_mode_getter(sub_engine.plan_manager.get_mode)
-        if self.context.get("todo_manager"):
-            sub_engine.todo_manager = copy.deepcopy(self.context.get("todo_manager"))
-            sub_engine.tool_context["todo_manager"] = sub_engine.todo_manager
-
-        self._share_runtime_managers(sub_engine)
-
-        parent_tools = self.context.get("engine_available_tools")
-        if parent_tools:
-            sub_engine.available_tools = self._filter_tools(parent_tools, allowed_tools)
-            sub_engine.tool_context["engine_available_tools"] = sub_engine.available_tools
-            for tool in sub_engine.available_tools.values():
-                tool.context = sub_engine.tool_context
-
-        parent_messages = self._filter_incomplete_tool_messages(
-            self.context.get("messages", [])
-        )
-        sub_engine.messages = copy.deepcopy(parent_messages)
-
-        parent_context_builder = self.context.get("context_builder")
-        if parent_context_builder is not None:
-            sub_engine.context_builder = parent_context_builder
-
-        sub_engine._sync_message_context()
-
-        registry_record = {
-            "agent_id": child_agent_id,
-            "parent_agent_id": parent_agent_id,
-            "agent_depth": parent_depth + 1,
-            "agent_role": "fork",
-            "status": "running",
-            "task": task[:240] + ("..." if len(task) > 240 else ""),
-        }
-        await self._write_subagent_registry_record(registry_record)
-
-        try:
-            res = await sub_engine.run(
-                user_input=(
-                    "[SYSTEM: Fork mode active — you have the parent agent's full context. "
-                    "Complete the task below and report findings concisely.]\n\n"
-                    f"Task:\n{task}"
-                ),
-                sys_print_callback=lambda x: None,
-            )
-            self._merge_state_back_to_parent(sub_engine)
-            await self._write_subagent_registry_record({**registry_record, "status": "completed"})
-            return {
-                "task": task,
-                "agent_id": child_agent_id,
-                "agent_role": "fork",
-                "status": "completed",
-                "result": res,
-            }
-        except Exception as e:
-            await self._write_subagent_registry_record({**registry_record, "status": "crashed"})
-            return {
-                "task": task,
-                "agent_id": child_agent_id,
-                "agent_role": "fork",
-                "status": "crashed",
-                "result": f"Fork agent crash: {e}",
-            }
 
     async def execute(
         self,
@@ -845,8 +751,9 @@ Terse command-style prompts produce shallow, generic work."""
             async with self.context["subagent_execution_semaphore"]:
                 payload = await self._run_single_subagent(**kwargs)
         except asyncio.CancelledError:
-            await self._write_subagent_registry_record({"agent_id": record["agent_id"],
-                "status": "cancelled", "finished_at": int(time.time() * 1000)})
+            if self._worker(record["agent_id"]).get("status") != "cancelled":
+                await self._write_subagent_registry_record({"agent_id": record["agent_id"],
+                    "status": "cancelled", "finished_at": int(time.time() * 1000)})
             raise
         except Exception as exc:
             payload = {"agent_id": record["agent_id"], "agent_role": record["agent_role"],

@@ -1,3 +1,4 @@
+from codeclaw.core.run_result import RunResult
 import asyncio
 import os
 import tempfile
@@ -280,7 +281,7 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                     child_tools.append(set(child.available_tools))
                     child_teams.append(child.team_manager)
                     await gate.wait()
-                    return "review complete"
+                    return RunResult("review complete", "completed", True)
                 with patch.object(QueryEngine, "run", child_run):
                     response = await tool.execute(prompt="Review", subagent_type="explore", model="override-model", run_in_background=True)
                     self.assertIn("Background subagent started", response)
@@ -307,7 +308,7 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                     role = child.tool_context["agent_system_prompt"]
                     self.assertEqual("PARENT_ONLY" in role, expected_reference)
                     self.assertNotIn("agent_tool", child.available_tools)
-                    return "你好"
+                    return RunResult("你好", "completed", True)
                 with patch.object(QueryEngine, "run", independent_run):
                     for expected_reference in [False, True]:
                         await tool.execute(prompt="你好", subagent_type="general-purpose", inherit_context=expected_reference)

@@ -2,7 +2,6 @@ import os
 import json
 import shutil
 import time
-import tempfile
 from codeclaw.core.storage import session_directory
 
 class SessionManager:
@@ -45,17 +44,8 @@ class SessionManager:
         return repr(value)
 
     def _write_json_atomic(self, path: str, payload: dict):
-        parent = os.path.dirname(path)
-        os.makedirs(parent, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(prefix=".session-", suffix=".tmp", dir=parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-            os.replace(temp_path, path)
-        except Exception:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-            raise
+        from codeclaw.core.storage import atomic_json
+        atomic_json(path, payload)
         
     def save_session_state(self, session_id: str, messages: list, metadata: dict = None):
         path = os.path.join(self.session_dir, f"{session_id}.json")

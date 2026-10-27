@@ -162,7 +162,7 @@ async def run_verification_agent(
             user_input=task_prompt,
             sys_print_callback=sys_print_callback,
         )
-        return str(result) if result else None
+        return result.text if result.ok else "[Verification execution failed: " + result.reason + "]\n" + result.text
 
     except Exception as e:
         err_str = str(e)

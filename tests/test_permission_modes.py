@@ -20,14 +20,14 @@ class PermissionModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await manager.authorize(SimpleNamespace(name="read", is_read_only=True), {})).source, "read_only")
         approve.assert_awaited_once()
 
-    async def test_full_access_bypasses_permission_prompts_and_remembered_denials(self):
+    async def test_full_access_preserves_explicit_denials(self):
         approve = AsyncMock(side_effect=AssertionError("No approval in full mode"))
         manager = self.manager(approve, ApprovalPolicy("full"))
         manager.always_deny_tools.add("write")
         result = await manager.authorize(SimpleNamespace(name="write", is_read_only=False,
             check_permissions=lambda _: {"behavior": "ask"}), {})
-        self.assertEqual(result.behavior, "allow")
-        self.assertEqual(result.source, "full_access")
+        self.assertEqual(result.behavior, "deny")
+        self.assertEqual(result.source, "session_rule")
         approve.assert_not_called()
 
     async def test_shared_policy_revokes_parent_and_child_remembered_grants(self):

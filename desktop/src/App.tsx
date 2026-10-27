@@ -652,7 +652,7 @@ export default function App() {
                   <option value="plan">Plan</option>
                 </select>
                 <select className={"permission-picker " + (active?.permissionMode === "full" ? "full-access" : "")} aria-label="访问权限"
-                  title={active?.permissionMode === "full" ? "本会话的主代理和子代理执行工具时无需批准" : "文件修改、命令和需要审批的外部工具会请求批准"}
+                  title={active?.permissionMode === "full" ? "默认自动执行；显式权限规则、Plan 限制和中断恢复确认仍然生效" : "文件修改、命令和需要审批的外部工具会请求批准"}
                   disabled={opening || !active || permissionChanging} value={active?.permissionMode || "ask"}
                   onChange={(event) => void setPermissionMode(event.target.value as PermissionMode)}>
                   <option value="ask">请求批准</option><option value="full">完全访问</option>
@@ -704,7 +704,7 @@ export default function App() {
           <div className="composer-caption">
             <span>
               <ShieldCheck size={12} />
-              {active?.permissionMode === "full" ? "完全访问：工具执行无需批准" : "请求批准：需要审批的工具会先确认"}
+              {active?.permissionMode === "full" ? "完全访问：默认自动执行，遵守显式权限规则" : "请求批准：需要审批的工具会先确认"}
             </span>
             <span>
               {enabledSkills.length} Skills 可用 ·{" "}

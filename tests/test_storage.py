@@ -5,10 +5,44 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from codeclaw.core.session import SessionManager
-from codeclaw.core.storage import session_directory, history_root
+from codeclaw.core.storage import session_directory, history_root, atomic_text
 
 
 class StorageTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows sharing violation retry")
+    def test_transient_windows_replace_lock_is_retried_without_losing_content(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "session.json"
+            target.write_text("old", encoding="utf-8")
+            real_replace = os.replace
+            calls = []
+            def replace(source, destination):
+                calls.append(source)
+                if len(calls) <= 2:
+                    error = PermissionError("temporarily held by reader")
+                    error.winerror = 32
+                    raise error
+                real_replace(source, destination)
+            with patch("codeclaw.core.storage.os.replace", side_effect=replace), patch("codeclaw.core.storage.time.sleep"):
+                atomic_text(target, "new\nUnicode α")
+            self.assertEqual(target.read_bytes(), "new\nUnicode α".encode())
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(list(Path(temp).iterdir()), [target])
+
+    @unittest.skipUnless(os.name == "nt", "Windows sharing violation retry")
+    def test_permanent_replace_failure_is_bounded_and_keeps_previous_checkpoint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "session.json"
+            target.write_text("old", encoding="utf-8")
+            error = PermissionError("permanent denial")
+            error.winerror = 5
+            with patch("codeclaw.core.storage.os.replace", side_effect=error) as replace, patch("codeclaw.core.storage.time.sleep"):
+                with self.assertRaises(PermissionError):
+                    atomic_text(target, "new")
+            self.assertEqual(replace.call_count, 6)
+            self.assertEqual(target.read_text(), "old")
+            self.assertEqual(list(Path(temp).iterdir()), [target])
+
     def test_cli_migration_preserves_metadata_and_artifact_references(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"CODECLAW_DATA_DIR": str(Path(temp) / "data")}):
             root = Path(temp) / "workspace"; root.mkdir()

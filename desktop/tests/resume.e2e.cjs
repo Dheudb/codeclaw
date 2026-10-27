@@ -19,7 +19,9 @@ const server = http.createServer((req, res) => {
       if (!body.messages.some((m) => m.role === "user" && textOf(m) === "STOP_ORIGINAL")) failures.push("Original request lost on resume");
       if (!body.messages.some((m) => m.role === "assistant" && textOf(m).includes("PARTIAL_PROGRESS"))) failures.push("Partial progress lost on resume");
     }
-    if (!body.messages.some((m) => m.role === "system" && textOf(m).includes("Configured request model ID: resume-fixture"))) failures.push("Model metadata missing from request");
+    const system = body.messages.filter((m) => m.role === "system").map(textOf).join("\n");
+    if (system.includes("resume-fixture") || system.includes("Configured request model ID:")) failures.push("Model routing leaked into resumed identity prompt");
+    if (!system.includes("introduce yourself as CodeClaw")) failures.push("Product identity missing from resumed request");
     if (text === "EDITED_TASK" && body.messages.some((m) => m.role === "user" && textOf(m) === "EDIT_ORIGINAL")) failures.push("Superseded prompt still sent to model");
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "test", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
@@ -36,6 +38,18 @@ async function launch() {
   for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
   app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env });
   page = await app.firstWindow(); page.setDefaultTimeout(90000); page.on("pageerror", (e) => failures.push(e.message));
+  await app.evaluate(({ app }) => {
+    globalThis.resumeTransportTrace = [];
+    const localRequire = process.getBuiltinModule("module").createRequire(app.getAppPath() + "/package.json");
+    const { EngineTransport } = localRequire("./electron/transport.cjs");
+    const original = EngineTransport.prototype.request;
+    EngineTransport.prototype.request = async function (method, params) {
+      const row = { method, text: params?.text, at: Date.now() };
+      globalThis.resumeTransportTrace.push(row);
+      try { const value = await original.call(this, method, params); row.ok = true; return value; }
+      catch (error) { row.error = String(error); throw error; }
+    };
+  });
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }
 const input = () => page.getByRole("textbox", { name: "任务输入", exact: true });
@@ -81,7 +95,9 @@ async function stop() {
     console.log("Resume E2E passed: stream and approval stop, stopped state after restart, one-click continuation with partial context, editable prompt, durable editing draft, replacement request, stable session/directory and central recovery snapshot");
   } catch (error) {
     if (page) console.error("Resume fixture UI errors:", await page.locator(".session-error, .global-notice").allTextContents().catch(() => []));
+    if (page) console.error("Resume fixture UI state:", await page.locator("body").innerText().catch(() => ""));
     console.error("Resume fixture tasks:", requests.map((body) => textOf([...body.messages].reverse().find((message) => message.role === "user") || {})));
+    if (app) console.error("Resume fixture transport:", await app.evaluate(() => globalThis.resumeTransportTrace).catch(() => []));
     throw error;
   } finally { if (app) await app.close().catch(() => {}); server.closeAllConnections(); server.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

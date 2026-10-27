@@ -1,3 +1,4 @@
+from codeclaw.core.run_result import RunResult
 import asyncio
 import json
 import os
@@ -49,7 +50,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             child.messages.append(create_user_message(user_input))
             child.messages.append(create_assistant_message([{ "type": "text", "text": "answer:" + user_input}]))
             child.persist_session_state()
-            return "answer:" + user_input
+            return RunResult("answer:" + user_input, "completed", True)
         with patch.object(QueryEngine, "run", run):
             receipt = json.loads(await self.tool.execute(prompt="REMEMBER_FIRST", response_format="json"))
             identity = receipt["agents"][0]["agent_id"]
@@ -79,7 +80,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         gate = asyncio.Event()
         async def run(child, user_input, sys_print_callback):
             await gate.wait()
-            return "done"
+            return RunResult("done", "completed", True)
         with patch.object(QueryEngine, "run", run):
             receipt = json.loads(await self.tool.execute(prompt="hold", run_in_background=True, count=2, response_format="json"))
             ids = [r["agent_id"] for r in receipt["agents"]]
@@ -109,7 +110,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             child.messages.extend(create_user_message(m["text"]) for m in messages)
             self.assertTrue(child.persist_session_state())
             child.tool_context["ack_delegated_mailbox"]({m["id"] for m in messages})
-            return "done"
+            return RunResult("done", "completed", True)
         ready, gate = asyncio.Event(), asyncio.Event()
         with patch.object(QueryEngine, "run", run):
             receipt = json.loads(await self.tool.execute(prompt="work", response_format="json", run_in_background=True))
@@ -134,7 +135,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(denied, child.latent_tools)
             self.assertNotIn("browser_tool", child.latent_tools)
             self.assertEqual(child.activate_tools(["browser_tool"]), [])
-            return "done"
+            return RunResult("done", "completed", True)
         with patch.object(QueryEngine, "run", run):
             receipt = json.loads(await self.tool.execute(prompt="inspect", subagent_type="limited", response_format="json"))
             self.assertEqual(receipt["agents"][0]["status"], "completed")
@@ -158,7 +159,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         async def run(child, user_input, sys_print_callback):
             entered.append(child.agent_id)
             await gate.wait()
-            return "done"
+            return RunResult("done", "completed", True)
         with patch.object(QueryEngine, "run", run):
             for _ in range(2):
                 await self.tool.execute(prompt="hold", count=10, run_in_background=True)
@@ -177,7 +178,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             identity = await manager.start(argv=[sys.executable, "-c", "import time; time.sleep(30)"],
                 cwd=str(self.root), owner=child.agent_id)
             commands.append(identity)
-            return "command launched"
+            return RunResult("command launched", "completed", True)
         with patch.object(QueryEngine, "run", run):
             result = json.loads(await self.tool.execute(prompt="start command", response_format="json"))
             identity = result["agents"][0]["agent_id"]

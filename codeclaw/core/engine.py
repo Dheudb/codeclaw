@@ -8,7 +8,6 @@ import sys
 import time
 from types import SimpleNamespace
 from typing import Optional
-from pydantic import ValidationError
 
 _logger = logging.getLogger(__name__)
 from anthropic import (
@@ -26,6 +25,7 @@ try:
     import git
 except ImportError:
     git = None
+from codeclaw.core.run_result import RunResult, PersistenceError, finish_run
 from codeclaw.features.auto_commit import AutoCommitManager
 from codeclaw.features.browser import BrowserSessionManager
 from codeclaw.context.context import ContextBuilder
@@ -43,7 +43,8 @@ from codeclaw.features.structured_output import StructuredOutputManager
 from codeclaw.features.plans import PlanManager, is_session_plan_file
 from codeclaw.security.permissions import PermissionManager
 from codeclaw.utils.shell_tasks import ShellTaskManager
-from codeclaw.context.tool_results import build_tool_result, serialize_tool_result
+from codeclaw.context.tool_results import build_tool_result
+from codeclaw.core.tool_execution import execute_tool, execute_tool_batches, restore_tool_activity
 from codeclaw.protocols.dsml import ToolTextFilter, ToolProtocolError, decode_tool_text, parse_tool_arguments
 from codeclaw.features.todos import TodoManager
 from codeclaw.features.workflow_completion import WorkflowCompletion
@@ -950,8 +951,13 @@ class QueryEngine:
         return self.active_run_task is not None and not self.active_run_task.done()
 
     async def request_abort(self) -> bool:
+        self.abort_event.set()
+        workers = self.tool_context.get("subagent_tasks")
+        had_workers = bool(workers and any(not task.done() for task in workers.tasks.values()))
+        if workers:
+            await workers.close()
         if not self.has_active_turn():
-            return False
+            return had_workers
 
         self.abort_event.set()
 
@@ -1254,7 +1260,7 @@ class QueryEngine:
     }
 
     PLAN_MODE_BLOCKED_TOOLS = {
-        "bash_tool",
+        "bash_tool", "repl_tool",
         "notebook_tool", "notebook_edit_tool", "sandbox_tool",
         "task_create_tool", "task_kill_tool",
     }
@@ -1774,22 +1780,6 @@ class QueryEngine:
         self._sync_message_context()
         self._emit_tool_activity("tool_started", tool_name, tool_use_id, input=copy.deepcopy(tool_inputs))
 
-    def _record_tool_completion(self, tool_name: str, tool_use_id: str, result_preview: str, status: str):
-        self.attachment_collector.track_tool_use(tool_name)
-        if tool_use_id in self.in_progress_tools:
-            del self.in_progress_tools[tool_use_id]
-
-        self.recent_tool_activity.insert(0, {
-            "tool_name": tool_name,
-            "tool_use_id": tool_use_id,
-            "status": status,
-            "result_preview": str(result_preview)[:280],
-        })
-        self.recent_tool_activity = self.recent_tool_activity[:12]
-        self.session_memory_manager.record_tool_call()
-        self._sync_message_context()
-        self._emit_tool_activity("tool_result", tool_name, tool_use_id, result=str(result_preview)[:16000], is_error=status == "error", status=status)
-
     def _emit_tool_activity(self, kind, tool_name, tool_use_id, **payload):
         callback = self.tool_context.get("capability_event")
         if callback:
@@ -1822,6 +1812,7 @@ class QueryEngine:
         if not agent_id:
             return
 
+        previous = copy.deepcopy(self.subagent_registry)
         replaced = False
         for index, item in enumerate(self.subagent_registry):
             if item.get("agent_id") == agent_id:
@@ -1835,11 +1826,16 @@ class QueryEngine:
             self.subagent_registry.append(record)
 
         self._sync_message_context()
-        self.persist_session_state()
+        saved = self.persist_session_state()
+        if not saved:
+            self.subagent_registry[:] = previous
+            self._sync_message_context()
+            return False
 
         callback = self.tool_context.get("capability_event")
-        if callback:
+        if callback and saved:
             callback({"type": "subagent_status", "agent": {k: v for k, v in record.items() if k not in {"role_definition", "pending_messages"}}})
+        return saved
 
     def _build_message_statistics(self) -> dict:
         stats = {
@@ -1884,7 +1880,6 @@ class QueryEngine:
         self.refresh_memory_files()
         effective_thinking_config = self._resolve_thinking_config()
         system_prompt = self.context_builder.generate_system_prompt(
-            model_name=self.primary_model,
             session_summary=self.plan_manager.render_prompt_summary(),
             todo_summary=self.todo_manager.render_prompt_summary(),
             memory_summary=self.get_memory_summary(),
@@ -2204,210 +2199,10 @@ class QueryEngine:
         return batches
 
     async def _execute_tool_wrapper(self, tool_block, sys_print_callback=print, *, turn: int = 0, event_callback=None):
-        tool_name = self._tb_get(tool_block, "name", "")
-        tool_id = self._tb_get(tool_block, "id", "")
-        tool_inputs = copy.deepcopy(self._tb_get(tool_block, "input", {}) or {})
-        input_error = bool(self._tb_get(tool_block, "_argument_error", ""))
-        handler_invoked = False
-        spill_recorder = self._build_spill_recorder(tool_name=tool_name, tool_use_id=tool_id)
-
-        sys_print_callback(f"  [dim cyan]↳ calling {tool_name}[/dim cyan]")
-        self._record_tool_start(tool_name, tool_id, tool_inputs)
-        before_tool_decision = self.hook_manager.evaluate_before_tool_hooks({
-            "tool_name": tool_name,
-            "tool_use_id": tool_id,
-            "tool_input": tool_inputs,
-            "mode": self.get_mode(),
-            "agent_id": self.agent_id,
-            "agent_role": self.agent_role,
-        })
-        before_tool_prefix = ""
-        if before_tool_decision.outputs:
-            before_tool_prefix = "\n".join(
-                f"[Hook:BeforeToolUse #{index}] {content}"
-                for index, content in enumerate(before_tool_decision.outputs, start=1)
-            )
-            before_tool_prefix += "\n\n"
-        tool_inputs = copy.deepcopy(before_tool_decision.updated_input or tool_inputs)
-
-        if before_tool_decision.history:
-            await self._record_loop_transition(
-                "before_tool_hook",
-                turn=turn,
-                event_callback=event_callback,
-                tool_name=tool_name,
-                tool_use_id=tool_id,
-                behavior=before_tool_decision.behavior,
-                hook_count=len(before_tool_decision.history),
-                input_changed=any(item.get("input_changed") for item in before_tool_decision.history),
-                reason=before_tool_decision.reason,
-            )
-
-        if self._tb_get(tool_block, "_argument_error", ""):
-            res_text = serialize_tool_result(build_tool_result(
-                ok=False, content=(self._tb_get(tool_block, "_argument_error", "") +
-                    "\nThis call was not executed. Correct the arguments using the tool schema and resubmit only this call; do not repeat completed operations."),
-                metadata={"tool_name": tool_name, "executed": False, "code": "invalid_json_arguments"}, is_error=True))
-        elif tool_name not in self.available_tools:
-            input_error = True
-            res_text = serialize_tool_result(build_tool_result(ok=False,
-                content=f"Tool '{tool_name}' is unavailable. This call was not executed. Use a currently declared tool or discover it with search_tool.",
-                metadata={"code": "unavailable_tool", "executed": False}, is_error=True))
-        elif before_tool_decision.behavior == "reject":
-            res_text = serialize_tool_result(
-                build_tool_result(
-                    ok=False,
-                    content=before_tool_decision.reason or f"Tool '{tool_name}' rejected by BeforeToolUse hook.",
-                    metadata={
-                        "tool_name": tool_name,
-                        "tool_use_id": tool_id,
-                        "hook_behavior": before_tool_decision.behavior,
-                        "hook_count": len(before_tool_decision.history or []),
-                        "hook_updated_input": tool_inputs,
-                    },
-                    is_error=True,
-                ),
-                artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id),
-                spill_recorder=spill_recorder,
-            )
-        else:
-            try:
-                effective_tools = self._get_effective_tools()
-                if tool_name not in effective_tools:
-                    raise KeyError(f"Tool '{tool_name}' is not available in current mode.")
-                handler = effective_tools[tool_name]
-                if hasattr(handler, "input_schema"):
-                    handler.input_schema(**tool_inputs)
-                permission = await self.permission_manager.authorize(
-                    handler,
-                    tool_inputs,
-                    context={
-                        "turn": turn,
-                        "tool_use_id": tool_id,
-                        "agent_id": self.agent_id,
-                        "agent_role": self.agent_role,
-                    },
-                )
-                if permission.behavior != "allow":
-                    await self._record_loop_transition(
-                        "permission_denied",
-                        turn=turn,
-                        event_callback=event_callback,
-                        tool_name=tool_name,
-                        tool_use_id=tool_id,
-                        source=permission.source,
-                        reason=permission.reason,
-                        denial_count=(permission.metadata or {}).get("denial_count_after"),
-                    )
-                    res_text = serialize_tool_result(
-                        build_tool_result(
-                            ok=False,
-                            content=(
-                                permission.reason
-                                or f"Permission denied for tool '{tool_name}'."
-                            ),
-                            metadata={
-                                "tool_name": tool_name,
-                                "tool_use_id": tool_id,
-                                "permission_behavior": permission.behavior,
-                                "permission_source": permission.source,
-                                **dict(permission.metadata or {}),
-                            },
-                            is_error=True,
-                        ),
-                        artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id),
-                        spill_recorder=spill_recorder,
-                    )
-                else:
-                    handler_invoked = True
-                    raw_result = await handler(**tool_inputs)
-                    res_text = serialize_tool_result(
-                        raw_result,
-                        spill_threshold_chars=1000000 if tool_name == "skill_tool" and tool_inputs.get("action") in {"read", "resource"} else 5000,
-                        artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id),
-                        spill_recorder=spill_recorder,
-                    )
-            except asyncio.CancelledError:
-                self._record_tool_completion(tool_name, tool_id, "操作已取消。", "cancelled")
-                raise
-            except (ValidationError, ToolProtocolError) as e:
-                detail = json.dumps(e.errors(include_input=False, include_url=False), ensure_ascii=False, default=str) if isinstance(e, ValidationError) else str(e)
-                if handler_invoked:
-                    res_text = "Tool Exception Caught: " + detail + "\nExecution may have begun. Inspect the existing operation and its durable result before retrying; do not blindly repeat it."
-                else:
-                    input_error = True
-                    res_text = serialize_tool_result(build_tool_result(ok=False,
-                        content="Invalid tool input: " + detail + "\nCorrect the parameters using the tool schema. This call was not executed; do not repeat completed operations.",
-                        metadata={"code": "invalid_tool_input", "tool_name": tool_name, "executed": False}, is_error=True))
-            except Exception as e:
-                res_text = f"Tool Exception Caught: {str(e)}"
-
-        if before_tool_prefix:
-            res_text = before_tool_prefix + str(res_text)
-
-        status = "error" if str(res_text).lstrip().startswith(("Permission denied", "Error:", "Error reading file:", "Sub-agent spawn denied:")) or "Status: error" in str(res_text) or "Tool Exception Caught" in str(res_text) else "ok"
-        self._record_tool_completion(tool_name, tool_id, res_text, status)
-        sys_print_callback(f"    [dim]{tool_name} -> {status}[/dim]")
-
-        return {
-            "type": "tool_result",
-            "tool_use_id": tool_id,
-            "content": res_text,
-            "is_error": status == "error",
-            **({"_input_error": True} if input_error else {}),
-        }
+        return await execute_tool(self, tool_block, sys_print_callback, turn=turn, event_callback=event_callback)
 
     async def _execute_tool_batches(self, tool_calls, sys_print_callback=print, *, turn: int = 0, event_callback=None):
-        results = []
-        batches = self._partition_tool_batches(tool_calls)
-        semaphore = asyncio.Semaphore(self.MAX_TOOL_CONCURRENCY)
-
-        for batch in batches:
-            blocks = batch["blocks"]
-            if batch["is_concurrency_safe"]:
-                sys_print_callback(
-                    f"[bold dim yellow]❯ Executing {len(blocks)} concurrency-safe tool call(s) in parallel "
-                    f"(max concurrency={self.MAX_TOOL_CONCURRENCY})...[/bold dim yellow]"
-                )
-                sibling_cancel = asyncio.Event()
-
-                async def _run_with_sibling_cancel(tc):
-                    async with semaphore:
-                        if sibling_cancel.is_set():
-                            tool_id = self._tb_get(tc, "id", "")
-                            tool_name = self._tb_get(tc, "name", "")
-                            return {
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "content": f"Cancelled: sibling tool in batch failed ({tool_name}).",
-                                "is_error": True,
-                            }
-                        res = await self._execute_tool_wrapper(
-                            tc, sys_print_callback, turn=turn, event_callback=event_callback,
-                        )
-                        if res.get("is_error") and self._tb_get(tc, "name", "") in self.SIBLING_CANCEL_TOOLS:
-                            sibling_cancel.set()
-                        return res
-
-                batch_results = await asyncio.gather(
-                    *(_run_with_sibling_cancel(tc) for tc in blocks)
-                )
-                results.extend(batch_results)
-            else:
-                sys_print_callback(
-                    f"[bold dim yellow]❯ Executing {len(blocks)} mutating/high-risk tool call(s) serially...[/bold dim yellow]"
-                )
-                for tool_block in blocks:
-                    results.append(
-                        await self._execute_tool_wrapper(
-                            tool_block,
-                            sys_print_callback,
-                            turn=turn,
-                            event_callback=event_callback,
-                        )
-                    )
-
-        return results
+        return await execute_tool_batches(self, tool_calls, sys_print_callback, turn=turn, event_callback=event_callback)
             
     async def start_protocols(self, sys_print=print):
         # 1. Start LSP Daemon Support
@@ -2856,6 +2651,7 @@ class QueryEngine:
             self.messages = msgs
             self._sync_message_context()
             metadata = state.get("metadata", {})
+            restore_tool_activity(self, metadata)
             self.agent_id = metadata.get("agent", {}).get("agent_id") or self.agent_id
             self.tool_context["agent_id"] = self.agent_id
             self.tool_context["file_changes"] = metadata.get("file_changes", [])
@@ -2954,6 +2750,7 @@ class QueryEngine:
     def _build_session_metadata(self) -> dict:
         return {
             "file_changes": self.tool_context.get("file_changes", []),
+            "tool_activity": {"in_progress": self.in_progress_tools, "recent": self.recent_tool_activity},
             "workspace_moves": self.tool_context.get("workspace_moves", []),
             "todos": self.todo_manager.export(),
             "plan": self.plan_manager.export(),
@@ -2997,6 +2794,7 @@ class QueryEngine:
                 "agent_depth": self.agent_depth,
                 "agent_role": self.agent_role,
             },
+            "last_run_result": getattr(self, "last_run_result", None),
             "model_runtime": {
                 "provider": self.model_provider,
                 "primary_model": self.primary_model,
@@ -4138,10 +3936,8 @@ class QueryEngine:
             completion.activate(self.tool_context["skill_registry"].resolve(name))
 
         if not self.is_configured:
-            return (
-                "Model not configured. Use /model to set protocol, model name, "
-                "base URL, and API key before sending messages."
-            )
+            return finish_run(self, ("Model not configured. Use /model to set protocol, model name, "
+                "base URL, and API key before sending messages."), 'not_configured')
 
         run_started_at = time.time()
         auto_commit_git_baseline = self._capture_auto_commit_baseline()
@@ -4217,7 +4013,7 @@ class QueryEngine:
                         output_tokens_used=self.session_token_usage.get("output_tokens", 0),
                     )
                     self.persist_session_state()
-                    return "Session output token budget exhausted before another turn could start."
+                    return finish_run(self, ("Session output token budget exhausted before another turn could start."), 'budget_exhausted')
                 self._inject_turn_attachments(turn_count)
                 # NOTE: FRC (Function Result Clearing) removed — Claude Code does
                 # not blindly clear old tool results. Budget enforcement via
@@ -4230,7 +4026,6 @@ class QueryEngine:
                 loaded_memory_files = self.refresh_memory_files()
                 effective_thinking_config = self._resolve_thinking_config()
                 system_prompt = self.context_builder.generate_system_prompt(
-                    model_name=loop_state["active_model"],
                     session_summary=self.plan_manager.render_prompt_summary(),
                     todo_summary=self.todo_manager.render_prompt_summary(),
                     memory_summary=self.get_memory_summary(),
@@ -4372,7 +4167,7 @@ class QueryEngine:
                             self.messages.append(halted)
                             self._sync_message_context()
                             self.persist_session_state()
-                            return "[bold red]API Loop Exception:[/bold red] " + message
+                            return finish_run(self, ("[bold red]API Loop Exception:[/bold red] " + message), 'tool_input_error')
                         protocol_retries += 1
                     else:
                         input_failures = 0
@@ -4414,7 +4209,7 @@ class QueryEngine:
                             output_tokens_used=self.session_token_usage.get("output_tokens", 0),
                         )
                         self.persist_session_state()
-                        return "Session output token budget exhausted before continuation."
+                        return finish_run(self, ("Session output token budget exhausted before continuation."), 'budget_exhausted')
                     transition_reason = "max_output_tokens_recovery"
                     if (
                         loop_state["max_tokens_recovery_attempts"] >= 2
@@ -4478,7 +4273,7 @@ class QueryEngine:
                         self.persist_session_state()
                         if retrying:
                             continue
-                        return "[bold red]System Halt:[/bold red] " + message
+                        return finish_run(self, ("[bold red]System Halt:[/bold red] " + message), 'workflow_incomplete')
 
                     # Plan mode guard: model ended with text-only output while plan mode
                     # is active. It should have called exit_plan_mode or ask_user_question_tool.
@@ -4626,7 +4421,7 @@ class QueryEngine:
                     if verification_report:
                         final_answer += f"\n\n---\n**Verification Report:**\n{verification_report}"
                     self.persist_session_state()
-                    return final_answer
+                    return finish_run(self, (final_answer), 'completed')
                     
             except Exception as e:
                 if streaming_tool_entries:
@@ -4680,7 +4475,7 @@ class QueryEngine:
                     self.messages.append(halted)
                     self._sync_message_context()
                     self.persist_session_state()
-                    return "[bold red]API Loop Exception:[/bold red] " + message
+                    return finish_run(self, ("[bold red]API Loop Exception:[/bold red] " + message), 'tool_protocol_error')
                 if isinstance(e, AbortRequestedError):
                     rolled_back = self._rollback_incomplete_tool_turn(assistant_message)
                     await self._record_loop_transition(
@@ -4692,10 +4487,8 @@ class QueryEngine:
                     self.active_stream = None
                     self.active_streaming_tool_entries = []
                     self.persist_session_state()
-                    return (
-                        "[bold yellow]Turn aborted.[/bold yellow] "
-                        "The current agent turn was interrupted and cleanup has completed."
-                    )
+                    return finish_run(self, ("[bold yellow]Turn aborted.[/bold yellow] "
+                        "The current agent turn was interrupted and cleanup has completed."), 'cancelled')
                 if isinstance(e, StreamInterrupted):
                     partial = create_assistant_message(e.partial_text or str(e), model=loop_state["active_model"], stop_reason="stream_interrupted")
                     if not e.partial_text:
@@ -4706,7 +4499,9 @@ class QueryEngine:
                             json.dumps(e.tool_results, ensure_ascii=False, default=str), is_meta=True, origin="stream_interrupted"))
                     self._sync_message_context()
                     self.persist_session_state()
-                    return "[bold red]API Loop Exception:[/bold red] " + str(e)
+                    return finish_run(self, ("[bold red]API Loop Exception:[/bold red] " + str(e)), 'stream_interrupted')
+                if isinstance(e, PersistenceError):
+                    return finish_run(self, "Storage checkpoint failed: " + str(e), 'persistence_error')
                 if (
                     self._is_model_fallback_error(e)
                     and loop_state["active_model"] != self.fallback_model
@@ -4802,21 +4597,24 @@ class QueryEngine:
                             continue
                 rolled_back = self._rollback_incomplete_tool_turn(assistant_message)
                 if rolled_back:
-                    return (
-                        "[bold red]API Loop Exception:[/bold red] "
+                    return finish_run(self, ("[bold red]API Loop Exception:[/bold red] "
                         f"{str(e)}\n"
-                        "[dim]Rolled back the incomplete assistant tool_use turn to keep session history resumable.[/dim]"
-                    )
+                        "[dim]Rolled back the incomplete assistant tool_use turn to keep session history resumable.[/dim]"), 'api_error')
                 # Catch Anthropic Auth errors or general crashes
-                return f"[bold red]API Loop Exception:[/bold red] {str(e)}"
+                return finish_run(self, (f"[bold red]API Loop Exception:[/bold red] {str(e)}"), 'api_error')
                 
-        return (
-            "[bold red]System Halt:[/bold red] "
-            f"Max internal reasoning turns ({loop_state['max_turns']}) reached without returning an answer."
-        )
+        return finish_run(self, ("[bold red]System Halt:[/bold red] "
+            f"Max internal reasoning turns ({loop_state['max_turns']}) reached without returning an answer."), 'turn_limit')
 
     async def run(self, user_input: str, sys_print_callback=print):
-        return await self._run_loop(user_input, sys_print_callback=sys_print_callback)
+        self.active_run_task = asyncio.current_task()
+        try:
+            return await self._run_loop(user_input, sys_print_callback=sys_print_callback)
+        except asyncio.CancelledError:
+            finish_run(self, "Execution was cancelled; completed effects are retained.", "cancelled")
+            raise
+        finally:
+            self.active_run_task = None
 
     async def submit_message(self, user_input: str, sys_print_callback=print, input_blocks=None, attachments=None, display_text=None, selected_skills=None):
         queue = asyncio.Queue()
@@ -4847,12 +4645,14 @@ class QueryEngine:
                 except asyncio.TimeoutError:
                     continue
 
-            final_answer = await task
-            yield {
-                "type": "final",
-                "text": final_answer,
-            }
+            result = await task
+            yield {"type": "final", "text": result.text, "result": result.to_dict()}
         finally:
+            if not task.done():
+                self.abort_event.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                await self.tool_context["subagent_tasks"].close()
             self.active_run_task = None
             self.active_stream = None
             self.active_streaming_tool_entries = []
