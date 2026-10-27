@@ -26,7 +26,7 @@ class ToolSearchTool(BaseAgenticTool):
     def prompt(self) -> str:
         return (
             "If you need a specialized capability that is not currently exposed as an active tool, "
-            "use `tool_search_tool` to discover and activate matching tools first."
+            "use `tool_search_tool` to discover and activate matching tools first, including connected MCP tools."
             " Web search and URL reading are already active: use web_search_tool and web_fetch_tool directly. "
             "This tool searches tool definitions, not the internet."
         )

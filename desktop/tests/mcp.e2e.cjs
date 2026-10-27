@@ -33,11 +33,10 @@ const api = http.createServer((request, response) => {
   request.on("end", () => {
     const body = JSON.parse(raw);
     modelRequests.push(body);
-    const call =
-      body.messages?.at(-1)?.role === "user" &&
-      body.tools?.some(
-        (tool) => tool.function.name === "offline_search_search",
-      );
+    const last = body.messages?.at(-1);
+    const active = body.tools?.some((tool) => tool.function.name === "offline_search_search");
+    const discover = !active && last?.role === "user" && JSON.stringify(last.content).includes("MCP 搜索验收");
+    const call = active && (last?.role === "user" || last?.tool_call_id === "fixture-discover");
     if (!body.stream) {
       response.writeHead(200, { "Content-Type": "application/json" }).end(
         JSON.stringify({
@@ -71,17 +70,19 @@ const api = http.createServer((request, response) => {
           "\n\n",
       );
     }
-    if (call) {
+    if (discover || call) {
       chunk({
         role: "assistant",
         tool_calls: [
           {
             index: 0,
-            id: "fixture-search",
+            id: discover ? "fixture-discover" : "fixture-search",
             type: "function",
             function: {
-              name: "offline_search_search",
-              arguments: JSON.stringify({ query: "desktop-search" }),
+              name: discover ? "tool_search_tool" : "offline_search_search",
+              arguments: JSON.stringify(discover
+                ? { query: "offline search", activate: ["offline_search_search"] }
+                : { query: "desktop-search" }),
             },
           },
         ],
@@ -247,6 +248,9 @@ async function main() {
     await page.getByRole("button", { name: "允许一次", exact: true }).click();
     await page.getByText("MCP_END_TO_END_OK", { exact: true }).waitFor();
     await page.getByRole("button", { name: "发送任务" }).waitFor();
+    const initial = modelRequests.find((body) => body.stream);
+    assert(!initial.tools.some((tool) => tool.function.name === "offline_search_search"));
+    assert(modelRequests.some((body) => body.tools?.some((tool) => tool.function.name === "offline_search_search")));
     assert(
       modelRequests.some((body) =>
         body.messages.some(
@@ -275,7 +279,7 @@ async function main() {
     );
     assert.deepEqual(errors, []);
     console.log(
-      "PASS: hidden Electron MCP market install/remove, custom HTTP config, real MCP test, credential preservation/redaction, shared CLI config, model tool call with permission, disable/reload",
+      "PASS: hidden Electron MCP market install/remove, custom HTTP config, real MCP test, credential preservation/redaction, shared CLI config, on-demand discovery/schema activation, model tool call with permission, disable/reload",
     );
   } catch (error) {
     await capture("mcp-failure.png");

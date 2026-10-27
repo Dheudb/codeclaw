@@ -193,7 +193,10 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
         tested = await desktop.dispatch("mcp.test", {"name": "remote"})
         self.assertEqual(tested["status"], "connected")
         self.assertIsNone(desktop.engine)
-        engine = SimpleNamespace(available_tools={}, tool_context={})
+        from codeclaw.core.engine import QueryEngine
+        engine = SimpleNamespace(available_tools={}, latent_tools={}, tool_context={})
+        engine.register_mcp_tools = lambda tools: QueryEngine.register_mcp_tools(engine, tools)
+        engine.activate_tools = lambda names: QueryEngine.activate_tools(engine, names)
         desktop.engine = engine
         desktop.protocol_ready = asyncio.get_running_loop().create_future()
         desktop.protocol_task = asyncio.create_task(desktop.protocol_lifetime(engine))
@@ -202,10 +205,12 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("remote_search", engine.available_tools)
             self.store.toggle("remote", True)
             await desktop.reload_mcp()
-            self.assertIn("remote_search", engine.available_tools)
+            self.assertIn("remote_search", engine.latent_tools)
+            self.assertNotIn("remote_search", engine.available_tools)
             self.store.toggle("remote", False)
             await desktop.reload_mcp()
             self.assertNotIn("remote_search", engine.available_tools)
+            self.assertNotIn("remote_search", engine.latent_tools)
         finally:
             await desktop.mcp_requests.put(None)
             await desktop.protocol_task

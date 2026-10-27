@@ -248,20 +248,18 @@ class DesktopBridge:
         try:
             while True:
                 try:
+                    active_mcp = self.mcp_names.intersection(engine.available_tools)
                     for name in self.mcp_names:
                         engine.available_tools.pop(name, None)
+                        engine.latent_tools.pop(name, None)
                     self.mcp_names.clear()
                     if getattr(engine, "mcp_bridge", None):
                         await engine.mcp_bridge.cleanup()
                     engine.mcp_bridge = MCPBridge(str(self.mcp_store.path))
                     self.mcp_stamp = self.config_stamp()
                     tools = await engine.mcp_bridge.load_and_connect()
-                    for name, tool in tools.items():
-                        if name in engine.available_tools:
-                            raise ValueError("MCP tool conflicts with an existing tool")
-                        tool.context = engine.tool_context
-                        engine.available_tools[name] = tool
-                        self.mcp_names.add(name)
+                    self.mcp_names = engine.register_mcp_tools(tools)
+                    engine.activate_tools(active_mcp.intersection(self.mcp_names))
                     self.emit({"type": "mcp_changed", "snapshot": self.mcp_snapshot()})
                     if not ready.done():
                         ready.set_result(True)

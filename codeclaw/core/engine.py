@@ -856,6 +856,14 @@ class QueryEngine:
         self.tool_context["latent_tools_registry"] = self.latent_tools
         return activated
 
+    def register_mcp_tools(self, tools):
+        if set(tools).intersection(self.available_tools.keys() | self.latent_tools.keys()):
+            raise ValueError("MCP tool conflicts with an existing tool")
+        for name, tool in tools.items():
+            tool.context = self.tool_context
+            self.latent_tools[name] = tool
+        return set(tools)
+
 
     def _apply_frc_if_needed(self):
         """Apply Function Result Clearing to keep context window manageable."""
@@ -2056,10 +2064,8 @@ class QueryEngine:
             if status.get("status") == "error":
                 sys_print("MCP " + name + ": " + status["error"])
         if remote_tools:
-            for name, tool in remote_tools.items():
-                tool.context = self.tool_context
-                self.available_tools[name] = tool
-            sys_print(f"[dim green]↳ Protocol Matrix Online: Loaded {len(remote_tools)} Remote MCP Tools.[/dim green]")
+            self.register_mcp_tools(remote_tools)
+            sys_print(f"[dim green]↳ Protocol Matrix Online: Discovered {len(remote_tools)} MCP tools; load details with tool_search_tool.[/dim green]")
         
     def _get_anthropic_tools_schema(self):
         """Converts registered Pydantic tool classes into provider-native schemas."""
