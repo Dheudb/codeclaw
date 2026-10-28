@@ -27,6 +27,8 @@ const attachments = new Attachments(catalog, nativeImage);
 let workspaceQueue = Promise.resolve();
 let catalogRevision = 0;
 const engineMethods = new Set([
+  "goal.get", "goal.create", "goal.run", "goal.control",
+  "schedule.list", "schedule.add", "schedule.control",
   "prompt",
   "respond",
   "stop",
@@ -86,6 +88,7 @@ function broadcastCatalog() {
 }
 function send(id, payload) {
   const source = sessions.get(id);
+  if (source && payload.type === "managed_turn_started") source.busy = true;
   if (source && payload.type === "turn_finished") source.busy = false;
   if (source && payload.type === "subagent_status") source.workers.set(payload.agent.agent_id, payload.agent.status);
   if (source && payload.type === "command_status") {
@@ -104,6 +107,36 @@ function send(id, payload) {
     try { broadcastCatalog(); }
     catch (error) { settingsFailure(error); }
   }
+}
+let tickingSchedules = false;
+async function tickSchedules() {
+  if (tickingSchedules || quitting || !restoration || !fs.existsSync(path.join(dataRoot, "schedules.json"))) return;
+  tickingSchedules = true;
+  try {
+    await restoration;
+    const due = await globalConfig().request("schedule.due");
+    for (const job of due) {
+      if (quitting) break;
+      let row;
+      try { row = catalog.find(sessionKey(job.cwd, job.session_id)); }
+      catch {
+        await globalConfig().request("schedule.control", { id: job.id, action: "pause" });
+        settingsFailure(new Error("定时消息的会话已移动或删除，任务已暂停，请检查后重新创建。"), "");
+        continue;
+      }
+      if (row.archived) continue;
+      const source = sessions.get(row.id);
+      if (source && running(source)) continue;
+      try {
+        await createSession(row.project, row.sessionId);
+        await sessions.get(row.id).transport.request("schedule.deliver", { id: job.id });
+      } catch (error) {
+        // A CLI owner may be holding the session. The durable due message stays queued.
+        if (!String(error.message).includes("writer") && !String(error.message).includes("占用")) settingsFailure(error, "定时消息等待投递：");
+      }
+    }
+  } catch (error) { settingsFailure(error, "定时消息检查失败："); }
+  finally { tickingSchedules = false; }
 }
 function saveWorkspace() {
   const active = sessions.get(activeSessionId);
@@ -547,6 +580,8 @@ async function invoke(method, params) {
   return source.transport.request(method, payload);
 }
 app.whenReady().then(() => {
+  const scheduleTimer = setInterval(tickSchedules, 5000);
+  scheduleTimer.unref();
   protocol.handle(PREVIEW_SCHEME, (request) => htmlPreviews.respond(request));
   window = new BrowserWindow({
     show: process.env.CODECLAW_TEST_HEADLESS !== "1",

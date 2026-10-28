@@ -278,6 +278,7 @@ class DesktopBridge:
                 await engine.mcp_bridge.cleanup()
 
     async def turn(self, text, selected_skills, mode, attachment_ids=None, prepared=None):
+        receipt = None
         self.recorder = TurnRecorder()
         self.emit({"type": "turn_started"})
         try:
@@ -292,6 +293,7 @@ class DesktopBridge:
             engine.set_mode(mode)
             options = {"input_blocks": [{"type": "text", "text": text}] + attachment_blocks, "attachments": attachment_items, "display_text": display_text} if attachment_items else {}
             async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)}), selected_skills=selected_skills, **options):
+                if event.get("type") == "final": receipt = event.get("result")
                 if self.stop_requested and event.get("type") == "final":
                     continue
                 if event.get("type") == "final" and not event.get("result", {}).get("ok", False):
@@ -318,10 +320,62 @@ class DesktopBridge:
             if self.engine and self.engine.session_manager.owns_writer(self.engine.session_id):
                 self.engine.active_turn_trace = None
                 if not self.engine.persist_session_state():
+                    receipt = {"ok": False, "reason": "persistence_error"}
                     self.emit({"type": "turn_error", "message": "本轮过程记录保存失败；请检查存储空间和权限。", "result": {"ok": False, "reason": "persistence_error"}})
             self.recorder = None
+        return receipt or {"ok": False, "reason": "cancelled" if self.stop_requested else "error"}
 
     async def dispatch(self, method, params):
+        if method.startswith("goal."):
+            from codeclaw.features import goals
+            if method == "goal.get":
+                if self.engine and self.engine.session_manager.owns_writer(self.engine.session_id): return copy.deepcopy(self.engine.goal)
+                from codeclaw.core.session import SessionManager
+                with SessionManager(cwd=self.cwd) as manager:
+                    sid = self.engine.session_id if self.engine else self.resume_id
+                    raw = manager.load_session_state(sid) if sid else {}
+                    return goals.snapshot(manager, sid, raw.get("metadata", {}).get("goal"))
+            if method == "goal.control":
+                engine = await self.ensure_engine(write=True)
+                result = await goals.control(engine, params["action"], params.get("reason", ""))
+                self.emit({"type": "goal_changed", "goal": result})
+                return result
+            self.require_idle()
+            engine = await self.ensure_engine(write=True)
+            if method == "goal.create":
+                result = goals.create(engine, params["objective"], params["criteria"], checks=params.get("checks"),
+                    rounds=params.get("rounds", 20), seconds=params.get("seconds", 1800),
+                    output_tokens=params.get("output_tokens", 50000), skills=params.get("skills"))
+                self.emit({"type": "goal_changed", "goal": result})
+                return result
+            if method == "goal.run":
+                self.stop_requested = False
+                self.turn_task = asyncio.create_task(self.goal_turn(engine))
+                return {"started": True}
+            raise ValueError("Unknown goal operation")
+        if method.startswith("schedule."):
+            from codeclaw.features import schedules
+            if method == "schedule.list": return schedules.list_items()
+            if method == "schedule.due": return schedules.list_items(due=True)
+            if method == "schedule.control": return schedules.change(params["id"], params["action"])
+            if method == "schedule.add":
+                engine = await self.ensure_engine(write=True)
+                return schedules.add(engine, params["prompt"], due_at=params["due_at"], interval=params.get("interval"), skills=params.get("skills"))
+            if method == "schedule.deliver":
+                if self.busy() or self.mcp_testing: return {"status": "queued"}
+                engine = await self.ensure_engine(write=True)
+                async def execute(text, skills):
+                    self.stop_requested = False
+                    self.emit({"type": "managed_turn_started", "text": text})
+                    return await self.turn(text, skills, "normal")
+                async def delivery():
+                    try: await schedules.deliver(engine, params["id"], execute)
+                    except Exception as error:
+                        self.emit({"type": "turn_error", "message": str(error)})
+                        self.emit({"type": "turn_finished"})
+                self.turn_task = asyncio.create_task(delivery())
+                return {"started": True}
+            raise ValueError("Unknown schedule operation")
         if method == "storage.mutate":
             from codeclaw.core.session_mutation import mutate
             return mutate(params)
@@ -482,6 +536,8 @@ class DesktopBridge:
             return {"closed": True}
         if method == "stop":
             self.stop_requested = self.busy()
+            if self.engine and getattr(self.engine, "goal", None) and self.engine.goal["status"] == "active":
+                self.engine.goal["status"], self.engine.goal["reason"] = "paused", "Stopped by user"
             for future in self.pending.values():
                 future.cancel()
             if self.engine:
@@ -527,6 +583,30 @@ class DesktopBridge:
         if method == "changes":
             return await git_changes(self.cwd)
         raise ValueError("Unknown method: " + method)
+
+    async def goal_turn(self, engine):
+        from codeclaw.features import goals
+        self.recorder = TurnRecorder()
+        engine.turn_traces.append(self.recorder.record)
+        engine.active_turn_trace = self.recorder.record
+        self.emit({"type": "managed_turn_started", "text": engine.goal["objective"]})
+        async def emit(event): self.emit(event)
+        try:
+            goal = await goals.run(engine, emit)
+            result = goal.get("last_result") or {}
+            self.emit({"type": "final", "text": result.get("text", ""), "result": result})
+            if goal["status"] != "completed": self.emit({"type": "turn_error", "message": goal["reason"]})
+        except asyncio.CancelledError:
+            self.emit({"type": "turn_cancelled"})
+        except Exception as error:
+            self.emit({"type": "turn_error", "message": str(error)})
+        finally:
+            self.emit({"type": "goal_changed", "goal": copy.deepcopy(engine.goal)})
+            self.emit({"type": "turn_finished"})
+            engine.active_turn_trace = None
+            from codeclaw.features.goals import save
+            save(engine)
+            self.recorder = None
 
     async def close(self):
         try:

@@ -4,7 +4,7 @@ import sys
 import time
 from datetime import datetime
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 
 from rich.console import Console, Group
 from rich.markdown import Markdown
@@ -12,7 +12,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from codeclaw.core.engine import QueryEngine
+with redirect_stdout(sys.stderr):
+    from codeclaw.core.engine import QueryEngine
 from codeclaw.core.config import load_config_into_env, save_current_env_to_config, load_config, save_config
 from codeclaw.core.model_catalog import connections, select_model, active_connection, apply_connection_env
 
@@ -860,6 +861,9 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in {"exec", "goal", "schedule"}:
+        from codeclaw.cli import main as noninteractive
+        raise SystemExit(noninteractive(sys.argv[1:]))
     import argparse
     parser = argparse.ArgumentParser(description="CodeClaw Agentic CLI Engine")
     parser.add_argument("-c", "--continue", dest="continue_session", action="store_true",

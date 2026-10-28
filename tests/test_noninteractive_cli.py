@@ -1,0 +1,141 @@
+"""Actual CLI subprocesses and local HTTP/SSE; never remote model traffic."""
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import queue
+import unittest
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
+        self.requests = []
+        self.mode = "text"
+        self.request_started, self.finish_request = threading.Event(), threading.Event()
+        owner = self
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_POST(self):
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
+                if not raw: return
+                body = json.loads(raw)
+                if not body.get("stream"):
+                    self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+                    self.wfile.write(json.dumps({"choices": [{"message": {"role": "assistant", "content": "memory"}}]}).encode()); return
+                owner.requests.append(body)
+                owner.request_started.set()
+                if owner.mode == "hold": owner.finish_request.wait(25)
+                has_tool_result = body["messages"][-1]["role"] == "tool"
+                delta, finish = {"content": "CLI_RESULT_你好"}, "stop"
+                if owner.mode == "write" and not has_tool_result:
+                    delta, finish = {"tool_calls": [{"index": 0, "id": "effect", "type": "function", "function": {"name": "file_write_tool",
+                        "arguments": json.dumps({"file_path": str(owner.root/"effect.txt"), "content": "ONCE"})}}]}, "tool_calls"
+                if owner.mode == "question" and not has_tool_result:
+                    delta, finish = {"tool_calls": [{"index": 0, "id": "question", "type": "function", "function": {"name": "ask_user_question_tool",
+                        "arguments": json.dumps({"questions": [{"question": "Choose input", "options": [{"label":"A"},{"label":"B"}]}]})}}]}, "tool_calls"
+                self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+                chunks = [{"choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+                    {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}]}, {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}]
+                try: self.wfile.write(("".join("data: "+json.dumps(c)+"\n\n" for c in chunks)+"data: [DONE]\n\n").encode())
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError): pass
+        self.server = ThreadingHTTPServer(("127.0.0.1",0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True); self.thread.start()
+        self.env = {**os.environ, "CODECLAW_DATA_DIR": str(self.root/"data"), "CODECLAW_CONFIG_DIR": str(self.root/"config"),
+            "HOME": str(self.root/"home"), "USERPROFILE": str(self.root/"home"), "CODECLAW_SKILLS_PATHS": "",
+            "OPENAI_API_KEY": "fixture", "OPENAI_MODEL": "fixture", "CODECLAW_MODEL_PROVIDER": "openai",
+            "OPENAI_BASE_URL": f"http://127.0.0.1:{self.server.server_port}/v1", "PYTHONIOENCODING": "utf-8",
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "CODECLAW_NETWORK_MODE": "direct"}
+
+    def tearDown(self):
+        self.finish_request.set()
+        self.server.shutdown(); self.server.server_close(); self.thread.join(5); self.temp.cleanup()
+
+    def cli(self, *args, stdin=""):
+        result = subprocess.run([sys.executable, "-m", "codeclaw", *args, "--json", "--cwd", str(self.root)],
+            input=stdin, text=True, encoding="utf-8", capture_output=True, env=self.env, timeout=35)
+        events = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(sum(e["type"] == "final" for e in events), 1, result.stdout+result.stderr)
+        return result, events, events[-1]["result"]
+
+    def test_exec_stdin_resume_and_pure_json_exit_without_terminal(self):
+        first, events, result = self.cli("exec", "-", stdin="你好\nAnalyze this sentence")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(result["text"], "CLI_RESULT_你好")
+        self.assertTrue(result["persisted"])
+        sid = result["session_id"]
+        second, _, result = self.cli("exec", "Continue", "--session", sid)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(result["session_id"], sid)
+        self.assertIn("Analyze this sentence", json.dumps(self.requests[-1], ensure_ascii=False))
+
+    def test_required_approval_is_explicit_and_no_write_is_performed(self):
+        self.mode = "write"
+        process, events, result = self.cli("exec", "Write the file")
+        self.assertEqual(process.returncode, 3, process.stderr)
+        self.assertEqual(result["reason"], "approval_required")
+        self.assertTrue(any(e["type"] == "approval_required" for e in events))
+        self.assertFalse((self.root/"effect.txt").exists())
+        allowed, _, result = self.cli("exec", "Write the file", "--permission", "full")
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        self.assertEqual((self.root/"effect.txt").read_text(), "ONCE")
+
+    def test_goal_budget_and_status_are_noninteractive_and_durable(self):
+        process, _, result = self.cli("goal", "start", "Do work", "--criterion", "Save evidence", "--rounds", "1")
+        self.assertEqual(process.returncode, 8, process.stderr)
+        self.assertEqual(result["goal"]["status"], "budget_exhausted")
+        count = len(self.requests)
+        status, _, saved = self.cli("goal", "status", "--session", result["session_id"])
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(saved["goal"]["rounds"], 1)
+        self.assertEqual(len(self.requests), count)
+
+    def test_model_question_never_reads_stdin_or_assumes_a_user_answer(self):
+        self.mode = "question"
+        process, events, result = self.cli("exec", "Ask what is missing")
+        self.assertEqual(process.returncode, 3, process.stderr)
+        self.assertEqual(result["reason"], "input_required")
+        self.assertTrue(any(e["type"] == "input_required" for e in events))
+        self.assertEqual(len(self.requests), 1, "No model retry after missing user input")
+
+    def test_due_message_delivers_to_same_session_and_second_worker_does_not_repeat(self):
+        _, _, initial = self.cli("exec", "Seed conversation")
+        sid = initial["session_id"]
+        added, _, result = self.cli("schedule", "add", "Check experiment", "--session", sid, "--delay", "0")
+        self.assertEqual(added.returncode, 0, added.stderr)
+        count = len(self.requests)
+        delivered, events, _ = self.cli("schedule", "serve", "--once")
+        self.assertEqual(delivered.returncode, 0, delivered.stderr)
+        self.assertTrue(any(e["type"] == "scheduled_delivery" and e["receipt"]["status"] == "completed" for e in events))
+        self.assertEqual(len(self.requests), count+1)
+        self.cli("schedule", "serve", "--once")
+        self.assertEqual(len(self.requests), count+1)
+        self.assertIn("Check experiment", json.dumps(self.requests[-1]))
+
+    def test_another_process_pauses_the_goal_without_taking_its_writer_lease(self):
+        self.mode = "hold"
+        process = subprocess.Popen([sys.executable, "-m", "codeclaw", "goal", "start", "Wait for result", "--criterion", "Inspect result", "--json", "--cwd", str(self.root)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=self.env)
+        lines = queue.Queue()
+        reader = threading.Thread(target=lambda: [lines.put(line) for line in process.stdout], daemon=True); reader.start()
+        try:
+            started = json.loads(lines.get(timeout=20))
+            self.assertEqual(started["type"], "session_started")
+            self.assertTrue(self.request_started.wait(15))
+            pause, _, receipt = self.cli("goal", "pause", "--session", started["session_id"])
+            self.assertEqual(pause.returncode, 0, pause.stderr)
+            self.assertEqual(receipt["control_requested"], "pause")
+            self.assertEqual(process.wait(15), 6, process.stderr.read())
+            reader.join(3)
+            events = []
+            while not lines.empty(): events.append(json.loads(lines.get_nowait()))
+            self.assertEqual(events[-1]["result"]["reason"], "paused")
+            self.assertEqual(len(self.requests), 1)
+        finally:
+            self.finish_request.set()
+            if process.poll() is None: process.kill(); process.wait(5)  # this fixture's subprocess only
+            process.stdout.close(); process.stderr.close()

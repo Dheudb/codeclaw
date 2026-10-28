@@ -1,5 +1,7 @@
 # CLI
 
+正式非交互任务使用 `codeclaw exec "任务" --json`；目标续跑与定时唤醒见 [目标与调度](goals-and-schedules.md)。
+
 ## 安装与启动
 
 基础 CLI 需要 Python 3.9+。建议使用 Python 3.12 的虚拟环境，便于同时使用 MCP。

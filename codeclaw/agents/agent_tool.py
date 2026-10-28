@@ -289,6 +289,8 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             sub_engine.plan_manager.set_mode(self.context["plan_manager"].get_mode())
 
         self._share_runtime_managers(sub_engine)
+        if self.context.get("goal_budget"):
+            sub_engine.tool_context["goal_budget"] = self.context["goal_budget"]
         sub_engine.tool_context["skill_registry"] = self.context.get("skill_registry") or SkillRegistry(self.context.get("session_cwd"))
         sub_engine.tool_context["ask_user_callback"] = self.context.get("ask_user_callback")
         sub_engine.tool_context["capability_event"] = self.context.get("capability_event")

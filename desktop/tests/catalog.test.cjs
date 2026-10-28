@@ -15,6 +15,13 @@ function fixture(t) {
   return { root, project, catalog, settings: () => settings };
 }
 
+test("goal titles use the visible objective rather than internal continuation instructions", (t) => {
+  const {catalog,project}=fixture(t);
+  const row=catalog.create(project);
+  atomicJSON(catalog.file(project,row.sessionId),{messages:[{role:"user",content:"Internal goal continuation instructions",_display_text:"用户原始目标"}],metadata:{}});
+  assert.equal(catalog.list(project)[0].title,"用户原始目标");
+});
+
 test("moving an independent conversation changes its directory and preserves history, traces, draft and owned child results", (t) => {
   const { catalog, root, project: base } = fixture(t);
   const target = path.join(root, "target"); fs.mkdirSync(target); catalog.addProject(target);

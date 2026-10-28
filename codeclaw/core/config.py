@@ -149,6 +149,21 @@ def get_model_max_output_tokens(model: str) -> tuple:
 
 async def safe_llm_call(client, model: str, provider: str, messages: list,
                         max_tokens: int, _retried: bool = False):
+    from codeclaw.features.goals import CURRENT_BUDGET, available_output
+    budget = CURRENT_BUDGET.get()
+    reserved = min(max_tokens, available_output(budget)) if budget else 0
+    if budget and reserved <= 0: raise RuntimeError("Goal output-token budget exhausted before auxiliary model request")
+    if budget: budget["output_reserved"] += reserved
+    usage = []
+    try:
+        return await _safe_llm_call(client, model, provider, messages, reserved if budget else max_tokens, _retried, usage)
+    finally:
+        if budget:
+            budget["output_used"] += usage[-1] if usage and usage[-1] > 0 else reserved
+            budget["output_reserved"] -= reserved
+
+
+async def _safe_llm_call(client, model, provider, messages, max_tokens, _retried, usage):
     """LLM call with automatic max_tokens fallback.
 
     If the API rejects the request because max_tokens is too large
@@ -159,6 +174,7 @@ async def safe_llm_call(client, model: str, provider: str, messages: list,
             resp = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens,
             )
+            usage.append(int(getattr(getattr(resp, "usage", None), "completion_tokens", 0) or 0))
             return str(
                 getattr(getattr(resp.choices[0], "message", None), "content", "") or ""
             )
@@ -166,6 +182,7 @@ async def safe_llm_call(client, model: str, provider: str, messages: list,
             resp = await client.messages.create(
                 model=model, messages=messages, max_tokens=max_tokens,
             )
+            usage.append(int(getattr(getattr(resp, "usage", None), "output_tokens", 0) or 0))
             for block in resp.content:
                 if getattr(block, "type", "") == "text":
                     return getattr(block, "text", "")
@@ -174,8 +191,8 @@ async def safe_llm_call(client, model: str, provider: str, messages: list,
         err = str(e).lower()
         if not _retried and ("max_tokens" in err or "max_output" in err
                              or "maximum" in err or "too large" in err):
-            fallback = max(1024, max_tokens // 2)
-            return await safe_llm_call(
-                client, model, provider, messages, fallback, _retried=True
+            fallback = max(1, max_tokens // 2)
+            return await _safe_llm_call(
+                client, model, provider, messages, fallback, True, usage
             )
         raise

@@ -50,6 +50,8 @@ from codeclaw.context.tool_results import build_tool_result
 from codeclaw.core.tool_execution import execute_tool, execute_tool_batches, restore_tool_activity
 from codeclaw.protocols.dsml import ToolTextFilter, ToolProtocolError, decode_tool_text, parse_tool_arguments
 from codeclaw.features.todos import TodoManager
+from codeclaw.tools.goal_tool import GoalReportTool
+from codeclaw.tools.schedule_tool import ScheduleTool
 from codeclaw.features.workflow_completion import WorkflowCompletion
 from codeclaw.protocols.stream_watch import StreamWatch, StreamAborted, StreamInterrupted
 from codeclaw.utils.vcr import VCRManager
@@ -196,6 +198,8 @@ class QueryEngine:
         self.subagent_registry = []
         self.in_progress_tools = {}
         self.recent_tool_activity = []
+        self.goal = None
+        self.scheduled_deliveries = {}
         self.loop_transition_history = []
         self.token_usage_history = []
         self.post_sampling_history = []
@@ -270,6 +274,8 @@ class QueryEngine:
             "repl_tool": ReplTool(),
             "skill_tool": SkillTool(),
             "tool_search_tool": ToolSearchTool(),
+            "goal_report_tool": GoalReportTool(),
+            "schedule_tool": ScheduleTool(),
             "team_create_tool": TeamCreateTool(),
             "team_delete_tool": TeamDeleteTool(),
             "send_message_tool": SendMessageTool(),
@@ -279,6 +285,8 @@ class QueryEngine:
             "exit_plan_mode": ExitPlanModeTool(),
         }
         latent_tool_names = {
+            "goal_report_tool",
+            "schedule_tool",
             "browser_tool",
             "notebook_tool",
             "notebook_edit_tool", "repl_tool", "sandbox_tool", "brief_tool",
@@ -359,6 +367,8 @@ class QueryEngine:
             "agent_role": self.agent_role,
         }
         self._sync_model_runtime_context()
+        from codeclaw.features.schedules import add as add_schedule
+        self.tool_context["schedule_add"] = lambda prompt, **options: add_schedule(self, prompt, **options)
         for t in self.available_tools.values():
             t.context = self.tool_context
         for t in self.latent_tools.values():
@@ -2497,6 +2507,9 @@ class QueryEngine:
             self.messages = msgs
             self._sync_message_context()
             metadata = state.get("metadata", {})
+            from codeclaw.features.goals import recover
+            self.goal = recover(metadata.get("goal"))
+            self.scheduled_deliveries = copy.deepcopy(metadata.get("scheduled_deliveries", {}))
             restore_tool_activity(self, metadata)
             self.agent_id = metadata.get("agent", {}).get("agent_id") or self.agent_id
             self.tool_context["agent_id"] = self.agent_id
@@ -2594,6 +2607,8 @@ class QueryEngine:
 
     def _build_session_metadata(self) -> dict:
         return {
+            "goal": self.goal,
+            "scheduled_deliveries": self.scheduled_deliveries,
             "file_changes": self.tool_context.get("file_changes", []),
             "tool_activity": {"in_progress": self.in_progress_tools, "recent": self.recent_tool_activity},
             "workspace_moves": self.tool_context.get("workspace_moves", []),
@@ -2704,6 +2719,12 @@ class QueryEngine:
         await asyncio.shield(task)
 
     async def _close(self):
+        goal_task = getattr(self, "_goal_task", None)
+        if goal_task is not None and not goal_task.done() and goal_task is not asyncio.current_task():
+            if self.goal and self.goal["status"] == "active":
+                self.goal["status"], self.goal["reason"] = "interrupted", "Owner closing; explicitly resume after inspecting saved results"
+            goal_task.cancel()
+            await asyncio.gather(goal_task, return_exceptions=True)
         failures = await asyncio.gather(self.request_abort(), return_exceptions=True)
         stop = [self.tool_context["command_sessions"].close(owner=self.agent_id if self.agent_depth else None)]
         if self.agent_depth == 0:
@@ -3114,11 +3135,16 @@ class QueryEngine:
         loop_state["turn_output_tokens"] = turn_record["output_tokens"]
 
     def _remaining_output_budget(self, loop_state: dict) -> int:
-        return max(
+        from codeclaw.features.goals import CURRENT_BUDGET, available_output
+        goal_budget = self.tool_context.get("goal_budget") or CURRENT_BUDGET.get()
+        if goal_budget:
+            return available_output(goal_budget)
+        remaining = max(
             0,
             int(loop_state.get("session_output_budget", 0) or 0)
             - int(self.session_token_usage.get("output_tokens", 0) or 0),
         )
+        return remaining
 
     def _is_model_fallback_error(self, error: Exception) -> bool:
         if isinstance(error, (APIConnectionError, RateLimitError, InternalServerError)):
@@ -3188,6 +3214,29 @@ class QueryEngine:
             await asyncio.gather(*pending, return_exceptions=True)
 
     async def _stream_model_response(
+        self, **kwargs,
+    ):
+        from codeclaw.features.goals import CURRENT_BUDGET, available_output
+        budget = self.tool_context.get("goal_budget") or CURRENT_BUDGET.get()
+        if not budget:
+            return await self._receive_model_response(**kwargs)
+        reserved = min(kwargs["max_tokens"], available_output(budget))
+        if reserved <= 0:
+            raise RuntimeError("Goal output-token budget is exhausted or reserved by active workers")
+        budget["output_reserved"] += reserved
+        kwargs["max_tokens"] = reserved
+        response = None
+        try:
+            response, entries, fallback = await self._receive_model_response(**kwargs)
+            return response, entries, fallback
+        finally:
+            usage = self._serialize_response_usage(response) if response is not None else {}
+            # Unknown/interrupted usage consumes the reservation conservatively.
+            reported = int(usage.get("output_tokens", 0) or 0)
+            budget["output_used"] += reported if reported > 0 else reserved
+            budget["output_reserved"] -= reserved
+
+    async def _receive_model_response(
         self,
         *,
         system_prompt: str,
@@ -4363,7 +4412,7 @@ class QueryEngine:
             f"Max internal reasoning turns ({loop_state['max_turns']}) reached without returning an answer."), 'turn_limit')
 
     async def run(self, user_input: str, sys_print_callback=print, *, selected_skills=None):
-        if self.has_active_turn():
+        if self.has_active_turn() or getattr(self, "_goal_task", None) is not None and asyncio.current_task() not in (self._goal_task, getattr(self, "_goal_turn_task", None)):
             return RunResult("A turn is already running in this engine; wait or cancel it first.", "session_busy", session_id=self.session_id, agent_id=self.agent_id)
         self.active_run_task = asyncio.current_task()
         try:
@@ -4375,7 +4424,7 @@ class QueryEngine:
             self.active_run_task = None
 
     async def submit_message(self, user_input: str, sys_print_callback=print, input_blocks=None, attachments=None, display_text=None, selected_skills=None):
-        if self.has_active_turn():
+        if self.has_active_turn() or getattr(self, "_goal_task", None) is not None and asyncio.current_task() not in (self._goal_task, getattr(self, "_goal_turn_task", None)):
             result = RunResult("A turn is already running in this engine; wait or cancel it first.", "session_busy", session_id=self.session_id, agent_id=self.agent_id)
             yield {"type": "final", "text": result.text, "result": result.to_dict()}
             return

@@ -45,6 +45,8 @@ export function applyEvent(
 ): SessionView {
   if (event.session !== session.id) return session;
   switch (event.type) {
+    case "managed_turn_started":
+      return beginTurn({ ...session, attachments: [] }, event.text);
     case "turn_restarted":
       return beginTurn({ ...session, messages: event.history, attachments: event.attachments || [] }, event.text);
     case "command_status":

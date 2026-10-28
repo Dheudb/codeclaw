@@ -13,6 +13,14 @@ from unittest.mock import patch, AsyncMock, Mock
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_scheduled_turn_cannot_reuse_a_previous_success_receipt(self):
+        from types import SimpleNamespace
+        self.bridge.engine = SimpleNamespace(last_run_result={"ok": True, "reason": "completed"}, session_id="fixture",
+            session_manager=SimpleNamespace(owns_writer=Mock(return_value=False)))
+        self.bridge.ensure_engine = AsyncMock(side_effect=ValueError("invalid scheduled skill"))
+        result = await self.bridge.turn("Scheduled task", [], "normal")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "error")
     async def test_graceful_stop_is_cancelled_and_partial_text_is_retained_for_resume(self):
         from types import SimpleNamespace
         end = asyncio.Event()

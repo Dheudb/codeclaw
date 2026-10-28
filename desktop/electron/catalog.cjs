@@ -70,7 +70,7 @@ class SessionCatalog {
           const messages = Array.isArray(raw) ? raw : raw.messages || [];
           const first = messages.find((message) => message.role === "user" && !message._is_meta &&
             !["team", "subagent"].includes(message._origin));
-          const text = typeof first?.content === "string" ? first.content :
+          const text = typeof first?._display_text === "string" ? first._display_text : typeof first?.content === "string" ? first.content :
             (first?.content || []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
           const item = meta[sessionId] || {};
           return [{ id: sessionKey(project, sessionId), sessionId, project,

@@ -1845,3 +1845,15 @@ body.panel-resizing, body.panel-resizing * { cursor: col-resize !important; user
 .turn-tool-brief { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .turn-tool > summary > svg, .turn-tool-status { flex-shrink: 0; }
 .turn-tool pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow-y: auto; background: var(--surface-soft); padding: 10px; border-radius: 8px; font-size: 12px; }
+.goal-panel { padding: 20px; overflow: auto; font: 13px/1.6 var(--font-ui); }
+.panel-tabs { overflow-x: auto; }
+.panel-tabs button { white-space: nowrap; flex-shrink: 0; }
+.goal-card label:has(input[type=checkbox]) { display: flex; align-items: center; gap: 8px; }
+.goal-card { padding: 16px 0; border-bottom: 1px solid var(--border, #e5e5e5); display: grid; gap: 10px; }
+.goal-card label { display: grid; gap: 6px; font-size: 13px; }
+.goal-card input:not([type=checkbox]), .goal-card textarea { width: 100%; padding: 8px; border: 1px solid var(--border, #ddd); border-radius: 8px; background: transparent; color: inherit; box-sizing: border-box; }
+.goal-card textarea { min-height: 70px; resize: vertical; }
+.goal-card small { color: #777; line-height: 1.6; overflow-wrap: anywhere; }
+.goal-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.goal-card button { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border, #ddd); background: transparent; color: inherit; cursor: pointer; }
+.goal-card button:disabled { opacity: .45; cursor: default; }

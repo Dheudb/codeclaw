@@ -13,6 +13,7 @@ CodeClaw 提供普通对话、文件与命令工具、Skills、自定义子代�
 |---|---|
 | 直接使用桌面程序 | [桌面使用说明](docs/desktop.md) |
 | 在终端使用 CodeClaw | [CLI 使用说明](docs/cli.md) |
+| 目标续跑、非交互批量执行与定时唤醒 | [目标与调度](docs/goals-and-schedules.md) |
 | 接入模型或本地推理服务 | [模型配置与兼容范围](docs/models.md) |
 | 添加 Skills 或子代理 | [Skills 与子代理](docs/capabilities.md) |
 | 子代理续接、容量查询和命令输入输出 | [通用执行接口](docs/framework.md) |
@@ -22,9 +23,9 @@ CodeClaw 提供普通对话、文件与命令工具、Skills、自定义子代�
 
 ## 桌面版
 
-[**下载 Windows x64 便携版**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.8) · [所有版本](https://github.com/Dheudb/codeclaw/releases)
+[**下载 Windows x64 便携版**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.9) · [所有版本](https://github.com/Dheudb/codeclaw/releases)
 
-在 Release 的 Assets 中下载 `CodeClaw-v0.1.0-beta.8-windows-x64.zip`，完整解压后运行 `CodeClaw.exe`。
+在 Release 的 Assets 中下载 `CodeClaw-v0.1.0-beta.9-windows-x64.zip`，完整解压后运行 `CodeClaw.exe`。
 请下载成品 ZIP；GitHub 自动提供的 Source code 是源码。程序依赖同目录的 `resources`，不能只复制 EXE。
 Windows 便携包内置 Python 运行时和 MCP 依赖。
 **使用便携包不需要安装 Python、Node.js，也不需要选择解释器。**
