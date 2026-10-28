@@ -5,10 +5,10 @@ import os
 import json
 from pathlib import Path
 
-from codeclaw.desktop.bridge import DesktopBridge
-from codeclaw.tools.plan_mode_tools import ExitPlanModeTool
-from codeclaw.features.plans import PlanManager
-from codeclaw.context.attachments import AttachmentCollector
+from xuloom.desktop.bridge import DesktopBridge
+from xuloom.tools.plan_mode_tools import ExitPlanModeTool
+from xuloom.features.plans import PlanManager
+from xuloom.context.attachments import AttachmentCollector
 from unittest.mock import patch, AsyncMock, Mock
 
 
@@ -62,21 +62,21 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bridge.pending_kinds, {})
 
     async def test_capability_examples_are_valid_and_never_overwrite_existing_files(self):
-        with patch.dict(os.environ, {"CODECLAW_SKILLS_PATHS": ""}):
+        with patch.dict(os.environ, {"XULOOM_SKILLS_PATHS": ""}):
             result = await self.bridge.dispatch("capabilities.example", {})
         self.assertTrue(any(skill["name"] == "project-review" and skill["valid"] for skill in result["skills"]))
         self.assertTrue(any(agent["name"] == "reviewer" and agent["valid"] for agent in result["agents"]))
-        target = self.root / ".codeclaw/skills/project-review/SKILL.md"
+        target = self.root / ".xuloom/skills/project-review/SKILL.md"
         original = target.read_bytes()
         with self.assertRaises(ValueError):
             await self.bridge.dispatch("capabilities.example", {})
         self.assertEqual(target.read_bytes(), original)
-        self.assertEqual(Path(result["settings"]["projectSkillsRoot"]).resolve(), (self.root / ".codeclaw/skills").resolve())
+        self.assertEqual(Path(result["settings"]["projectSkillsRoot"]).resolve(), (self.root / ".xuloom/skills").resolve())
 
     async def test_resumed_engine_uses_current_config_and_not_old_session_endpoint(self):
         cfg = {"model_provider": "openai", "openai_model": "current-model", "openai_base_url": "https://current.invalid/v1", "openai_api_key": "private-fixture", "network_mode": "direct"}
         engine = Mock(client=Mock(close=AsyncMock()), compactor=Mock(client=Mock(close=AsyncMock())))
-        with patch("codeclaw.desktop.bridge.load_config", return_value=cfg), patch.dict(os.environ):
+        with patch("xuloom.desktop.bridge.load_config", return_value=cfg), patch.dict(os.environ):
             await self.bridge.sync_model(engine, force=True)
             engine.switch_model_runtime.assert_called_once_with(provider="openai", model="current-model", api_base_url="https://current.invalid/v1", api_key="private-fixture", persist=False)
             engine.client.close.assert_awaited_once()
@@ -89,7 +89,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_model_can_save_without_project_engine_and_normalizes_full_endpoint(self):
         existing = {"openai_api_key": "fixture-existing-key", "other_setting": "keep"}
-        with patch("codeclaw.desktop.bridge.load_config", return_value=existing), patch("codeclaw.desktop.bridge.save_config") as saved, patch.dict(os.environ, {}, clear=True):
+        with patch("xuloom.desktop.bridge.load_config", return_value=existing), patch("xuloom.desktop.bridge.save_config") as saved, patch.dict(os.environ, {}, clear=True):
             result = await self.bridge.dispatch("config.save", {"provider": "openai", "model": " model-id ", "baseUrl": "https://example.invalid/v1/chat/completions/", "apiKey": ""})
             self.assertEqual(result["baseUrl"], "https://example.invalid/v1")
             self.assertEqual(result["model"], "model-id")
@@ -100,14 +100,14 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(self.bridge.engine)
 
     async def test_global_config_read_redacts_key(self):
-        with patch("codeclaw.desktop.bridge.load_config", return_value={"model_provider": "openai", "openai_model": "test-model", "openai_api_key": "fixture-private-key"}):
+        with patch("xuloom.desktop.bridge.load_config", return_value={"model_provider": "openai", "openai_model": "test-model", "openai_api_key": "fixture-private-key"}):
             result = await self.bridge.dispatch("config.get", {})
         self.assertEqual(result["model"], "test-model")
         self.assertTrue(result["hasKey"])
         self.assertNotIn("fixture-private-key", json.dumps(result))
 
     async def test_invalid_model_url_does_not_write_config(self):
-        with patch("codeclaw.desktop.bridge.save_config") as saved:
+        with patch("xuloom.desktop.bridge.save_config") as saved:
             with self.assertRaises(ValueError):
                 await self.bridge.dispatch("config.save", {"provider": "openai", "model": "model", "baseUrl": "not-an-api-url"})
         saved.assert_not_called()
@@ -151,14 +151,14 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             await self.bridge.dispatch("initialize", {"sessionId": "../../config"})
 
     async def test_session_logs_do_not_feed_back_into_model_context(self):
-        internal = self.root / ".codeclaw" / "sessions" / "test.json"
+        internal = self.root / ".xuloom" / "sessions" / "test.json"
         internal.parent.mkdir(parents=True)
         internal.write_text("internal history", encoding="utf-8")
         source = self.root / "app.py"
         source.write_text("print('hello')", encoding="utf-8")
         collector = AttachmentCollector()
         attachment = collector._build_file_change_delta(str(self.root), [str(internal), str(source)])
-        self.assertNotIn(".codeclaw", attachment["content"])
+        self.assertNotIn(".xuloom", attachment["content"])
         self.assertIn("app.py", attachment["content"])
 
     async def test_imported_skills_are_available_without_enable_step(self):

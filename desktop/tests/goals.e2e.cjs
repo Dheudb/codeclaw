@@ -1,12 +1,12 @@
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), http = require("node:http"), assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs"), { historyRoot } = require("../electron/history-storage.cjs");
-const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-goals-e2e-"));
+const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-goals-e2e-"));
 const data = path.join(fixture, "data"), project = path.join(fixture, "project"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const directory of [data, project, config, home]) fs.mkdirSync(directory);
-const env = { ...process.env, CODECLAW_DATA_DIR: data, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config,
-  USERPROFILE: home, HOME: home, CODECLAW_TEST_HEADLESS: "1", CODECLAW_SKILLS_PATHS: "", PYTHONPATH: path.dirname(root) };
-for (const name of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[name];
+const env = { ...process.env, XULOOM_DATA_DIR: data, XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config,
+  USERPROFILE: home, HOME: home, XULOOM_TEST_HEADLESS: "1", XULOOM_SKILLS_PATHS: "", PYTHONPATH: path.dirname(root) };
+for (const name of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[name];
 const checkpoint = path.join(historyRoot(project, data), "sessions/goals.json");
 atomicJSON(checkpoint, { messages: [], metadata: {} });
 atomicJSON(path.join(data, "workbench.json"), { projects: [project], activeConversation: { project, resumeId: "goals", scope: "project" } });
@@ -25,9 +25,10 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  app = await electron.launch({ executablePath:process.env.CODECLAW_TEST_EXECUTABLE,args:process.env.CODECLAW_TEST_EXECUTABLE?[]:[root],env,timeout:30000 });
+  app = await electron.launch({ executablePath:process.env.XULOOM_TEST_EXECUTABLE,args:process.env.XULOOM_TEST_EXECUTABLE?[]:[root],env,timeout:30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(30000); page.on("pageerror", e=>errors.push(e.message));
   await page.locator(".session-item.active").waitFor();
+  if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
   await page.getByRole("button",{name:"目标",exact:true}).click();
   await page.getByRole("heading",{name:"目标与唤醒"}).waitFor();
 }

@@ -31,7 +31,7 @@ export default function SkillInput({ sessionId, draft, selected, capabilities, d
     let cancelled = false;
     setLoading(true); setError("");
     // Rescan on each opening so copied/imported SKILL.md files appear without restart.
-    window.codeclaw.invoke<Capabilities>("capabilities.list", { session: sessionId }).then((value) => {
+    window.xuloom.invoke<Capabilities>("capabilities.list", { session: sessionId }).then((value) => {
       if (!cancelled) update({ capabilities: value });
     }).catch((reason) => { if (!cancelled) setError("技能目录刷新失败：" + String(reason)); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -62,14 +62,14 @@ export default function SkillInput({ sessionId, draft, selected, capabilities, d
           <Puzzle size={16} /><span className="skill-picker-name">{skill.name}</span><span className="skill-picker-description">{skill.description}</span>
           {selected.includes(skill.name) && <Check size={14} aria-label="已选择" />}<small className="skill-picker-scope">{skillScope(skill.scope)}</small>
         </button>)}
-        {!options.length && !loading && !error && <p className="skill-picker-empty">没有匹配的 Skill。可在右侧导入目录，或放入 .codeclaw/skills/&lt;名称&gt;/SKILL.md。</p>}
+        {!options.length && !loading && !error && <p className="skill-picker-empty">没有匹配的 Skill。可在右侧导入目录，或放入 .xuloom/skills/&lt;名称&gt;/SKILL.md。</p>}
       </div>
       {loading && <p className="skill-picker-status" role="status">正在读取技能目录…</p>}
       {error && <p className="skill-picker-status error" role="alert">{error}</p>}
     </div>}
     <textarea ref={inputRef} aria-label="任务输入" aria-autocomplete="list" aria-controls={open ? "skill-options" : undefined}
       aria-expanded={open} aria-activedescendant={open && options.length ? "skill-option-" + index : undefined}
-      placeholder={sessionId ? "描述你的任务，输入 $ 选择 Skill…" : "点击新建会话即可开始，也可以打开项目…"}
+      placeholder={sessionId ? "和 Xuloom 一起工作，输入 $ 选择 Skill…" : "点击新建会话即可开始，也可以打开项目…"}
       disabled={disabled} value={draft}
       onFocus={() => { setFocused(true); setCaret(inputRef.current?.selectionStart || 0); }}
       onBlur={() => setFocused(false)} onSelect={(event) => setCaret(event.currentTarget.selectionStart)}

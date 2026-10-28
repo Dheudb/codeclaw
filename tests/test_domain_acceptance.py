@@ -11,9 +11,9 @@ import time
 import unittest
 from unittest.mock import patch
 
-from codeclaw.core.engine import QueryEngine
-from codeclaw.core.messages import create_assistant_message, create_user_message
-from codeclaw.core.run_result import RunResult
+from xuloom.core.engine import QueryEngine
+from xuloom.core.messages import create_assistant_message, create_user_message
+from xuloom.core.run_result import RunResult
 import test_tool_recovery as recovery
 
 records = []
@@ -109,7 +109,7 @@ class DomainAcceptanceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("42", report)
             self.assertTrue(any("Observed value: 42" in row["tool_result"]["content"] for row in self.engine.recent_tool_activity))
         try:
-            with patch.dict(os.environ, {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}), patch("codeclaw.tools.web_tool.DDGS") as search:
+            with patch.dict(os.environ, {"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}), patch("xuloom.tools.web_tool.DDGS") as search:
                 search.return_value.text.return_value = [{"title": "Fixture study", "href": url, "body": "Controlled evidence"}]
                 await self.evaluate("literature_research", "Find and read the fixture study; retain its citation and distinguish the test from scientific evidence",
                     [self.call("web_search_tool", query="fixture study"), self.call("web_fetch_tool", url=url),

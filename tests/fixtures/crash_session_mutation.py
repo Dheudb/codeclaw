@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 
-from codeclaw.core import session_mutation as actor
+from xuloom.core import session_mutation as actor
 
 spec = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 phase = sys.argv[2]

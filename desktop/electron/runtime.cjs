@@ -10,10 +10,10 @@ function resolveEnginePython({
   if (packaged) {
     const executable = path.join(resourcesPath, "python", "python.exe");
     if (!fs.existsSync(executable))
-      throw new Error("应用内置运行时缺失，请重新解压完整的 CodeClaw 程序包。");
+      throw new Error("应用内置运行时缺失，请重新解压完整的 Xuloom 程序包。");
     return executable;
   }
-  if (env.CODECLAW_PYTHON) return env.CODECLAW_PYTHON;
+  if (env.XULOOM_PYTHON) return env.XULOOM_PYTHON;
   for (const directory of [".venv", ".venv-mcp"]) {
     const executable = path.join(
       projectRoot,

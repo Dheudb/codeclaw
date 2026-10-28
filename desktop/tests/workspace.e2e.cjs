@@ -7,7 +7,7 @@ const { atomicJSON, projectKey } = require("../electron/catalog.cjs");
 const { historyRoot } = require("../electron/history-storage.cjs");
 const { defaultWorkspace } = require("../electron/workspace.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-workspace-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-workspace-e2e-"));
 const data = path.join(fixture, "profile"), config = path.join(fixture, "config");
 const custom = path.join(fixture, "自定义默认目录"), explicit = path.join(fixture, "explicit-project");
 for (const dir of [data, config, explicit]) fs.mkdirSync(dir);
@@ -15,12 +15,12 @@ const workbench = path.join(data, "workbench.json");
 // No projects, workspace selection, or preconfigured default directory.
 atomicJSON(workbench, { projects: [], activeConversation: null });
 atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "", openai_api_key: "", openai_base_url: "http://127.0.0.1:9/v1" });
-const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1",
+const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1",
   LOCALAPPDATA: path.join(fixture, "os-data"), XDG_DATA_HOME: path.join(fixture, "xdg-data") };
-delete env.ELECTRON_RUN_AS_NODE; delete env.CODECLAW_DEV_URL;
-for (const key of ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-const options = { executablePath: process.env.CODECLAW_TEST_EXECUTABLE,
-  args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 };
+delete env.ELECTRON_RUN_AS_NODE; delete env.XULOOM_DEV_URL;
+for (const key of ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+const options = { executablePath: process.env.XULOOM_TEST_EXECUTABLE,
+  args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 };
 let app, page;
 const errors = [];
 const assertPath = (actual, expected) => assert.equal(projectKey(actual), projectKey(expected));
@@ -36,8 +36,8 @@ async function main() {
     // Stub only the OS home for macOS, keeping all created files in the fixture.
     if (process.platform === "darwin") await app.evaluate(({ app }, home) => app.setPath("home", home), fixture);
     const home = await app.evaluate(({ app }) => app.getPath("home"));
-    const defaultDirectory = defaultWorkspace({ home, env: { ...env, CODECLAW_DATA_DIR: data } });
-    assertPath((await page.evaluate(() => window.codeclaw.invoke("workspace.get"))).defaultDirectory, defaultDirectory);
+    const defaultDirectory = defaultWorkspace({ home, env: { ...env, XULOOM_DATA_DIR: data } });
+    assertPath((await page.evaluate(() => window.xuloom.invoke("workspace.get"))).defaultDirectory, defaultDirectory);
     assert(!fs.existsSync(defaultDirectory), "Startup does not create an unsolicited project");
     // New session must never request an OS folder chooser.
     await app.evaluate(({ dialog }) => { dialog.showOpenDialog = async () => { throw new Error("Unexpected folder chooser"); }; });
@@ -50,7 +50,7 @@ async function main() {
     assert.equal(await page.locator(".standalone-group .session-item.active").count(), 1);
     assert.equal(await page.locator(".project-group").count(), 0);
     assert(fs.existsSync(path.join(historyRoot(firstWorkspace, data), "sessions", defaultId.split(":")[1] + ".json")));
-    assert(!fs.existsSync(path.join(firstWorkspace, ".codeclaw/sessions")));
+    assert(!fs.existsSync(path.join(firstWorkspace, ".xuloom/sessions")));
     await page.getByRole("button", { name: "设置与模型", exact: true }).click();
     // Directory configuration works independently of the model configuration.
     await page.getByLabel("模型 ID", { exact: true }).fill("");
@@ -107,7 +107,7 @@ async function main() {
       return (await web.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString("base64");
     });
     fs.writeFileSync(path.join(root, "test-results/standalone-sessions.png"), Buffer.from(layout, "base64"));
-    await page.evaluate((directory) => window.codeclaw.invoke("project.remove", { path: directory, confirm: true }), explicit);
+    await page.evaluate((directory) => window.xuloom.invoke("project.remove", { path: directory, confirm: true }), explicit);
     await page.waitForFunction(() => document.querySelectorAll(".project-group").length === 0);
     assert.equal(await page.locator(".standalone-group .session-item").count(), 3);
     assert(fs.existsSync(path.join(historyRoot(firstWorkspace, data), "sessions", defaultId.split(":")[1] + ".json")), "Default directory changes preserve centralized histories");
@@ -118,7 +118,7 @@ async function main() {
     assert.equal(await page.locator(".standalone-group .session-item").count(), 3);
     assert.equal(readSettings().activeConversation.scope, "standalone");
     const independentId = await page.locator(".session-item.active").getAttribute("data-session-id");
-    await page.evaluate((id) => window.codeclaw.invoke("session.update", { id, patch: { title: "独立归档测试" } }), independentId);
+    await page.evaluate((id) => window.xuloom.invoke("session.update", { id, patch: { title: "独立归档测试" } }), independentId);
     await page.getByRole("button", { name: "会话操作 独立归档测试", exact: true }).click();
     await page.getByRole("menuitem", { name: "归档会话", exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll(".standalone-group .session-item").length === 2);

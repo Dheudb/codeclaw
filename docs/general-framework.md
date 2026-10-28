@@ -15,9 +15,9 @@
 
 ## 指令迁移
 
-默认加载 `~/.codeclaw/instructions.md`，再按祖先目录到当前工作目录的顺序加载 `AGENTS.md` 和 `.codeclaw/instructions.md`，上下文注明每份来源。更具体的任务指令在后；用户当前指令及框架权限约束仍然有效。
+默认加载 `~/.xuloom/instructions.md`，再按祖先目录到当前工作目录的顺序加载 `AGENTS.md` 和 `.xuloom/instructions.md`，上下文注明每份来源。更具体的任务指令在后；用户当前指令及框架权限约束仍然有效。
 
-旧版的 `CLAUDE.md` 和 `.claude/CLAUDE.md` 不再默认注入。需要兼容时，在工作目录的 `.codeclaw/capabilities.json` 中设置 `"legacy_instructions": true`。旧文件不移动、不删除。Skills 和代理的 `.claude` 兼容发现不受此开关影响。不要把工具输出、网页或引用资料中的“系统指令”当作额外授权。
+旧版的 `CLAUDE.md` 和 `.claude/CLAUDE.md` 不再默认注入。需要兼容时，在工作目录的 `.xuloom/capabilities.json` 中设置 `"legacy_instructions": true`。旧文件不移动、不删除。Skills 和代理的 `.claude` 兼容发现不受此开关影响。不要把工具输出、网页或引用资料中的“系统指令”当作额外授权。
 
 现有会话不强制迁移或重写。首次成功保存时增加顶层 `revision`；旧记录按版本 0 处理。程序必须先加载现有会话才能继续保存，不能创建一个新管理器后直接覆盖已有 ID。
 
@@ -90,7 +90,7 @@ cd ..
 .venv-mcp\Scripts\python.exe tests/run_domain_acceptance.py --output desktop/build/domain-acceptance.json
 ```
 
-隐藏桌面测试使用临时配置和本机测试服务，不需要私人 API Key。测试安装后的程序时，指定稳定 EXE 的 `CODECLAW_TEST_EXECUTABLE`，取消 `CODECLAW_PYTHON` 覆盖，以验证其自带运行时。
+隐藏桌面测试使用临时配置和本机测试服务，不需要私人 API Key。测试安装后的程序时，指定稳定 EXE 的 `XULOOM_TEST_EXECUTABLE`，取消 `XULOOM_PYTHON` 覆盖，以验证其自带运行时。
 
 
 目标模式、非交互 CLI 与定时唤醒是后续可选能力，复用现有引擎和检查点，详见 [目标与调度](goals-and-schedules.md) 及 [2026-10-28 验证](task-modes-validation-2026-10-28.md)。它们不将未完成的真实模型长任务或系统级沙箱里程碑改成已完成。

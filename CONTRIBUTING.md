@@ -3,7 +3,7 @@
 先阅读[开发说明](docs/development.md)和[项目结构](docs/architecture.md)。
 
 - 安装依赖使用 Python 虚拟环境与 `npm ci`。
-- 引擎改动放在 `codeclaw/`，界面和 Electron 改动放在 `desktop/`。
+- 引擎改动放在 `xuloom/`，界面和 Electron 改动放在 `desktop/`。
 - 更新功能时同步相应使用文档，避免只更新首页宣传。
 - 不提交 Key、会话、虚拟环境、依赖目录或构建产物。
 - 提交前执行与变更相关的测试；改动桥接、权限或打包时执行端到端验收。

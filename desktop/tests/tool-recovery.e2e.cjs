@@ -1,12 +1,12 @@
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), http = require("node:http"), assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
-const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-tool-recovery-"));
+const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-tool-recovery-"));
 const data = path.join(fixture, "data"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const dir of [data, config, home]) fs.mkdirSync(dir);
 atomicJSON(path.join(data, "workbench.json"), { projects: [] });
 let app, page, sequence = 0, mainCalls = 0, exhaustedCalls = 0, childCalls = 0, workflowCalls = 0;
-const python = process.env.CODECLAW_PYTHON || path.join(root, "build", "python", "python.exe");
+const python = process.env.XULOOM_PYTHON || path.join(root, "build", "python", "python.exe");
 const failures = [];
 const bad = '<｜DSML｜tool_calls><｜DSML｜invoke name="command_tool"><｜DSML｜parameter name="unknown" string="true">bad</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
 function reply(res, text, name, args, raw = false) {
@@ -72,9 +72,9 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, CODECLAW_DATA_DIR: data, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, USERPROFILE: home, HOME: home, CODECLAW_TEST_HEADLESS: "1" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  const env = { ...process.env, XULOOM_DATA_DIR: data, XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, USERPROFILE: home, HOME: home, XULOOM_TEST_HEADLESS: "1" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(60000); page.on("pageerror", (error) => failures.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }
@@ -86,8 +86,8 @@ async function send(text) {
   try {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "fixture", openai_api_key: "fixture", openai_base_url: `http://127.0.0.1:${server.address().port}/v1` });
-    const skill = path.join(home, ".codeclaw", "skills", "fixture-workflow"); fs.mkdirSync(skill, { recursive: true });
-    fs.writeFileSync(path.join(skill, "SKILL.md"), "---\nname: fixture-workflow\ndescription: Fixture workflow.\nmetadata:\n  codeclaw:\n    completion-protocol: workflow-json-v1\n---\nFollow the fixture runtime.");
+    const skill = path.join(home, ".xuloom", "skills", "fixture-workflow"); fs.mkdirSync(skill, { recursive: true });
+    fs.writeFileSync(path.join(skill, "SKILL.md"), "---\nname: fixture-workflow\ndescription: Fixture workflow.\nmetadata:\n  xuloom:\n    completion-protocol: workflow-json-v1\n---\nFollow the fixture runtime.");
     await launch(); await page.locator(".new-task").click(); await page.locator(".session-item.active").waitFor();
     await page.getByLabel("访问权限", { exact: true }).selectOption("full"); await page.waitForFunction(() => !document.querySelector(".permission-picker").disabled);
     await send("RECOVER"); await page.getByText("RECOVERY_PASS", { exact: true }).waitFor(); assert.equal(mainCalls, 6);
@@ -99,6 +99,7 @@ async function send(text) {
     assert.equal(await page.locator('.turn-process[data-turn-status="error"]').count(), 1);
     await send("CONTINUE"); await page.getByText("CONTINUATION_PASS", { exact: true }).waitFor();
     await send("CHILD_RECOVER"); await page.getByText("CHILD_PARENT_PASS", { exact: true }).waitFor(); assert.equal(childCalls, 3);
+    if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
     await page.getByRole("button", { name: "Skills", exact: true }).click();
     await page.locator(".capability-card").filter({ has: page.getByText("fixture-workflow", { exact: true }) }).getByRole("button", { name: "选择使用", exact: true }).click();
     await send("WORKFLOW"); await page.getByText("WORKFLOW_PASS", { exact: true }).waitFor(); assert.equal(workflowCalls, 4);

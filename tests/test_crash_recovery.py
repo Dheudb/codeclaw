@@ -6,8 +6,8 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from codeclaw.core.engine import QueryEngine
-from codeclaw.memory.memory import MemoryCompactor
+from xuloom.core.engine import QueryEngine
+from xuloom.memory.memory import MemoryCompactor
 
 
 class CrashRecoveryTests(unittest.TestCase):
@@ -16,7 +16,7 @@ class CrashRecoveryTests(unittest.TestCase):
         for phase in ("before_execution", "after_effect", "after_result"):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
-                env = {**os.environ, "CODECLAW_DATA_DIR": str(root / "data"), "HOME": str(root / "home"),
+                env = {**os.environ, "XULOOM_DATA_DIR": str(root / "data"), "HOME": str(root / "home"),
                        "USERPROFILE": str(root / "home"), "OPENAI_API_KEY": "fixture", "PYTHONPATH": str(repository)}
                 process = subprocess.run([sys.executable, str(repository / "tests/fixtures/crash_tool.py"), str(root), phase],
                     cwd=repository, env=env, timeout=45, capture_output=True, text=True)

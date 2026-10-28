@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import httpx
 
-from codeclaw.core.model_catalog import save_connection, delete_connection, public_config, select_model, discover_models, sync_legacy_connection, apply_connection_env, apply_catalog_env, active_connection, connections
+from xuloom.core.model_catalog import save_connection, delete_connection, public_config, select_model, discover_models, sync_legacy_connection, apply_connection_env, apply_catalog_env, active_connection, connections
 
 
 class ModelCatalogTests(unittest.IsolatedAsyncioTestCase):
@@ -56,8 +56,8 @@ class ModelCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(public_config(cfg)["model"], "three")
         apply_connection_env(active_connection(cfg))
         self.assertEqual(os.environ["OPENAI_MODEL"], "three")
-        from codeclaw.core.config import load_config_into_env
-        with patch.dict(os.environ, {}, clear=True), patch("codeclaw.core.config.load_config", return_value={
+        from xuloom.core.config import load_config_into_env
+        with patch.dict(os.environ, {}, clear=True), patch("xuloom.core.config.load_config", return_value={
             "model_connections": cfg["model_connections"], "active_model_connection": cfg["active_model_connection"]
         }):
             load_config_into_env()
@@ -88,14 +88,14 @@ class ModelCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cfg['model_connections'], [])
         self.assertEqual(cfg['unrelated'], 'preserve')
         self.assertNotIn('first-secret', json.dumps(cfg))
-        with patch.dict(os.environ, {'OPENAI_MODEL': 'stale', 'OPENAI_API_KEY': 'first-secret', 'ANTHROPIC_API_KEY': 'other-secret', 'CODECLAW_OPENAI_MODEL': 'stale-alias'}):
+        with patch.dict(os.environ, {'OPENAI_MODEL': 'stale', 'OPENAI_API_KEY': 'first-secret', 'ANTHROPIC_API_KEY': 'other-secret', 'XULOOM_OPENAI_MODEL': 'stale-alias'}):
             self.assertEqual(connections(cfg), [])
             self.assertEqual(public_config(cfg)['model'], '')
             self.assertFalse(public_config(cfg)['hasKey'])
-            from codeclaw.core.config import load_config_into_env
-            with patch('codeclaw.core.config.load_config', return_value=cfg):
+            from xuloom.core.config import load_config_into_env
+            with patch('xuloom.core.config.load_config', return_value=cfg):
                 load_config_into_env()
-            for key in ('OPENAI_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CODECLAW_OPENAI_MODEL'):
+            for key in ('OPENAI_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'XULOOM_OPENAI_MODEL'):
                 self.assertNotIn(key, os.environ)
         restored = save_connection(cfg, {'provider': 'openai', 'model': 'new', 'apiKey': 'new-secret'})
         self.assertEqual(public_config(restored)['model'], 'new')
@@ -109,7 +109,7 @@ class ModelCatalogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.headers["authorization"], "Bearer first-secret")
             return httpx.Response(200, json={"data": [{"id": "one"}, {"id": "new", "type": "chat"}, {"id": "one"}, {"id": "embed", "type": "embedding"}]})
         factory = httpx.AsyncClient
-        with patch("codeclaw.core.model_catalog.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(handler), **kwargs)):
+        with patch("xuloom.core.model_catalog.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(handler), **kwargs)):
             result = await discover_models(cfg, {"connectionId": "legacy-openai", "baseUrl": "https://first.invalid/v1/chat/completions"})
         self.assertEqual(result["models"], ["one", "new"])
         self.assertEqual(json.dumps(cfg), original)
@@ -125,10 +125,10 @@ class ModelCatalogTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.headers["x-api-key"], "anthropic-secret")
             return httpx.Response(200, json={"data": [{"id": "b" if len(calls) == 2 else "a"}], "has_more": len(calls) == 1, "last_id": "a"})
         factory = httpx.AsyncClient
-        with patch("codeclaw.core.model_catalog.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(handler), **kwargs)):
+        with patch("xuloom.core.model_catalog.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(handler), **kwargs)):
             self.assertEqual((await discover_models(cfg, {"connectionId": "anthropic-test"}))["models"], ["a", "b"])
         self.assertEqual(calls[1].url.params["after_id"], "a")
-        with patch("codeclaw.core.model_catalog.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(lambda request: httpx.Response(401, text="anthropic-secret")), **kwargs)):
+        with patch("xuloom.core.model_catalog.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(lambda request: httpx.Response(401, text="anthropic-secret")), **kwargs)):
             with self.assertRaises(ValueError) as error:
                 await discover_models(cfg, {"connectionId": "anthropic-test"})
         self.assertNotIn("anthropic-secret", str(error.exception))

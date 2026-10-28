@@ -23,7 +23,7 @@ export default function Markdown({ text, onOpenFile }: { text: string; onOpenFil
   function openLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
     event.preventDefault();
     setLinkError("");
-    window.codeclaw.invoke("external.open", { url }).catch(() => setLinkError("无法打开链接，请复制地址后手动打开：" + url));
+    window.xuloom.invoke("external.open", { url }).catch(() => setLinkError("无法打开链接，请复制地址后手动打开：" + url));
   }
   return (
     <>

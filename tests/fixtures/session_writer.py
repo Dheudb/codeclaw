@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from unittest.mock import AsyncMock, patch
 
-from codeclaw.core.session import SessionManager
+from xuloom.core.session import SessionManager
 
 root, mode, identity = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 
@@ -25,8 +25,8 @@ if mode == "hold":
             break
     manager.release_writer()
 elif mode == "probe":
-    from codeclaw.core.engine import QueryEngine
-    from codeclaw.memory.memory import MemoryCompactor
+    from xuloom.core.engine import QueryEngine
+    from xuloom.memory.memory import MemoryCompactor
     async def probe():
         with patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None):
             engine = QueryEngine(model="fixture", model_provider="openai", cwd=str(root))

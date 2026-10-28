@@ -1,7 +1,7 @@
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path"), http = require("node:http"), assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
-const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-resume-"));
+const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-resume-"));
 const data = path.join(fixture, "data"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const dir of [data, config, home]) fs.mkdirSync(dir);
 atomicJSON(path.join(data, "workbench.json"), { projects: [], activeConversation: null });
@@ -21,7 +21,7 @@ const server = http.createServer((req, res) => {
     }
     const system = body.messages.filter((m) => m.role === "system").map(textOf).join("\n");
     if (system.includes("resume-fixture") || system.includes("Configured request model ID:")) failures.push("Model routing leaked into resumed identity prompt");
-    if (!system.includes("introduce yourself as CodeClaw")) failures.push("Product identity missing from resumed request");
+    if (!system.includes("introduce yourself as Xuloom")) failures.push("Product identity missing from resumed request");
     if (text === "EDITED_TASK" && body.messages.some((m) => m.role === "user" && textOf(m) === "EDIT_ORIGINAL")) failures.push("Superseded prompt still sent to model");
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "test", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
@@ -34,9 +34,9 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, CODECLAW_DATA_DIR: data, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, HOME: home, USERPROFILE: home, CODECLAW_TEST_HEADLESS: "1" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env });
+  const env = { ...process.env, XULOOM_DATA_DIR: data, XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, HOME: home, USERPROFILE: home, XULOOM_TEST_HEADLESS: "1" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env });
   page = await app.firstWindow(); page.setDefaultTimeout(90000); page.on("pageerror", (e) => failures.push(e.message));
   await app.evaluate(({ app }) => {
     globalThis.resumeTransportTrace = [];

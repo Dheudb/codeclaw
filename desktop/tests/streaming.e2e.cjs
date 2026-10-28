@@ -1,7 +1,7 @@
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), http = require("node:http"), assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
-const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-streaming-"));
+const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-streaming-"));
 const data = path.join(fixture, "data"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const dir of [data, config, home]) fs.mkdirSync(dir);
 atomicJSON(path.join(data, "workbench.json"), { projects: [] });
@@ -39,9 +39,9 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, CODECLAW_DATA_DIR: data, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_SKILLS_PATHS: "", USERPROFILE: home, HOME: home, CODECLAW_TEST_HEADLESS: "1" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  const env = { ...process.env, XULOOM_DATA_DIR: data, XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_SKILLS_PATHS: "", USERPROFILE: home, HOME: home, XULOOM_TEST_HEADLESS: "1" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(15000); page.on("pageerror", e => failures.push(e.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }

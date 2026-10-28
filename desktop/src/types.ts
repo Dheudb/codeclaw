@@ -95,6 +95,7 @@ export type SessionCatalog = {
   view: { sort: "recent" | "oldest" | "name" | "created" };
 };
 export type InitialSession = {
+  collaborationMode?: "solo" | "auto" | "ultra";
   fileChanges?: FileChange[];
   scope?: "project" | "standalone";
   permissionMode?: PermissionMode;
@@ -139,6 +140,8 @@ export type ToolActivity = {
   waitingRequestId?: string;
 };
 export type SessionView = InitialSession & {
+  goal?: { objective: string; status: string } | null;
+  collaborationMode: "solo" | "auto" | "ultra";
   permissionMode: PermissionMode;
   persistedId?: string;
   busy: boolean;
@@ -168,7 +171,7 @@ export type FileChange = {
 };
 declare global {
   interface Window {
-    codeclaw: {
+    xuloom: {
       flushDrafts(drafts: { id: string; draft: string; draftEditId: string; draftAttachments: string[] }[]): boolean;
       importFiles(session: string, files: File[], existing: string[]): Promise<Attachment[]>;
       invoke<T = any>(

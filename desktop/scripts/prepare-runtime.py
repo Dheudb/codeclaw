@@ -1,4 +1,4 @@
-"""Build a relocatable Windows CPython runtime with CodeClaw and MCP installed."""
+"""Build a relocatable Windows CPython runtime with Xuloom and MCP installed."""
 import hashlib
 import json
 import os
@@ -22,8 +22,8 @@ def reset_generated(path):
 
 
 def verify(runtime):
-    with tempfile.TemporaryDirectory(prefix="codeclaw-runtime-check-") as directory:
-        subprocess.run([str(runtime / "python.exe"), "-I", "-c", "import sys,codeclaw.core.engine; from PIL import Image; from codeclaw.protocols.mcp_bridge import MCP_AVAILABLE; assert MCP_AVAILABLE; assert sys.version_info >= (3,12); print('Bundled Python, image support and MCP verified')"], cwd=directory, check=True)
+    with tempfile.TemporaryDirectory(prefix="xuloom-runtime-check-") as directory:
+        subprocess.run([str(runtime / "python.exe"), "-I", "-c", "import sys,xuloom.core.engine; from PIL import Image; from xuloom.protocols.mcp_bridge import MCP_AVAILABLE; assert MCP_AVAILABLE; assert sys.version_info >= (3,12); print('Bundled Python, image support and MCP verified')"], cwd=directory, check=True)
 
 
 def main():
@@ -32,10 +32,11 @@ def main():
     base = Path(sys.base_prefix)
     if not (base / "python.exe").is_file() or not (base / "Lib" / "os.py").is_file():
         raise SystemExit("Use a standard Windows CPython installation to build the bundled runtime.")
-    inputs = [ROOT / "setup.py", ROOT / "pyproject.toml"] + sorted((ROOT / "codeclaw").rglob("*.py"))
-    inputs += sorted((ROOT / "codeclaw" / "skills" / "builtin").rglob("*.md"))
+    inputs = [ROOT / "setup.py", ROOT / "pyproject.toml"] + sorted((ROOT / "xuloom").rglob("*.py"))
+    inputs += sorted((ROOT / "xuloom").rglob("*.py"))
+    inputs += sorted((ROOT / "xuloom" / "skills" / "builtin").rglob("*.md"))
     fingerprint = hashlib.sha256(sys.version.encode() + b"".join(path.relative_to(ROOT).as_posix().encode() + path.read_bytes() for path in inputs)).hexdigest()
-    manifest = RUNTIME / "codeclaw-runtime.json"
+    manifest = RUNTIME / "xuloom-runtime.json"
     if manifest.exists() and json.loads(manifest.read_text())["fingerprint"] == fingerprint:
         verify(RUNTIME)
         return
@@ -57,7 +58,7 @@ def main():
     for metadata in sorted(target.glob("*.dist-info/METADATA")):
         fields = metadata.read_text(encoding="utf-8", errors="replace").splitlines()
         installed.append({key: next((line.split(": ", 1)[1] for line in fields if line.startswith(key + ": ")), "") for key in ("Name", "Version")})
-    (stage / "codeclaw-runtime.json").write_text(json.dumps({"python": sys.version.split()[0], "fingerprint": fingerprint, "packages": installed}, indent=2), encoding="utf-8")
+    (stage / "xuloom-runtime.json").write_text(json.dumps({"python": sys.version.split()[0], "fingerprint": fingerprint, "packages": installed}, indent=2), encoding="utf-8")
     reset_generated(RUNTIME)
     stage.rename(RUNTIME)
     print("Prepared bundled runtime: " + str(RUNTIME))

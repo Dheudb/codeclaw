@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from codeclaw.desktop.activity import restore_activity, transcript_activity
+from xuloom.desktop.activity import restore_activity, transcript_activity
 
 
 class ActivityTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class ActivityTests(unittest.TestCase):
     def test_child_scope_cannot_collide_and_inherited_parent_calls_are_excluded(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            directory = root / ".codeclaw/sessions/subagents"
+            directory = root / ".xuloom/sessions/subagents"
             directory.mkdir(parents=True)
             (directory / "child.json").write_text(json.dumps({"task": "Inspect", "messages": self.messages() + [
                 {"role": "user", "content": "Inspect"}] + self.messages()}), encoding="utf-8")

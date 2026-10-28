@@ -81,10 +81,12 @@ export default function CapabilityPanel({
           <button
             key={id}
             className={tab === id ? "active" : ""}
+            title={label}
+            aria-pressed={tab === id}
             onClick={() => setTab(id)}
           >
             <Icon size={14} />
-            {label}
+            <span>{label}</span>
           </button>
         ))}
       </div>
@@ -129,7 +131,7 @@ export default function CapabilityPanel({
                     <h4>添加第一个 Skill</h4>
                     <p>
                       选择包含 SKILL.md 的目录，也可以将技能放入项目的
-                      .codeclaw/skills。
+                      .xuloom/skills。
                     </p>
                   </div>
                 )}
@@ -202,7 +204,7 @@ export default function CapabilityPanel({
                     扫描目录与优先级 <ChevronDown size={13} />
                   </summary>
                   <p>
-                    项目 .codeclaw → .agents → .claude → 导入目录 → 环境目录 →
+                    项目 .xuloom → .agents → .claude → 导入目录 → 环境目录 →
                     全局目录 → 内置目录。同名技能以首个格式正确的目录为准。
                   </p>
                 </details>

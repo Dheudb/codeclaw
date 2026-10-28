@@ -16,10 +16,10 @@ DESKTOP = ROOT / "desktop"
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--package-directory", type=Path, default=DESKTOP / "release/CodeClaw-win32-x64")
+    parser.add_argument("--package-directory", type=Path, default=DESKTOP / "release/Xuloom-win32-x64")
     args = parser.parse_args()
     package = args.package_directory.resolve()
-    executable = package / "CodeClaw.exe"
+    executable = package / "Xuloom.exe"
     if not executable.is_file() or not (package / "resources/python/python.exe").is_file():
         raise SystemExit("The existing installation and its bundled runtime are required")
     if not (DESKTOP / "dist/index.html").is_file():
@@ -30,7 +30,7 @@ def main():
     wheels = stage / "wheels"; wheels.mkdir()
     subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-index", "--no-deps", "--no-build-isolation",
         "--wheel-dir", str(wheels), str(ROOT)], cwd=ROOT, check=True)
-    wheel, = wheels.glob("codeclaw-*.whl")
+    wheel, = wheels.glob("xuloom-*.whl")
     with zipfile.ZipFile(wheel) as archive:
         metadata, = {name.split("/")[0] for name in archive.namelist() if ".dist-info/" in name}
         for member in archive.infolist():
@@ -38,30 +38,30 @@ def main():
             if member.is_dir(): continue
             if relative.is_absolute() or ".." in relative.parts:
                 raise SystemExit("Invalid wheel member")
-            if relative.parts[0] == "codeclaw": target = stage / relative
+            if relative.parts[0] == "xuloom": target = stage / relative
             elif relative.parts[0] == metadata: target = stage / "metadata" / Path(*relative.parts[1:])
             else: raise SystemExit("Unexpected distribution root: " + relative.parts[0])
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(archive.read(member))
-    source = ROOT / "codeclaw"
+    source = ROOT / "xuloom"
     for pattern in ("*.py", "*.md"):
         expected = {path.relative_to(source) for path in source.rglob(pattern)}
-        actual = {path.relative_to(stage / "codeclaw") for path in (stage / "codeclaw").rglob(pattern)}
-        if expected != actual or any((source / path).read_bytes() != (stage / "codeclaw" / path).read_bytes() for path in expected):
+        actual = {path.relative_to(stage / "xuloom") for path in (stage / "xuloom").rglob(pattern)}
+        if expected != actual or any((source / path).read_bytes() != (stage / "xuloom" / path).read_bytes() for path in expected):
             raise SystemExit("Wheel resources do not match public source")
-    skills = sorted(path.parent.name for path in (stage / "codeclaw/skills/builtin").glob("*/SKILL.md"))
+    skills = sorted(path.parent.name for path in (stage / "xuloom/skills/builtin").glob("*/SKILL.md"))
     if skills != ["code-development", "code-review", "debug-issue", "web-research"]:
         raise SystemExit("Unexpected bundled skills")
     app = stage / "app"; app.mkdir()
     for directory in ("dist", "electron"):
         shutil.copytree(DESKTOP / directory, app / directory)
     version = json.loads((DESKTOP / "package.json").read_text(encoding="utf-8"))["version"]
-    (app / "package.json").write_text(json.dumps({"name": "codeclaw-desktop", "productName": "CodeClaw",
+    (app / "package.json").write_text(json.dumps({"name": "xuloom-desktop", "productName": "Xuloom",
         "version": version, "main": "electron/main.cjs", "buildId": build_id}, indent=2), encoding="utf-8")
     subprocess.run([str(package / "resources/python/python.exe"), "-I", "-B", "-c",
-        "import sys;sys.path.insert(0,sys.argv[1]);import codeclaw.core.session_mutation,codeclaw.core.engine;from codeclaw.protocols.mcp_bridge import MCP_AVAILABLE;assert MCP_AVAILABLE;print('Staged engine and bundled dependencies verified')",
+        "import sys;sys.path[:0]=[sys.argv[1],sys.argv[1]+'/dependencies'];import xuloom,xuloom.core.session_mutation,xuloom.core.engine;from xuloom.protocols.mcp_bridge import MCP_AVAILABLE;assert MCP_AVAILABLE;print('Staged engine and bundled dependencies verified')",
         str(stage)], cwd=stage, check=True)
-    manifest = {"metadataDirectory": metadata, "buildId": build_id,
+    manifest = {"metadataDirectory": metadata, "buildId": build_id, "pythonPackages": [],
         "originalExeSha256": hashlib.sha256(executable.read_bytes()).hexdigest(), "bundledSkills": skills}
     (stage / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     if list(stage.rglob("*.exe")): raise SystemExit("Resource updates must not contain another executable")

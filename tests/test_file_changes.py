@@ -3,10 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codeclaw.desktop.turns import TurnRecorder
-from codeclaw.features.file_changes import describe_change, legacy_changes, preview_file
-from codeclaw.tools.file_write_tool import FileWriteTool
-from codeclaw.tools.file_edit_tool import FileEditTool
+from xuloom.desktop.turns import TurnRecorder
+from xuloom.features.file_changes import describe_change, legacy_changes, preview_file
+from xuloom.tools.file_write_tool import FileWriteTool
+from xuloom.tools.file_edit_tool import FileEditTool
 
 
 class FileChangeTests(unittest.IsolatedAsyncioTestCase):

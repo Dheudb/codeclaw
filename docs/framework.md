@@ -78,7 +78,7 @@ DSML 调用格式错误会反馈具体工具和参数问题，请模型修正后
 旧文本 `wait` 等待所选批次全部完成，同样有超时上限。
 状态中的 `running_commands` 与 `pending_message_count` 单独计数，不等同于模型正在执行。
 
-默认总容量 10，前台与后台共用容量。可在工作目录 `.codeclaw/capabilities.json` 中设置：
+默认总容量 10，前台与后台共用容量。可在工作目录 `.xuloom/capabilities.json` 中设置：
 
 ```json
 {"agent_concurrency": 24}
@@ -95,11 +95,11 @@ DSML 调用格式错误会反馈具体工具和参数问题，请模型修正后
 
 外部 Skill 可将自己的角色放在技能目录的 `agents/*.md`，并在该技能根目录提供 `mcp_servers.json`。
 加载有效、未被同名技能覆盖的 Skill 时，会发现这些角色与 MCP 配置；它们保留在外部目录，不复制进应用或源码。
-MCP 的 `command` / `args` 支持 `${python}`（当前 CodeClaw 解释器）和 `${skill}`（此技能的绝对目录）。
+MCP 的 `command` / `args` 支持 `${python}`（当前 Xuloom 解释器）和 `${skill}`（此技能的绝对目录）。
 工作区的 MCP 配置优先于技能默认配置；可在 MCP 管理中禁用技能提供的服务。
 角色仍遵循下述工具与权限限制，不会因随 Skill 挂载而获得额外权限。
 
-继续使用 `.codeclaw/agents/*.md`（也支持 `.agents/agents`、`.claude/agents` 及导入目录）：
+继续使用 `.xuloom/agents/*.md`（也支持 `.agents/agents`、`.claude/agents` 及导入目录）：
 
 ```markdown
 ---
@@ -152,7 +152,7 @@ UTF-8 多字节字符跨页保留；只有读到 `eof=true` 且命令成功结�
 
 ## 验证
 
-技能可在 SKILL.md 的 YAML 中声明 `metadata.codeclaw.completion-protocol: workflow-json-v1`。
+技能可在 SKILL.md 的 YAML 中声明 `metadata.xuloom.completion-protocol: workflow-json-v1`。
 只有本回合明确选择或通过 `skill_tool read` 加载的技能才启用完成检查。
 其命令运行时可输出完整 JSON，以 `run_handle`（也可位于 `artifact_locator`）标识流程，
 以布尔 `workflow_finished` 表示完成状态；带 `run_handle` 和 `next_command` 的初始化响应也表示未完成。

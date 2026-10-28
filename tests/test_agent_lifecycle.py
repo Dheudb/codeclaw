@@ -1,4 +1,4 @@
-from codeclaw.core.run_result import RunResult
+from xuloom.core.run_result import RunResult
 import asyncio
 import json
 import os
@@ -8,19 +8,19 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from codeclaw.agents.registry import AgentRegistry
-from codeclaw.core.engine import QueryEngine
-from codeclaw.core.messages import create_user_message, create_assistant_message
-from codeclaw.memory.memory import MemoryCompactor
-from codeclaw.protocols.mcp_config import validate_server
+from xuloom.agents.registry import AgentRegistry
+from xuloom.core.engine import QueryEngine
+from xuloom.core.messages import create_user_message, create_assistant_message
+from xuloom.memory.memory import MemoryCompactor
+from xuloom.protocols.mcp_config import validate_server
 
 
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.env = patch.dict(os.environ, {"CODECLAW_DATA_DIR": str(self.root / "data"), "HOME": str(self.root / "home"),
-            "USERPROFILE": str(self.root / "home"), "OPENAI_API_KEY": "fixture", "CODECLAW_MODEL_PROVIDER": "openai"})
+        self.env = patch.dict(os.environ, {"XULOOM_DATA_DIR": str(self.root / "data"), "HOME": str(self.root / "home"),
+            "USERPROFILE": str(self.root / "home"), "OPENAI_API_KEY": "fixture", "XULOOM_MODEL_PROVIDER": "openai"})
         self.env.start()
         self.tokens = patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None)
         self.tokens.start()
@@ -88,7 +88,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             ids = [r["agent_id"] for r in receipt["agents"]]
             await asyncio.sleep(0)
             capacity = json.loads(await self.tool.execute(action="capacity"))
-            self.assertEqual((capacity["active"], capacity["available"]), (2, 8))
+            self.assertEqual((capacity["active"], capacity["available"]), (2, 1))
             rows = json.loads(await self.tool.execute(action="list"))["agents"]
             self.assertTrue(all(row["executing"] for row in rows))
             result = json.loads(await self.tool.execute(action="wait", agent_ids=ids, timeout_ms=5, response_format="json"))
@@ -126,7 +126,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(json.loads(await self.tool.execute(action="result", agent_id=identity))["pending_message_count"], 0)
 
     async def test_role_tool_and_mcp_restrictions_survive_latent_activation(self):
-        directory = self.root / ".codeclaw/agents"
+        directory = self.root / ".xuloom/agents"
         directory.mkdir(parents=True)
         (directory / "limited.md").write_text("---\nname: limited\ndescription: limited worker\nweb_search: disabled\nmcp_servers: []\nread_only: true\n---\nOnly inspect.", encoding="utf-8")
         mcp = SimpleNamespace(server_name="papers", name="papers_search", context={}, is_read_only=False)
@@ -145,7 +145,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(receipt["agents"][0]["status"], "completed")
 
     async def test_explicit_role_loads_its_specialized_tool_without_activating_it_for_parent(self):
-        directory = self.root / ".codeclaw/agents"
+        directory = self.root / ".xuloom/agents"
         directory.mkdir(parents=True)
         (directory / "calculator.md").write_text("---\nname: calculator\ndescription: Calculate the assigned expression\ntools: [repl_tool]\n---\nCalculate only the assigned expression.", encoding="utf-8")
         self.assertIn("repl_tool", self.engine.latent_tools)
@@ -160,11 +160,12 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_capacity_configuration_and_mcp_timeout_validation(self):
         self.engine.tool_context["skill_registry"].update(agent_concurrency=24)
+        self.engine.set_collaboration_mode("auto", persist=False)
         capacity = json.loads(await self.tool.execute(action="capacity"))
         self.assertEqual(capacity["limit"], 24)
         self.engine.tool_context["skill_registry"].update(agent_concurrency=True)
         with self.assertRaises(ValueError):
-            await self.tool.execute(action="capacity")
+            self.engine.set_collaboration_mode("auto", persist=False)
         server = validate_server({"command": "python", "tool_timeout_sec": 90, "env": {"ss-api-key": "fixture"}})
         self.assertEqual(server["tool_timeout_sec"], 90)
         for timeout in [True, 0, 601, "90"]:
@@ -173,6 +174,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_configured_capacity_applies_to_real_parallel_admissions(self):
         self.engine.tool_context["skill_registry"].update(agent_concurrency=24)
+        self.engine.set_collaboration_mode("auto", persist=False)
         entered, gate = [], asyncio.Event()
         async def run(child, user_input, sys_print_callback):
             entered.append(child.agent_id)

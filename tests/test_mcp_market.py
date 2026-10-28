@@ -10,12 +10,12 @@ from unittest.mock import patch
 
 import httpx
 
-from codeclaw.desktop.bridge import DesktopBridge
-from codeclaw.protocols.mcp_bridge import MCPBridge, MCP_AVAILABLE
-from codeclaw.protocols.mcp_config import MCPConfigStore, validate_server
-from codeclaw.protocols.mcp_market import MCPMarket, BUILTIN, materialize, registry_entry
-from codeclaw.context.attachments import AttachmentCollector
-from codeclaw.tools.web_tool import WebSearchTool
+from xuloom.desktop.bridge import DesktopBridge
+from xuloom.protocols.mcp_bridge import MCPBridge, MCP_AVAILABLE
+from xuloom.protocols.mcp_config import MCPConfigStore, validate_server
+from xuloom.protocols.mcp_market import MCPMarket, BUILTIN, materialize, registry_entry
+from xuloom.context.attachments import AttachmentCollector
+from xuloom.tools.web_tool import WebSearchTool
 
 
 class MCPSettingsTests(unittest.TestCase):
@@ -23,7 +23,8 @@ class MCPSettingsTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
-        self.store = MCPConfigStore(self.root / "mcp_servers.json")
+        self.store = MCPConfigStore(self.root / ".xuloom/mcp_servers.json")
+        self.store.path.parent.mkdir(parents=True, exist_ok=True)
 
     def test_credentials_redacted_preserved_and_explicitly_removed(self):
         self.store.save("search", {"url": "https://example.invalid/mcp?token=hidden-query", "headers": {"Authorization": "Bearer hidden-key"}})
@@ -93,7 +94,7 @@ class MCPSettingsTests(unittest.TestCase):
 
 class MCPMarketTests(unittest.IsolatedAsyncioTestCase):
     async def test_builtin_search_remains_available_without_mcp_and_does_not_block(self):
-        with patch("codeclaw.tools.web_tool.DDGS") as ddgs:
+        with patch("xuloom.tools.web_tool.DDGS") as ddgs:
             ddgs.return_value.text.return_value = [{"title": "Fixture", "href": "https://example.invalid/source", "body": "Snippet"}]
             result = await WebSearchTool().execute("fixture", 50)
         self.assertIn("\nURL: https://example.invalid/source\n", result["content"])
@@ -108,7 +109,7 @@ class MCPMarketTests(unittest.IsolatedAsyncioTestCase):
             requests.append(request)
             return httpx.Response(200, json={"servers": [{"server": {"name": "example/remote", "remotes": [{"type": "streamable-http", "url": "https://example.invalid/mcp"}]}}, {"server": {"name": "example/unsupported"}}], "metadata": {"nextCursor": "page-2"}})
         factory = httpx.AsyncClient
-        with patch("codeclaw.protocols.mcp_market.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(respond), **kwargs)):
+        with patch("xuloom.protocols.mcp_market.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(respond), **kwargs)):
             result = await market.search("search", "registry", "page-1")
         self.assertEqual(result["cursor"], "page-2")
         self.assertEqual(result["skipped"], 1)
@@ -121,7 +122,7 @@ class MCPMarketTests(unittest.IsolatedAsyncioTestCase):
         factory = httpx.AsyncClient
         def failure(request):
             raise httpx.ConnectError("fixture-token-must-not-leak")
-        with patch("codeclaw.protocols.mcp_market.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(failure), **kwargs)):
+        with patch("xuloom.protocols.mcp_market.httpx.AsyncClient", side_effect=lambda **kwargs: factory(transport=httpx.MockTransport(failure), **kwargs)):
             with self.assertRaises(ValueError) as caught:
                 await market.search(source="registry")
         self.assertNotIn("fixture-token", str(caught.exception))
@@ -134,7 +135,7 @@ class MCPMarketTests(unittest.IsolatedAsyncioTestCase):
             snapshot = await bridge.dispatch("mcp.list", {})
             self.assertFalse(snapshot["servers"][0]["enabled"])
             self.assertIsNone(bridge.engine)
-            shared = MCPConfigStore(Path(directory) / "mcp_servers.json")
+            shared = MCPConfigStore(Path(directory) / ".xuloom/mcp_servers.json")
             self.assertEqual(shared.read()["mcpServers"]["exa"]["url"], BUILTIN[0]["config"]["url"])
             await bridge.dispatch("mcp.remove", {"name": "exa"})
             self.assertEqual(shared.read()["mcpServers"], {})
@@ -150,7 +151,8 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.server = await asyncio.create_subprocess_exec(shutil.which("node"), self.fixture, "--http", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         port = json.loads(await asyncio.wait_for(self.server.stdout.readline(), 10))["port"]
         self.url = "http://127.0.0.1:" + str(port) + "/mcp"
-        self.store = MCPConfigStore(self.root / "mcp_servers.json")
+        self.store = MCPConfigStore(self.root / ".xuloom/mcp_servers.json")
+        self.store.path.parent.mkdir(parents=True, exist_ok=True)
 
     async def asyncTearDown(self):
         self.server.terminate()
@@ -162,7 +164,7 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.store.save("disabled", {"command": "does-not-exist", "enabled": False})
         bridge = MCPBridge(str(self.store.path))
         try:
-            with patch.dict(os.environ, {"CODECLAW_TEST_MODEL_SECRET": "must-not-inherit"}):
+            with patch.dict(os.environ, {"XULOOM_TEST_MODEL_SECRET": "must-not-inherit"}):
                 tools = await bridge.load_and_connect()
             self.assertEqual({name for name in tools if getattr(tools[name], "server_name", None) not in self.store.skill_servers()}, {"local_search", "remote_search"})
             self.assertIn("SEARCH_FIXTURE_PROOF", (await tools["local_search"](query="local"))["content"])
@@ -177,7 +179,7 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge.sessions, {})
 
     async def test_failed_service_does_not_prevent_next_service(self):
-        self.store.save("missing", {"command": "codeclaw-fixture-command-does-not-exist"})
+        self.store.save("missing", {"command": "xuloom-fixture-command-does-not-exist"})
         self.store.save("working", {"url": self.url})
         bridge = MCPBridge(str(self.store.path))
         try:
@@ -193,7 +195,7 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
         tested = await desktop.dispatch("mcp.test", {"name": "remote"})
         self.assertEqual(tested["status"], "connected")
         self.assertIsNone(desktop.engine)
-        from codeclaw.core.engine import QueryEngine
+        from xuloom.core.engine import QueryEngine
         engine = SimpleNamespace(available_tools={}, latent_tools={}, tool_context={})
         engine.register_mcp_tools = lambda tools: QueryEngine.register_mcp_tools(engine, tools)
         engine.activate_tools = lambda names: QueryEngine.activate_tools(engine, names)

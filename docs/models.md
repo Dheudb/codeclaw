@@ -1,11 +1,11 @@
 # 模型配置与兼容范围
 
 桌面在“设置与模型”配置，CLI 通过 `/model` 配置。两者共用
-`~/.codeclaw/config.json`。`CODECLAW_CONFIG_DIR` 可以为开发或测试指定独立目录。
+`~/.xuloom/config.json`。`XULOOM_CONFIG_DIR` 可以为开发或测试指定独立目录。
 配置文件中的 Key 以本地明文保存；界面读取配置时只收到 `hasKey` 标记。
 已保存的 Key 在输入框中显示遮罩和“已保存”提示，留空保存会保留原值。
 
-模型 ID 用于 API 请求路由，不再自动注入对话的环境提示词。身份回答只介绍 CodeClaw，
+模型 ID 用于 API 请求路由，不再自动注入对话的环境提示词。身份回答只介绍 Xuloom，
 不主动披露模型 ID、供应商、网关地址或路由，也不读取配置来回答底模身份。
 设置、模型选择器和诊断信息仍提供模型配置供本地使用者管理；这项对话约定不是配置访问控制。
 系统提示词不指定某一家模型的底层身份，也不根据模型名推测知识截止日期。
@@ -61,7 +61,7 @@ CLI 使用 `/model list` 查看同一份模型列表，`/model use 2` 选择编�
 ## 环境变量
 
 ```powershell
-$env:CODECLAW_MODEL_PROVIDER = "openai"
+$env:XULOOM_MODEL_PROVIDER = "openai"
 $env:OPENAI_BASE_URL = "http://localhost:8000/v1"
 $env:OPENAI_MODEL = "your-served-model-id"
 $env:OPENAI_API_KEY = "local-placeholder"
@@ -79,7 +79,7 @@ CLI 启动时，已设置的环境变量优先于从配置文件注入的值。�
 默认最多等 120 秒接收首个有效数据；已有数据后连续 60 秒没有新文本、推理数据或工具参数就中断。
 空包、SSE 心跳不能延长这个时间；持续收到推理数据不会被当成卡住。此规则目前用于 OpenAI 兼容接口。
 可在本机配置文件覆盖 `stream_first_response_timeout_sec`、`stream_idle_timeout_sec`、`stream_end_grace_sec`，
-或设置对应的 `CODECLAW_STREAM_FIRST_RESPONSE_TIMEOUT_SEC`、`CODECLAW_STREAM_IDLE_TIMEOUT_SEC`、`CODECLAW_STREAM_END_GRACE_SEC`；
+或设置对应的 `XULOOM_STREAM_FIRST_RESPONSE_TIMEOUT_SEC`、`XULOOM_STREAM_IDLE_TIMEOUT_SEC`、`XULOOM_STREAM_END_GRACE_SEC`；
 数值需大于 0、最多 3600 秒。工具执行和子代理等待采用各自的机制。
 运行时显示等待接口、推理和接收阶段，执行时长旁的提示可查看最近请求的首字耗时；
 历史保存接收时间与数量，不保存推理原文。
@@ -88,7 +88,7 @@ CLI 启动时，已设置的环境变量优先于从配置文件注入的值。�
 
 模型请求默认直连，不会自动读取 Windows 系统代理。设置页可改为“系统代理 / 环境代理”，
 此时会使用系统代理以及 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`。
-CLI 可用 `CODECLAW_NETWORK_MODE=system` 启用代理，或 `direct` 直连。
+CLI 可用 `XULOOM_NETWORK_MODE=system` 启用代理，或 `direct` 直连。
 主代理、子代理和上下文压缩共用此规则；证书校验始终开启。
 
 ## 兼容边界
@@ -98,4 +98,4 @@ Skill 指令和子代理执行。上下文大小、输出上限、推理字段�
 OpenAI 兼容路径目前主要处理文本和工具；不保证所有推理或多模态扩展。
 
 自定义子代理可以选择模型 ID，连接协议和服务地址沿用父引擎，不能据此任意跨供应商切换。
-本地模型的联网搜索由 CodeClaw 的独立工具或 MCP 完成，仍要求推理接口正确输出工具调用。
+本地模型的联网搜索由 Xuloom 的独立工具或 MCP 完成，仍要求推理接口正确输出工具调用。

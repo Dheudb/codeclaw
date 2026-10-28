@@ -5,13 +5,13 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from codeclaw.tools.web_tool import WebSearchTool, WebFetchInput
-from codeclaw.tools.tool_search_tool import ToolSearchTool
+from xuloom.tools.web_tool import WebSearchTool, WebFetchInput
+from xuloom.tools.tool_search_tool import ToolSearchTool
 
 
 class WebTests(unittest.IsolatedAsyncioTestCase):
     async def test_search_results_and_provider_failures_are_distinct(self):
-        with patch("codeclaw.tools.web_tool.DDGS") as client:
+        with patch("xuloom.tools.web_tool.DDGS") as client:
             client.return_value.text.return_value = [{"title": "Paper", "href": "https://example.org/paper", "body": "Chemical reasoning"}, {"href": "javascript:invalid"}]
             result = await WebSearchTool().execute("chemistry reasoning", 3)
             self.assertTrue(result["ok"])
@@ -33,7 +33,7 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             release.wait(3)
             return []
-        with patch("codeclaw.tools.web_tool.DDGS") as client:
+        with patch("xuloom.tools.web_tool.DDGS") as client:
             client.return_value.text.side_effect = slow_search
             task = asyncio.create_task(WebSearchTool().execute("query"))
             try:
@@ -45,7 +45,7 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
                 release.set()
 
     async def test_natural_language_discovery_and_explicit_activation(self):
-        from codeclaw.tools.web_tool import WebFetchTool
+        from xuloom.tools.web_tool import WebFetchTool
         search, fetch = WebSearchTool(), WebFetchTool()
         tool = ToolSearchTool()
         active = {search.name: search}
@@ -64,9 +64,9 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["metadata"]["activated"], ["web_fetch_tool"])
 
     async def test_engine_exposes_search_without_discovery_and_reports_real_status(self):
-        from codeclaw.core.engine import QueryEngine
-        from codeclaw.memory.memory import MemoryCompactor
-        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"OPENAI_API_KEY": "fixture", "CODECLAW_MODEL_PROVIDER": "openai"}), patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None):
+        from xuloom.core.engine import QueryEngine
+        from xuloom.memory.memory import MemoryCompactor
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"OPENAI_API_KEY": "fixture", "XULOOM_MODEL_PROVIDER": "openai"}), patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None):
             engine = QueryEngine(model="fixture", model_provider="openai", cwd=temp)
             try:
                 events = []
@@ -75,7 +75,7 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("web_fetch_tool", engine.available_tools)
                 self.assertNotIn("web_search_tool", engine.latent_tools)
                 calls = [{"id": "search", "name": "web_search_tool", "input": {"query": "chemistry reasoning"}}]
-                with patch("codeclaw.tools.web_tool.DDGS") as client:
+                with patch("xuloom.tools.web_tool.DDGS") as client:
                     client.return_value.text.return_value = [{"title": "Paper", "href": "https://example.org/paper", "body": "proof"}]
                     results = await engine._execute_tool_batches(calls, lambda text: None)
                     self.assertFalse(results[0]["is_error"])

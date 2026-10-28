@@ -29,7 +29,7 @@ export default function CapabilityGuide({ kind, session, invoke, update, close }
         <button onClick={() => invoke("capabilities.directory", { kind, scope: "global" }).catch((e) => setError(String(e)))}>打开全局配置目录</button></div>
       <p>示例文件：{kind === "skills" ? "project-review/SKILL.md" : "reviewer.md"}</p>
       <pre>{template}</pre>
-      {kind === "skills" ? <p>name 必须与技能目录名一致。导入技能目录会挂载原文件。在输入框输入 $ 可搜索并选择目录里的技能，打开列表时会重新扫描。选择后以标签挂载，发送任务时加载完整指令；也可以点击“选择使用”。CodeClaw 自带 code-review、debug-issue、web-research 三个技能。</p> :
+      {kind === "skills" ? <p>name 必须与技能目录名一致。导入技能目录会挂载原文件。在输入框输入 $ 可搜索并选择目录里的技能，打开列表时会重新扫描。选择后以标签挂载，发送任务时加载完整指令；也可以点击“选择使用”。Xuloom 自带 code-development、code-review、debug-issue、web-research 四个技能。</p> :
         <p>model: inherit 沿用当前模型；tools 限制可用工具；skills 填写有效的技能名称。点击角色卡片“分配任务”后补充任务并发送，模型通过子代理工具启动独立上下文。</p>}
       <p>{kind === "skills" ? "同名技能按项目目录、导入目录、环境目录、全局目录、内置目录的顺序选择。" : "同名代理配置按项目目录、导入目录、全局目录的顺序选择。"}文件格式不正确时，面板会显示原因。</p>
       {error && <p role="alert" className="error">{error}</p>}

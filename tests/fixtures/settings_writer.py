@@ -3,11 +3,11 @@ import json
 import os
 from pathlib import Path
 import sys
-from codeclaw.core.session_mutation import mutate
+from xuloom.core.session_mutation import mutate
 
 if sys.argv[2] == "hold":
-    from codeclaw.core.session_lock import SessionLock
-    from codeclaw.core.storage import data_directory
+    from xuloom.core.session_lock import SessionLock
+    from xuloom.core.storage import data_directory
     lock = SessionLock(data_directory() / "session-locks", "preferences_workbench"); lock.acquire()
     print("OWNED", flush=True)
     try: sys.stdin.readline()
@@ -19,7 +19,7 @@ if sys.argv[2] == "race":
     print("READY", flush=True)
     sys.stdin.readline()
 elif sys.argv[2] == "crash":
-    from codeclaw.desktop import settings
+    from xuloom.desktop import settings
     write = settings.atomic_json
     def crash(path, value):
         write(path, value)

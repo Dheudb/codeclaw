@@ -2,15 +2,15 @@ from setuptools import setup, find_packages
 from pathlib import Path
 
 setup(
-    name="codeclaw",
+    name="xuloom",
     version="0.1.0",
-    description="CodeClaw — General-purpose Agent framework for desktop and CLI",
+    description="Xuloom — General-purpose Agent framework for desktop and CLI",
     long_description=Path(__file__).with_name("README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
-    url="https://github.com/Dheudb/codeclaw",
+    url="https://github.com/Dheudb/xuloom",
     license="MIT",
-    packages=find_packages(include=["codeclaw", "codeclaw.*"]),
-    package_data={"codeclaw.skills": ["builtin/*/SKILL.md", "builtin/*/agents/*.md"]},
+    packages=find_packages(include=["xuloom", "xuloom.*"]),
+    package_data={"xuloom.skills": ["builtin/*/SKILL.md", "builtin/*/agents/*.md"]},
     python_requires=">=3.9",
     install_requires=[
         "anthropic>=0.40.0",
@@ -30,7 +30,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "codeclaw=codeclaw.main:main",
+            "xuloom=xuloom.main:main",
         ],
     },
     extras_require={

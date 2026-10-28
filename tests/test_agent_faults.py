@@ -4,9 +4,9 @@ import json
 import unittest
 from unittest.mock import patch
 import test_agent_lifecycle as lifecycle
-from codeclaw.core.engine import QueryEngine
-from codeclaw.core.messages import create_user_message, create_assistant_message
-from codeclaw.core.run_result import RunResult
+from xuloom.core.engine import QueryEngine
+from xuloom.core.messages import create_user_message, create_assistant_message
+from xuloom.core.run_result import RunResult
 
 
 class AgentFaultTests(unittest.IsolatedAsyncioTestCase):
@@ -15,6 +15,7 @@ class AgentFaultTests(unittest.IsolatedAsyncioTestCase):
     make_engine = lifecycle.LifecycleTests.make_engine
 
     async def test_parallel_mixed_outcomes_followup_and_owner_exit_release_capacity(self):
+        self.engine.set_collaboration_mode("ultra", persist=False)
         entered = []
         gate, all_started = asyncio.Event(), asyncio.Event()
         events = []
@@ -47,7 +48,7 @@ class AgentFaultTests(unittest.IsolatedAsyncioTestCase):
                 if event.get("type") == "subagent_status" and event["agent"].get("status") in {"completed", "crashed", "cancelled"})
             self.assertEqual(notifications, Counter({identity: 1 for identity in ids}))
             capacity = json.loads(await self.tool.execute(action="capacity"))
-            self.assertEqual((capacity["active"], capacity["available"]), (0, 10))
+            self.assertEqual((capacity["active"], capacity["available"]), (0, 8))
             continued = json.loads(await self.tool.execute(action="followup", agent_id=entered[0], prompt="followup"))
             self.assertEqual(continued["agent_id"], entered[0])
             self.assertEqual(continued["status"], "completed")
@@ -57,7 +58,7 @@ class AgentFaultTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
             self.assertTrue(await self.engine.request_abort())
             self.assertFalse(any(not task.done() for task in self.engine.tool_context["subagent_tasks"].tasks.values()))
-            self.assertEqual(json.loads(await self.tool.execute(action="capacity"))["available"], 10)
+            self.assertEqual(json.loads(await self.tool.execute(action="capacity"))["available"], 8)
 
     async def test_closing_owner_refuses_reentrant_launch_without_coroutine_leak(self):
         manager = self.engine.tool_context["subagent_tasks"]

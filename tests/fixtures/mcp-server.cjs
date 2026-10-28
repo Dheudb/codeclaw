@@ -8,7 +8,7 @@ function respond(request, authorization = "") {
     result = {
       protocolVersion: request.params.protocolVersion,
       capabilities: { tools: {} },
-      serverInfo: { name: "codeclaw-search-fixture", version: "1.0" },
+      serverInfo: { name: "xuloom-search-fixture", version: "1.0" },
     };
   else if (request.method === "ping") result = {};
   else if (request.method === "tools/list")
@@ -34,7 +34,7 @@ function respond(request, authorization = "") {
             request.params.arguments.query === "__header__"
               ? authorization
               : request.params.arguments.query === "__env__"
-                ? (process.env.CODECLAW_TEST_MODEL_SECRET || "absent") +
+                ? (process.env.XULOOM_TEST_MODEL_SECRET || "absent") +
                   ":" +
                   process.env.SEARCH_API_KEY
                 : "SEARCH_FIXTURE_PROOF: " +

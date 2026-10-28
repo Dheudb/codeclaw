@@ -38,7 +38,7 @@ async function ready() {
 }
 ready()
   .then(() => {
-    const env = { ...process.env, CODECLAW_DEV_URL: "http://127.0.0.1:5178" };
+    const env = { ...process.env, XULOOM_DEV_URL: "http://127.0.0.1:5178" };
     delete env.ELECTRON_RUN_AS_NODE;
     electron = spawn(require("electron"), [root], {
       cwd: root,

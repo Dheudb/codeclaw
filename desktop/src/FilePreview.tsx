@@ -23,7 +23,7 @@ export default function FilePreview({ sessionId, project, path, change, version,
   useEffect(() => {
     if (change?.source !== "git") return;
     let cancelled = false;
-    window.codeclaw.invoke("changes", { session: sessionId }).then((value) => { if (!cancelled) setGitFiles(value.files || []); }).catch(() => {});
+    window.xuloom.invoke("changes", { session: sessionId }).then((value) => { if (!cancelled) setGitFiles(value.files || []); }).catch(() => {});
     return () => { cancelled = true; };
   }, [sessionId, change?.source, refresh]);
   useEffect(() => {
@@ -31,14 +31,14 @@ export default function FilePreview({ sessionId, project, path, change, version,
   }, [path, initialView, change?.updatedAt]);
   useEffect(() => {
     let cancelled = false; setLoading(true); setError(""); setFile(undefined);
-    window.codeclaw.invoke("files.read", { session: sessionId, path }).then((value) => { if (!cancelled) setFile(value); })
+    window.xuloom.invoke("files.read", { session: sessionId, path }).then((value) => { if (!cancelled) setFile(value); })
       .catch((reason) => { if (!cancelled) setError(String(reason)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [sessionId, path, refresh, version]);
   useEffect(() => {
     let cancelled = false; setGitChange(undefined); setDiffError(""); setDiffLoading(change?.source === "git");
-    if (change?.source === "git") window.codeclaw.invoke("files.gitDiff", { session: sessionId, path }).then((value) => { if (!cancelled) setGitChange(value); })
+    if (change?.source === "git") window.xuloom.invoke("files.gitDiff", { session: sessionId, path }).then((value) => { if (!cancelled) setGitChange(value); })
       .catch((reason) => { if (!cancelled) setDiffError(String(reason)); }).finally(() => { if (!cancelled) setDiffLoading(false); });
     return () => { cancelled = true; };
   }, [sessionId, path, change, refresh]);

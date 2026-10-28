@@ -43,7 +43,7 @@ python -m unittest discover -s tests -v
 .\.venv-mcp\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The second command is this checkout's Python 3.12 environment with the optional MCP dependency; Python 3.9 runs skip unsupported MCP integration checks. Desktop tests run in isolated profiles with hidden windows. For an installed build, set `CODECLAW_TEST_EXECUTABLE` to the stable executable and leave `CODECLAW_PYTHON` unset.
+The second command is this checkout's Python 3.12 environment with the optional MCP dependency; Python 3.9 runs skip unsupported MCP integration checks. Desktop tests run in isolated profiles with hidden windows. For an installed build, set `XULOOM_TEST_EXECUTABLE` to the stable executable and leave `XULOOM_PYTHON` unset.
 
 | Audit items | Production changes and regression evidence |
 | --- | --- |

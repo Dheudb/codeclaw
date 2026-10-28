@@ -3,8 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from codeclaw.security.permissions import ApprovalPolicy, PermissionManager
-from codeclaw.features.plans import get_plan_file_path
+from xuloom.security.permissions import ApprovalPolicy, PermissionManager
+from xuloom.features.plans import get_plan_file_path
 
 
 class PermissionModeTests(unittest.IsolatedAsyncioTestCase):

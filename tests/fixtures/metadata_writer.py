@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 import sys
-from codeclaw.core.session_mutation import mutate
+from xuloom.core.session_mutation import mutate
 
 spec = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 print("READY", flush=True)

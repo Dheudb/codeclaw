@@ -142,14 +142,14 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
       data-session-id={row.id} key={row.id} draggable={!opening && !busy(row.id)}
       title={busy(row.id) ? "先停止会话和子代理任务，再拖动到其他项目" : "拖动到项目以切换工作目录"}
       onDragStart={(event) => { if (opening || busy(row.id)) { event.preventDefault(); return; }
-        event.dataTransfer.setData("application/x-codeclaw-session", row.id); event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-xuloom-session", row.id); event.dataTransfer.effectAllowed = "move";
         setDragging(row.id); setMenu(null); }}
       onDragEnd={() => { setDragging(""); setDropTarget(""); }}
       onContextMenu={(e) => openMenu(e, { kind: "session", row })}>
       {choosing && <input type="checkbox" aria-label={"选择会话 " + row.title} disabled={opening} checked={selected.includes(row.id)} onChange={() => toggleSelected(row.id)} />}
       <button className="session-select" title={row.error || row.title} disabled={opening} onClick={() => choosing ? toggleSelected(row.id) : run("session.select", { id: row.id })}>
         {busy(row.id) ? <LoaderCircle size={14} className="spin" /> : <MessageSquare size={14} />}
-        <span><strong>{row.title}</strong><small>{row.error ? "读取失败" : row.draft || row.draftAttachments?.length ? "有草稿" : row.updated ? new Date(row.updated).toLocaleDateString("zh-CN") : ""}</small></span>
+        <span><strong>{row.title}</strong><small className={row.error || row.draft || row.draftAttachments?.length ? "session-note" : "session-date"}>{row.error ? "读取失败" : row.draft || row.draftAttachments?.length ? "有草稿" : row.updated ? new Date(row.updated).toLocaleDateString("zh-CN") : ""}</small></span>
         {row.pinned && <Pin size={11} />}{row.archived && <Archive size={11} />}
       </button>
       <button className="icon-button row-menu-trigger" aria-label={"会话操作 " + row.title} onClick={(e) => openMenu(e, { kind: "session", row })}><MoreHorizontal size={15} /></button>
@@ -188,7 +188,7 @@ export default function SessionSidebar({ catalog, activeId, live, opening, actio
           onDragOver={(event) => { if (acceptsDrop) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropTarget(project.path); } }}
           onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(""); }}
           onDrop={(event) => { event.preventDefault(); event.stopPropagation(); setDropTarget(""); setDragging("");
-            if (!acceptsDrop || event.dataTransfer.getData("application/x-codeclaw-session") !== dragging) return;
+            if (!acceptsDrop || event.dataTransfer.getData("application/x-xuloom-session") !== dragging) return;
             void run("session.move", { id: dragging, path: project.path, draft: live.find((session) => session.id === dragging)?.draft ?? dragged?.draft ?? "" }); }}>
           <div className="project-heading" onContextMenu={(e) => openMenu(e, { kind: "project", row: project })}>
             <button className="icon-button project-collapse" aria-label={(project.collapsed ? "展开项目 " : "折叠项目 ") + project.name}

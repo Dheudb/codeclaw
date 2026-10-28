@@ -23,15 +23,15 @@ def main():
         raise SystemExit("Use a version tag such as v0.1.0-beta.1")
     if git("status", "--porcelain", "--untracked-files=normal"):
         raise SystemExit("Commit the release sources before creating a distributable")
-    package = DESKTOP / "release/CodeClaw-win32-x64"
+    package = DESKTOP / "release/Xuloom-win32-x64"
     app = package / "resources/app"
-    site = package / "resources/python/Lib/site-packages/codeclaw"
+    site = package / "resources/python/Lib/site-packages/xuloom"
     metadata = json.loads((app / "package.json").read_text(encoding="utf-8"))
     if metadata["version"] != args.tag[1:]:
         raise SystemExit("Installed application version must match the release tag")
     # Reject old resources, missing new modules, and additional private skill payloads.
     for directory, installed, patterns in [
-        (ROOT / "codeclaw", site, ("*.py", "*.md")),
+        (ROOT / "xuloom", site, ("*.py", "*.md")),
         (DESKTOP / "dist", app / "dist", ("*",)),
         (DESKTOP / "electron", app / "electron", ("*",)),
     ]:
@@ -43,12 +43,12 @@ def main():
         raise SystemExit("Unexpected bundled skills")
     # Only known application roots may be published. User state stays outside this package.
     allowed = {p.name for p in (DESKTOP / "node_modules/electron/dist").iterdir()} - {"electron.exe"}
-    allowed.update({"CodeClaw.exe", "START-HERE.txt", "LICENSE-CodeClaw.txt"})
+    allowed.update({"Xuloom.exe", "START-HERE.txt", "LICENSE-Xuloom.txt"})
     if any(p.name not in allowed for p in package.iterdir()):
         raise SystemExit("Unexpected file in portable installation")
     if {p.name for p in (package / "resources").iterdir()} != {"app", "python", "default_app.asar"}:
         raise SystemExit("Unexpected resource directory")
-    output = DESKTOP / "release" / f"CodeClaw-{args.tag}-windows-x64.zip"
+    output = DESKTOP / "release" / f"Xuloom-{args.tag}-windows-x64.zip"
     checksum = output.with_name("SHA256SUMS.txt")
     if output.exists():
         raise SystemExit("Release archive already exists; never overwrite a published build")
@@ -65,18 +65,18 @@ def main():
                 continue
             relative = path.relative_to(package)
             # pip's generated launcher embeds the build interpreter's absolute path.
-            local_launcher = relative.as_posix() == "resources/python/Lib/site-packages/bin/codeclaw.exe"
+            local_launcher = relative.as_posix() == "resources/python/Lib/site-packages/bin/xuloom.exe"
             if "__pycache__" in relative.parts or path.suffix in {".pyc", ".pyo"} or path.name == "direct_url.json" or local_launcher:
                 skipped += 1
                 continue
             dependency_workspace = relative.as_posix().startswith("resources/python/Lib/site-packages/anthropic/")
-            forbidden = {".git", ".codeclaw", ".env", "history"}
+            forbidden = {".git", ".xuloom", ".env", "history"}
             if not dependency_workspace:
                 forbidden.add("workspaces")
             if any(part.lower() in forbidden for part in relative.parts):
                 raise SystemExit("Refusing user/private data in archive")
-            archive.write(path, "CodeClaw-win32-x64/" + relative.as_posix())
-        archive.writestr("CodeClaw-win32-x64/RELEASE.json", json.dumps(record, indent=2) + "\n")
+            archive.write(path, "Xuloom-win32-x64/" + relative.as_posix())
+        archive.writestr("Xuloom-win32-x64/RELEASE.json", json.dumps(record, indent=2) + "\n")
     with zipfile.ZipFile(output) as archive:
         bad = archive.testzip()
         if bad:

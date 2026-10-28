@@ -3,7 +3,7 @@ const { execFileSync } = require("node:child_process");
 const { SessionCatalog, atomicJSON } = require("../electron/catalog.cjs");
 const { historyRoot } = require("../electron/history-storage.cjs");
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-central-test-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-central-test-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, "项目"), data = path.join(root, "data"); fs.mkdirSync(project);
   let settings = { projects: [project] };
   const catalog = new SessionCatalog(() => settings, (value) => { settings = value; }, data);
@@ -16,14 +16,14 @@ test("every standalone creation owns a distinct working directory and all record
   assert.equal(fs.readFileSync(path.join(first.project, "same.html"), "utf8"), "first");
   for (const row of [first, second]) {
     assert(fs.existsSync(catalog.file(row.project, row.sessionId))); assert(catalog.file(row.project, row.sessionId).startsWith(data));
-    assert(!fs.existsSync(path.join(row.project, ".codeclaw")));
+    assert(!fs.existsSync(path.join(row.project, ".xuloom")));
   }
   const fork = catalog.fork(first); assert.notEqual(fork.project, first.project);
   catalog.delete(first); assert(fs.existsSync(path.join(first.project, "same.html"))); assert.equal(catalog.snapshot().standalone.length, 2);
 });
 test("legacy transcripts, drafts, archives, child records and spilled outputs migrate once without changing project configuration", (t) => {
   const { project, data, catalog } = fixture(t);
-  const legacy = path.join(project, ".codeclaw"), proof = path.join(legacy, "tool-results/old/result.txt");
+  const legacy = path.join(project, ".xuloom"), proof = path.join(legacy, "tool-results/old/result.txt");
   atomicJSON(path.join(legacy, "sessions/old.json"), { messages: [{ role: "assistant", content: "Read " + proof }], metadata: { turn_traces: [{ id: "turn" }] } });
   atomicJSON(path.join(legacy, "sessions/subagents/child.json"), { session_id: "old", messages: [] });
   atomicJSON(path.join(legacy, "session-index.json"), { version: 1, sessions: { old: { title: "旧会话", archived: true, draft: "草稿", pinned: true } } });
@@ -43,19 +43,19 @@ test("CLI and desktop use identical storage and CLI saves preserve desktop metad
   const { root, project, data, catalog } = fixture(t), row = catalog.create(project);
   catalog.update(row, { draft: "keep", archived: true, title: "desktop name" });
   const repo = path.resolve(__dirname, "../..");
-  const python = process.env.CODECLAW_TEST_PYTHON || [".venv", ".venv-mcp"].map((name) => path.join(repo, name, process.platform === "win32" ? "Scripts/python.exe" : "bin/python")).find((filename) => fs.existsSync(filename)) || (process.platform === "win32" ? "python" : "python3");
-  const output = execFileSync(python, ["-c", "import sys,json;from codeclaw.core.session import SessionManager;m=SessionManager(cwd=sys.argv[1]);assert m.load_session_state(sys.argv[2])['_valid'];assert m.save_session_state(sys.argv[2],[{'role':'user','content':'CLI shared'}]);print(json.dumps({'directory':m.session_dir}))", project, row.sessionId], { cwd: repo, windowsHide: true, encoding: "utf8", env: { ...process.env, CODECLAW_DATA_DIR: data, PYTHONPATH: repo, USERPROFILE: path.join(root, "home"), HOME: path.join(root, "home") } });
+  const python = process.env.XULOOM_TEST_PYTHON || [".venv", ".venv-mcp"].map((name) => path.join(repo, name, process.platform === "win32" ? "Scripts/python.exe" : "bin/python")).find((filename) => fs.existsSync(filename)) || (process.platform === "win32" ? "python" : "python3");
+  const output = execFileSync(python, ["-c", "import sys,json;from xuloom.core.session import SessionManager;m=SessionManager(cwd=sys.argv[1]);assert m.load_session_state(sys.argv[2])['_valid'];assert m.save_session_state(sys.argv[2],[{'role':'user','content':'CLI shared'}]);print(json.dumps({'directory':m.session_dir}))", project, row.sessionId], { cwd: repo, windowsHide: true, encoding: "utf8", env: { ...process.env, XULOOM_DATA_DIR: data, PYTHONPATH: repo, USERPROFILE: path.join(root, "home"), HOME: path.join(root, "home") } });
   assert.equal(JSON.parse(output).directory.toLowerCase(), catalog.directory(project).toLowerCase());
   assert.equal(catalog.find(row.id).draft, "keep"); assert.equal(catalog.find(row.id).title, "desktop name");
   assert(catalog.find(row.id).archived); assert.equal(JSON.parse(fs.readFileSync(catalog.file(project, row.sessionId))).messages[0].content, "CLI shared");
-  assert(!fs.existsSync(path.join(project, ".codeclaw/sessions")));
+  assert(!fs.existsSync(path.join(project, ".xuloom/sessions")));
 });
 test("legacy independent conversations are isolated on upgrade and owned outputs are retained", async (t) => {
   const { project, root, catalog } = fixture(t);
   const record = { messages: [{ role: "assistant", content: [{ type: "tool_use", id: "write", name: "file_write_tool", input: { file_path: "pelican.html", content: "original" } }] }], metadata: {} };
-  atomicJSON(path.join(project, ".codeclaw/sessions/one.json"), record);
-  atomicJSON(path.join(project, ".codeclaw/sessions/two.json"), record);
-  atomicJSON(path.join(project, ".codeclaw/session-index.json"), { version: 1, sessions: { one: { scope: "standalone", draft: "keep", pinned: true }, two: { scope: "standalone", archived: true } } });
+  atomicJSON(path.join(project, ".xuloom/sessions/one.json"), record);
+  atomicJSON(path.join(project, ".xuloom/sessions/two.json"), record);
+  atomicJSON(path.join(project, ".xuloom/session-index.json"), { version: 1, sessions: { one: { scope: "standalone", draft: "keep", pinned: true }, two: { scope: "standalone", archived: true } } });
   fs.writeFileSync(path.join(project, "pelican.html"), "latest existing file");
   catalog.writeSettings({ ...catalog.readSettings(), standaloneDirectories: [project], activeConversation: { project, resumeId: "one", scope: "standalone" } });
   await catalog.upgradeStandaloneWorkspaces(path.join(root, "workspaces"));

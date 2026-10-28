@@ -8,9 +8,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from codeclaw.core.session import SessionManager
-from codeclaw.core.session_lock import SessionBusyError, SessionLock
-from codeclaw.desktop.bridge import DesktopBridge
+from xuloom.core.session import SessionManager
+from xuloom.core.session_lock import SessionBusyError, SessionLock
+from xuloom.desktop.bridge import DesktopBridge
 
 
 class SessionOwnershipTests(unittest.TestCase):
@@ -18,8 +18,8 @@ class SessionOwnershipTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.environment = {**os.environ, "CODECLAW_DATA_DIR": str(self.root / "data"), "HOME": str(self.root / "home"),
-            "USERPROFILE": str(self.root / "home"), "OPENAI_API_KEY": "fixture", "CODECLAW_MODEL_PROVIDER": "openai"}
+        self.environment = {**os.environ, "XULOOM_DATA_DIR": str(self.root / "data"), "HOME": str(self.root / "home"),
+            "USERPROFILE": str(self.root / "home"), "OPENAI_API_KEY": "fixture", "XULOOM_MODEL_PROVIDER": "openai"}
         env = patch.dict(os.environ, self.environment)
         env.start()
         self.addCleanup(env.stop)
@@ -52,7 +52,7 @@ class SessionOwnershipTests(unittest.TestCase):
         self.assertTrue(reader.load_session_state("shared")["_valid"])
         path = Path(reader.session_dir) / "shared.json"
         before = path.read_bytes()
-        from codeclaw.core.storage import artifact_directory
+        from xuloom.core.storage import artifact_directory
         spill = artifact_directory(self.root) / "shared" / "new-unregistered-result.txt"
         spill.parent.mkdir(parents=True)
         spill.write_text("Another writer's new result", encoding="utf-8")

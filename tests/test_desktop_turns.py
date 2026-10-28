@@ -1,11 +1,11 @@
 import unittest
 from unittest.mock import patch
-from codeclaw.desktop.turns import TurnRecorder, conversation_history
+from xuloom.desktop.turns import TurnRecorder, conversation_history
 
 
 class TurnTests(unittest.TestCase):
     def test_final_keeps_commentary_tools_and_measured_duration(self):
-        with patch("codeclaw.desktop.turns.time.monotonic", side_effect=[100, 108]):
+        with patch("xuloom.desktop.turns.time.monotonic", side_effect=[100, 108]):
             r = TurnRecorder()
             r.accept({"type": "text_delta", "text": "先检查文件。"})
             r.accept({"type": "tool_scheduled", "tool_use_id": "one", "tool_name": "file_read_tool"})

@@ -1,5 +1,5 @@
 import unittest
-from codeclaw.protocols.dsml import ToolTextFilter, decode_tool_text
+from xuloom.protocols.dsml import ToolTextFilter, decode_tool_text
 
 SCHEMA = [{"type": "function", "function": {"name": "agent_tool", "parameters": {"properties": {
     "prompt": {}, "run_in_background": {}, "values": {}}, "required": ["prompt"]}}}]
@@ -66,7 +66,7 @@ class DSMLTests(unittest.TestCase):
                 decode_tool_text(text, SCHEMA)
 
     def test_old_history_does_not_present_unexecuted_markup_as_a_result(self):
-        from codeclaw.desktop.bridge import DesktopBridge
+        from xuloom.desktop.bridge import DesktopBridge
         text = "准备启动。\n" + envelope('<｜DSML｜parameter name="prompt" string="true">hello</｜DSML｜parameter>')
         history = DesktopBridge.history([{"role": "assistant", "content": [{"type": "text", "text": text}]}])
         self.assertNotIn("DSML", history[0]["text"])

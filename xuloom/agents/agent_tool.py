@@ -1,0 +1,754 @@
+import asyncio
+import copy
+import hashlib
+import json
+import time
+import uuid
+from typing import List, Optional
+from pydantic import BaseModel, Field
+from xuloom.tools.base import BaseAgenticTool
+from xuloom.agents.registry import AgentRegistry
+from xuloom.agents.tasks import SubagentTasks
+from xuloom.agents.lifecycle import AgentLifecycle, concurrency_limit
+from xuloom.skills.registry import SkillRegistry
+from xuloom.agents.builtin_agents import (
+    BUILTIN_AGENTS,
+    get_builtin_agent,
+    list_builtin_agent_descriptions,
+)
+
+MAX_SUBAGENT_DEPTH = 2
+
+ALL_AGENT_DISALLOWED_TOOLS = frozenset({
+    "agent_tool",
+    "ask_user_question_tool",
+    "send_message_tool",
+    "team_create_tool",
+    "team_delete_tool",
+    "enter_plan_mode",
+    "exit_plan_mode",
+})
+
+class AgentToolInput(BaseModel):
+    model_config = {"extra": "forbid"}
+    action: str = Field("spawn", description="spawn, capacity, list, result, wait, send, followup, cancel, or close")
+    agent_ids: Optional[List[str]] = Field(None, description="Worker IDs to wait for; returns when any finishes or timeout expires")
+    timeout_ms: int = Field(30000, ge=0, le=60000, description="Bounded wait timeout")
+    response_format: str = Field("text", pattern="^(text|json)$", description="Use json for structured spawn receipts and wait results")
+    request_id: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$", description="Stable caller-supplied spawn identity. Repeating the same request returns its existing workers; changed arguments are rejected")
+    reasoning_effort: Optional[str] = Field(None, pattern="^(low|medium|high|xhigh)$")
+    agent_id: Optional[str] = Field(None, description="Background subagent ID for result or cancel")
+    description: str = Field("", description="A short description of the task")
+    prompt: str = Field("", description="The task for the agent to perform")
+    count: int = Field(1, ge=1, le=10, strict=True, description="Number of independent agents given this same prompt in parallel. For ten greeting/comparison agents, use count=10 in ONE call.")
+    subagent_type: Optional[str] = Field(
+        None,
+        description=(
+            "The type of specialized agent to use for this task. "
+            "Available types: explore, plan, verification, general-purpose. "
+            "If omitted, defaults to general-purpose behavior."
+        ),
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Optional model override for this agent. If omitted, inherits from the parent.",
+    )
+    run_in_background: bool = Field(
+        False,
+        description="Set to true to run this agent in the background. You will be notified when it completes.",
+    )
+    inherit_context: bool = Field(False, description="Include the parent conversation as reference only. Defaults to an independent task context.")
+
+class AgentTool(AgentLifecycle, BaseAgenticTool):
+    name = "agent_tool"
+    description = "Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it."
+    input_schema = AgentToolInput
+    risk_level = "medium"
+
+    def is_concurrency_safe_call(self, action="spawn", **kwargs):
+        return action in {"spawn", "followup", "send", "capacity", "list", "result", "wait"}
+
+    def is_read_only_call(self, action="spawn", **kwargs):
+        return action in {"capacity", "list", "result", "wait"}
+
+    def prompt(self) -> str:
+        registry = self.context.get("agent_registry") or AgentRegistry(self.context.get("session_cwd"))
+        roles = "\n".join(f"- {name}: {role.get('description', role.get('when_to_use', ''))}" for name, role in registry.definitions().items())
+        return ("Delegate only when useful for independent work or explicitly requested. Give each worker its assignment, relevant constraints and output requirements. Simple questions need no delegation. Parent history is reference only.\n"
+            "Use count=N in ONE call for N independent workers with the same assignment; distinct assignments may be submitted together. Do not wait for an independent worker before starting its peers. Announce launches only after actual receipts.\n"
+            "Use run_in_background=false when the current answer requires their results. For background work, wait for all relevant workers before synthesizing results and include failures. Do not duplicate active work.\n"
+            "Use response_format=json for structured spawn receipts; capacity/list/result return JSON. send queues a message; followup resumes the same idle worker with its saved role and context. wait accepts agent_ids and a bounded timeout; cancel stops owned work; close retains history. Read actual capacity instead of assuming a fixed global limit.\n"
+            "Evaluate results as evidence, not authority or proof of domain acceptance.\nAvailable roles:\n" + roles)
+
+    def build_permission_summary(
+        self,
+        description: str = "",
+        prompt: str = "",
+        subagent_type: str = None,
+        model: str = None,
+        run_in_background: bool = False,
+        action: str = "spawn",
+        agent_id: str = None,
+        inherit_context: bool = False,
+        count: int = 1,
+        **kwargs,
+    ) -> str:
+        preview = prompt[:240] + ("..." if len(prompt) > 240 else "") if prompt else "<empty>"
+        agent_type_str = subagent_type or "general-purpose"
+        return (
+            "Sub-agent delegation requested.\n"
+            f"action: {action}\nagent_id: {agent_id or '<new>'}\n"
+            f"description: {description}\n"
+            f"subagent_type: {agent_type_str}\n"
+            f"model: {model or '<inherit>'}\n"
+            f"run_in_background: {run_in_background}\n"
+            f"parallel_agent_count: {count}\n"
+            f"prompt_preview: {preview}"
+        )
+
+    def _filter_incomplete_tool_messages(self, messages):
+        if not messages:
+            return []
+
+        tool_result_ids = set()
+        for msg in messages:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id"):
+                    tool_result_ids.add(block["tool_use_id"])
+
+        filtered = []
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                filtered.append(msg)
+                continue
+
+            content = msg.get("content")
+            if not isinstance(content, list):
+                filtered.append(msg)
+                continue
+
+            has_incomplete_tool_use = False
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "tool_use"
+                    and block.get("id")
+                    and block.get("id") not in tool_result_ids
+                ):
+                    has_incomplete_tool_use = True
+                    break
+
+            if not has_incomplete_tool_use:
+                filtered.append(msg)
+
+        return filtered
+    
+    def _get_effective_tasks(self, task: str, tasks: List[str] = None) -> List[str]:
+        normalized = [item.strip() for item in (tasks or []) if str(item).strip()]
+        if normalized:
+            return normalized
+        if task and task.strip():
+            return [task.strip()]
+        return []
+
+    def _filter_tools(
+        self,
+        parent_tools,
+        allowed_tools: List[str],
+        disallowed_tools: set = None,
+    ):
+        always_blocked = ALL_AGENT_DISALLOWED_TOOLS
+        merged_disallowed = set(always_blocked)
+        if disallowed_tools:
+            merged_disallowed |= set(disallowed_tools)
+
+        filtered_tools = {
+            name: copy.copy(tool)
+            for name, tool in parent_tools.items()
+            if name not in merged_disallowed
+        }
+        if allowed_tools is not None and "*" not in allowed_tools:
+            allowset = set(allowed_tools)
+            filtered_tools = {
+                name: tool
+                for name, tool in filtered_tools.items()
+                if name in allowset
+            }
+        return filtered_tools
+
+    def _share_runtime_managers(self, sub_engine):
+        shared_manager_fields = [
+            "session_manager",
+            "lsp_manager",
+            "sandbox_manager",
+            "browser_manager",
+            "shell_task_manager",
+            "file_state_cache",
+            "memory_file_manager",
+            "artifact_tracker",
+            "content_replacement_manager",
+            "command_sessions",
+        ]
+
+        for field in shared_manager_fields:
+            manager = self.context.get(field)
+            if manager is None:
+                continue
+            setattr(sub_engine, field, manager)
+            sub_engine.tool_context[field] = manager
+
+    def _configure_subagent_permissions(self, sub_engine):
+        parent_permission_manager = self.context.get("permission_manager")
+        if parent_permission_manager is None:
+            return
+
+        # Child agents keep the same approval UX, but start with a clean
+        # permission memory so parent session-wide allow rules do not leak.
+        sub_engine.permission_manager.always_allow_tools = set()
+        sub_engine.permission_manager.approval_policy = parent_permission_manager.approval_policy
+        sub_engine.tool_context["permission_manager"] = sub_engine.permission_manager
+        sub_engine.tool_context["permission_handler"] = self.context.get("permission_handler")
+
+    def _merge_state_back_to_parent(self, sub_engine):
+        parent_todo_manager = self.context.get("todo_manager")
+        if parent_todo_manager is not None and getattr(sub_engine, "todo_manager", None) is not None:
+            parent_todo_manager.load(copy.deepcopy(sub_engine.todo_manager.export()))
+
+        parent_plan_manager = self.context.get("plan_manager")
+        if parent_plan_manager is not None and getattr(sub_engine, "plan_manager", None) is not None:
+            plan_state = copy.deepcopy(sub_engine.plan_manager.export())
+            parent_plan_manager.load(
+                mode=plan_state.get("mode", "normal"),
+                content=plan_state.get("content", ""),
+            )
+
+    async def _write_subagent_registry_record(self, record: dict):
+        registry_writer = self.context.get("register_subagent_record")
+        if not callable(registry_writer):
+            return
+
+        lock = self.context.get("subagent_state_lock")
+        if lock is None:
+            if registry_writer(record) is False:
+                raise OSError("Could not persist subagent registry")
+            return
+
+        async with lock:
+            if registry_writer(record) is False:
+                raise OSError("Could not persist subagent registry")
+
+    async def _run_single_subagent(
+        self,
+        task: str,
+        allowed_tools: List[str],
+        inherit_context: bool,
+        parent_depth: int,
+        parent_agent_id: str,
+        agent_role: str = "subagent",
+        builtin_agent_def: dict = None,
+        model: str = None,
+        child_agent_id: str = None,
+        background: bool = False,
+        description: str = "",
+        resume_state: dict = None,
+    ) -> dict:
+        from xuloom.core.engine import QueryEngine
+
+        effective_role = agent_role
+        if builtin_agent_def:
+            effective_role = builtin_agent_def.get("agent_role", agent_role)
+
+        child_agent_id = child_agent_id or f"{effective_role}-{uuid.uuid4()}"
+        sub_engine = QueryEngine(
+            model=model or (builtin_agent_def or {}).get("model") or self.context.get("primary_model"),
+            fallback_model=self.context.get("fallback_model"),
+            permission_handler=self.context.get("permission_handler"),
+            agent_id=child_agent_id,
+            parent_agent_id=parent_agent_id,
+            agent_depth=parent_depth + 1,
+            agent_role=effective_role,
+            model_provider=self.context.get("model_provider"),
+            api_base_url=self.context.get("api_base_url"),
+            local_tokenizer_path=self.context.get("local_tokenizer_path"),
+            cwd=self.context.get("session_cwd"),
+            thinking_config=self.context.get("thinking_config"),
+            mode_thinking_overrides=self.context.get("mode_thinking_overrides"),
+            reasoning_effort=(builtin_agent_def or {}).get("reasoning_effort") or self.context.get("reasoning_effort"),
+            collaboration_mode="solo",
+        )
+        definition = copy.deepcopy(builtin_agent_def or {})
+        sub_engine.tool_context["delegation"] = {"owner_session_id": self.context.get("session_id"), "role_definition": definition}
+        sub_engine.tool_context["delegated_mailbox"] = lambda: self._mailbox(child_agent_id)
+        sub_engine.tool_context["ack_delegated_mailbox"] = lambda ids: self._ack_mailbox(child_agent_id, ids)
+        self._configure_subagent_permissions(sub_engine)
+        if self.context.get("plan_manager"):
+            sub_engine.plan_manager.set_mode(self.context["plan_manager"].get_mode())
+
+        self._share_runtime_managers(sub_engine)
+        if self.context.get("goal_budget"):
+            sub_engine.tool_context["goal_budget"] = self.context["goal_budget"]
+        sub_engine.tool_context["skill_registry"] = self.context.get("skill_registry") or SkillRegistry(self.context.get("session_cwd"))
+        sub_engine.tool_context["ask_user_callback"] = self.context.get("ask_user_callback")
+        sub_engine.tool_context["capability_event"] = self.context.get("capability_event")
+        sub_engine.tool_context["plan_approval_callback"] = self.context.get("plan_approval_callback")
+        team = self.context.get("team_manager")
+        if team and team.is_active:
+            team.register_member(child_agent_id, child_agent_id, effective_role, sub_engine.session_cwd, sub_engine.primary_model)
+            sub_engine.team_manager = team
+            sub_engine.tool_context["team_manager"] = team
+            sub_engine.tool_context["team_member_name"] = child_agent_id
+
+        disallowed = set()
+        if builtin_agent_def:
+            disallowed = set(builtin_agent_def.get("disallowed_tools", []))
+            if builtin_agent_def.get("web_search") == "disabled":
+                disallowed.update({"web_search_tool", "web_fetch_tool", "browser_tool"})
+
+        parent_tools = dict(self.context.get("engine_available_tools", {}))
+        latent = self.context.get("latent_tools_registry", {})
+        if allowed_tools and "*" not in allowed_tools:
+            parent_tools.update({name: tool for name, tool in latent.items() if name in allowed_tools})
+        if team and team.is_active and "send_message_tool" in latent:
+            parent_tools["send_message_tool"] = latent["send_message_tool"]
+        mcp_servers = definition.get("mcp_servers")
+        if parent_tools:
+            if mcp_servers is not None:
+                parent_tools = {name: tool for name, tool in parent_tools.items()
+                    if not hasattr(tool, "server_name") or tool.server_name in mcp_servers}
+            if definition.get("read_only"):
+                parent_tools = {name: tool for name, tool in parent_tools.items() if getattr(tool, "is_read_only", False)}
+            sub_engine.available_tools = self._filter_tools(
+                parent_tools, allowed_tools, disallowed_tools=disallowed
+            )
+            sub_engine.tool_context["engine_available_tools"] = sub_engine.available_tools
+            for tool in sub_engine.available_tools.values():
+                tool.context = sub_engine.tool_context
+            if team and team.is_active and "send_message_tool" in parent_tools and (allowed_tools is None or "*" in allowed_tools or "send_message_tool" in allowed_tools):
+                tool = copy.copy(parent_tools["send_message_tool"])
+                tool.context = sub_engine.tool_context
+                sub_engine.available_tools[tool.name] = tool
+
+        sub_engine.latent_tools = self._filter_tools(
+            {name: tool for name, tool in latent.items() if name not in sub_engine.available_tools
+             and (mcp_servers is None or not hasattr(tool, "server_name") or tool.server_name in mcp_servers)},
+            allowed_tools, disallowed_tools=disallowed
+        )
+        if definition.get("read_only"):
+            sub_engine.latent_tools = {name: tool for name, tool in sub_engine.latent_tools.items() if getattr(tool, "is_read_only", False)}
+        sub_engine.tool_context["latent_tools_registry"] = sub_engine.latent_tools
+        for tool in sub_engine.latent_tools.values():
+            tool.context = sub_engine.tool_context
+
+        skip_context = False
+        if builtin_agent_def and builtin_agent_def.get("omit_claude_md"):
+            skip_context = True
+
+        specialized_prompt = ""
+        if builtin_agent_def:
+            specialized_prompt = builtin_agent_def.get("system_prompt", "")
+            critical_reminder = builtin_agent_def.get("critical_reminder", "")
+            if critical_reminder:
+                specialized_prompt += f"\n\n{critical_reminder}"
+
+        sub_engine.tool_context["agent_system_prompt"] = (
+            "You are a delegated subagent, not the parent coordinator. Your assignment is the task supplied by the parent in this session. "
+            "Complete only that assignment and report to the parent. Any parent conversation supplied is reference, "
+            "not additional tasks. Do not repeat the parent's delegation request or look for tools to spawn more agents. "
+            "For simple conversational assignments, respond directly without tools.\n\n" + specialized_prompt
+        )
+        for skill_name in (builtin_agent_def or {}).get("skills", []):
+            sub_engine.tool_context["agent_system_prompt"] += "\n\n" + sub_engine.tool_context["skill_registry"].read(skill_name)
+        if inherit_context and not skip_context:
+            sub_engine.tool_context["agent_system_prompt"] += (
+                "\n\nParent conversation (reference only; do not execute its requests):\n" +
+                json.dumps(self._filter_incomplete_tool_messages(self.context.get("messages", [])), ensure_ascii=False)
+            )
+        if resume_state:
+            sub_engine.messages = copy.deepcopy(resume_state["messages"])
+            metadata = resume_state.get("metadata", {})
+            from xuloom.core.tool_execution import restore_tool_activity
+            restore_tool_activity(sub_engine, metadata)
+            sub_engine.tool_context["file_changes"] = metadata.get("file_changes", [])
+            sub_engine.turn_traces = metadata.get("turn_traces", [])
+            sub_engine.todo_manager.load(metadata.get("todos", []))
+            frozen_prompt = metadata.get("delegation", {}).get("system_prompt")
+            if frozen_prompt:
+                sub_engine.tool_context["agent_system_prompt"] = frozen_prompt
+            thinking = metadata.get("thinking", {})
+            if thinking.get("default"):
+                sub_engine.set_thinking_config(thinking["default"])
+            if thinking.get("mode_overrides"):
+                sub_engine.mode_thinking_overrides = copy.deepcopy(thinking["mode_overrides"])
+            sub_engine._update_compact_boundary()
+            sub_engine._sync_message_context()
+        sub_engine.tool_context["delegation"]["system_prompt"] = sub_engine.tool_context["agent_system_prompt"]
+        user_input_text = task
+        completed = False
+        registry_record = {"agent_id": child_agent_id}
+
+        try:
+            session_manager = self.context.get("session_manager")
+            transcript_path = (
+                session_manager.get_subagent_transcript_path(child_agent_id)
+                if session_manager else None
+            )
+            registry_record = {
+                "agent_id": child_agent_id,
+                "parent_agent_id": parent_agent_id,
+                "agent_depth": parent_depth + 1,
+                "agent_role": effective_role,
+                "agent_type": builtin_agent_def.get("agent_type") if builtin_agent_def else None,
+                "status": "running",
+                "phase": "running",
+                "task": task[:240] + ("..." if len(task) > 240 else ""),
+                "description": description,
+                "transcript_path": transcript_path,
+                "model": sub_engine.primary_model,
+                "background": background,
+            }
+            await self._write_subagent_registry_record(registry_record)
+            if session_manager:
+                saved = session_manager.save_subagent_transcript(child_agent_id, {
+                    "agent_id": child_agent_id,
+                    "parent_agent_id": parent_agent_id,
+                    "agent_depth": parent_depth + 1,
+                    "agent_role": effective_role,
+                    "task": task,
+                    "allowed_tools": allowed_tools,
+                    "inherit_context": inherit_context,
+                    "status": "running",
+                    "messages": sub_engine.messages,
+                    "metadata": sub_engine._build_session_metadata(),
+                })
+                if not saved:
+                    raise OSError("Could not persist initial subagent transcript; model was not started")
+
+            res = await sub_engine.run(
+                user_input=user_input_text,
+                sys_print_callback=lambda x: None
+            )
+            from xuloom.core.run_result import RunResult
+            if not isinstance(res, RunResult):
+                raise TypeError("Engine returned no structured execution receipt")
+            receipt = res.to_dict()
+            if res.ok and not res.text.strip():
+                receipt.update(status="crashed", ok=False, reason="empty_result")
+            if session_manager:
+                saved = session_manager.save_subagent_transcript(child_agent_id, {
+                    "agent_id": child_agent_id, "parent_agent_id": parent_agent_id,
+                    "agent_depth": parent_depth + 1, "agent_role": effective_role,
+                    "session_id": self.context.get("session_id"),
+                    "task": task, "allowed_tools": allowed_tools, "inherit_context": inherit_context,
+                    "status": receipt["status"], "transcript_path": transcript_path,
+                    "messages": sub_engine.messages, "metadata": sub_engine._build_session_metadata(),
+                    "result": res.text, "receipt": receipt,
+                })
+                if not saved:
+                    receipt.update(status="crashed", ok=False, persisted=False, reason="persistence_error")
+            payload = {"task": task, "agent_id": child_agent_id, "agent_role": effective_role,
+                       "status": receipt["status"], "result": res.text, "receipt": receipt}
+            await self._write_subagent_registry_record({**registry_record, **payload, "finished_at": int(time.time() * 1000)})
+            completed = receipt["ok"]
+            return payload
+        except asyncio.CancelledError:
+            await self._write_subagent_registry_record({"agent_id": child_agent_id, "status": "cancelled", "finished_at": int(time.time() * 1000)})
+            raise
+        except Exception as e:
+            receipt = {"status": "crashed", "ok": False, "persisted": False, "reason": "persistence_error" if isinstance(e, OSError) else "execution_error"}
+            session_manager = self.context.get("session_manager")
+            if session_manager:
+                session_manager.save_subagent_transcript(child_agent_id, {
+                    "agent_id": child_agent_id,
+                    "parent_agent_id": parent_agent_id,
+                    "agent_depth": parent_depth + 1,
+                    "agent_role": effective_role,
+                    "task": task,
+                    "allowed_tools": allowed_tools,
+                    "inherit_context": inherit_context,
+                    "status": "crashed",
+                    "error": str(e),
+                    "messages": sub_engine.messages,
+                    "metadata": sub_engine._build_session_metadata(),
+                })
+            await self._write_subagent_registry_record({
+                **registry_record,
+                "status": "crashed",
+                "receipt": receipt,
+                "result": str(e),
+                "finished_at": int(time.time() * 1000),
+            })
+            return {
+                "task": task,
+                "agent_id": child_agent_id,
+                "agent_role": effective_role,
+                "status": "crashed",
+                "receipt": receipt,
+                "result": f"Exception Fault: Sub-Agent terminal crash: {e}",
+            }
+        finally:
+            if team and team.is_active:
+                team.deactivate_member(child_agent_id)
+            if not completed and sub_engine.tool_context.get("command_sessions"):
+                await sub_engine.tool_context["command_sessions"].close(owner=child_agent_id)
+            await sub_engine.client.close()
+            if getattr(sub_engine.compactor, "client", None):
+                await sub_engine.compactor.client.close()
+
+    def _format_single_report(self, payload: dict) -> str:
+        return (
+            "=======[ SUB-AGENT COMPLETION REPORT ]=======\n"
+            f"Agent ID: {payload.get('agent_id')}\n"
+            f"Role: {payload.get('agent_role', 'subagent')}\n"
+            f"Task Handled: {payload.get('task')}\n"
+            f"Status: {payload.get('status')}\n\n"
+            f"Outcome / Findings:\n{payload.get('result')}\n"
+            "==============================================="
+        )
+
+    def _format_batch_report(self, payloads: List[dict], parallel: bool) -> str:
+        completed = sum(1 for item in payloads if item.get("status") == "completed")
+        crashed = sum(1 for item in payloads if item.get("status") == "crashed")
+        header = (
+            "=======[ SUB-AGENT BATCH REPORT ]=======\n"
+            f"Execution mode: {'parallel' if parallel else 'serial'}\n"
+            f"Task count: {len(payloads)}\n"
+            f"Completed: {completed}\n"
+            f"Crashed: {crashed}\n"
+            "========================================\n"
+        )
+        body = "\n\n".join(self._format_single_report(item) for item in payloads)
+        return header + "\n" + body
+
+    def _build_coordinator_prompt(self, parent_task: str, payloads: List[dict], parallel: bool) -> str:
+        lines = [
+            "[SYSTEM: Coordinator synthesis mode is active.]",
+            "You are the coordinator agent. Synthesize the child sub-agent results into one concise final report.",
+            f"Parent objective:\n{parent_task or '<none>'}",
+            f"Dispatch mode: {'parallel' if parallel else 'serial'}",
+            "",
+            "Child agent results:",
+        ]
+        for index, payload in enumerate(payloads, start=1):
+            lines.append(f"## Child {index}")
+            lines.append(f"Agent ID: {payload.get('agent_id')}")
+            lines.append(f"Status: {payload.get('status')}")
+            lines.append(f"Task: {payload.get('task')}")
+            lines.append("Result:")
+            lines.append(str(payload.get("result", "")))
+            lines.append("")
+
+        lines.append("Return a unified coordination report with: overall status, key findings, unresolved risks, and recommended next steps.")
+        return "\n".join(lines)
+
+    async def _run_coordinator_mode(
+        self,
+        *,
+        parent_task: str,
+        payloads: List[dict],
+        parallel: bool,
+        parent_depth: int,
+        parent_agent_id: str,
+        inherit_context: bool,
+    ) -> dict:
+        return await self._run_single_subagent(
+            task=self._build_coordinator_prompt(parent_task, payloads, parallel),
+            allowed_tools=["plan_tool", "todo_write_tool"],
+            inherit_context=inherit_context,
+            parent_depth=parent_depth,
+            parent_agent_id=parent_agent_id,
+            agent_role="coordinator",
+        )
+
+    def _format_coordinator_report(self, coordinator_payload: dict, payloads: List[dict], parallel: bool) -> str:
+        completed = sum(1 for item in payloads if item.get("status") == "completed")
+        crashed = sum(1 for item in payloads if item.get("status") == "crashed")
+        lines = [
+            "=======[ COORDINATOR REPORT ]=======",
+            f"Execution mode: {'parallel' if parallel else 'serial'}",
+            f"Child task count: {len(payloads)}",
+            f"Completed: {completed}",
+            f"Crashed: {crashed}",
+            f"Coordinator agent: {coordinator_payload.get('agent_id')}",
+            "",
+            "Coordinator synthesis:",
+            str(coordinator_payload.get("result", "")),
+            "====================================",
+        ]
+        return "\n".join(lines)
+
+    async def execute(
+        self,
+        description: str = "",
+        prompt: str = "",
+        subagent_type: str = None,
+        model: str = None,
+        run_in_background: bool = False,
+        action: str = "spawn",
+        agent_id: str = None,
+        inherit_context: bool = False,
+        count: int = 1,
+        agent_ids: List[str] = None,
+        timeout_ms: int = 30000,
+        response_format: str = "text",
+        reasoning_effort: str = None,
+        request_id: str = None,
+    ) -> str:
+        limit = concurrency_limit(self.context)
+        tasks = self.context.setdefault("subagent_tasks", SubagentTasks(limit))
+        if not any(not task.done() for task in tasks.tasks.values()):
+            tasks.limit = limit
+            self.context["subagent_execution_semaphore"] = asyncio.Semaphore(limit)
+        self.context.setdefault("subagent_execution_semaphore", asyncio.Semaphore(tasks.limit))
+        if not 0 <= timeout_ms <= 60000:
+            raise ValueError("timeout_ms must be between 0 and 60000")
+        if action != "spawn" and not (action == "wait" and response_format == "text" and not agent_ids):
+            return await self._manage_worker(action, agent_id, prompt, timeout_ms, agent_ids, run_in_background)
+        if action == "list":
+            return str(self.context.get("subagent_registry", []))
+        if action == "result":
+            saved = next((record for record in self.context.get("subagent_registry", []) if record.get("agent_id") == agent_id), None)
+            return str(tasks.results.get(agent_id) or saved or {"agent_id": agent_id, "status": "running" if agent_id in tasks.tasks else "unknown"})
+        if action == "wait":
+            ids = [agent_id] if agent_id else list(tasks.tasks)
+            if any(identity not in tasks.tasks for identity in ids):
+                raise ValueError("Unknown background subagent")
+            pending = [tasks.tasks[identity] for identity in ids if not tasks.tasks[identity].done()]
+            if pending:
+                _, pending = await asyncio.wait(pending, timeout=timeout_ms / 1000)
+            if pending:
+                return json.dumps({"timed_out": True, "agents": self._inventory()}, ensure_ascii=False)
+            tasks.delivered.update(ids)
+            return self._format_batch_report([tasks.results[identity] for identity in ids], parallel=True)
+        if action == "cancel":
+            return str(await tasks.cancel(agent_id))
+        if action != "spawn":
+            raise ValueError("Unknown subagent action")
+        if type(count) is not int or not 1 <= count <= 10:
+            raise ValueError("Subagent count must be an integer from 1 to 10")
+        if not prompt:
+            return "Sub-agent spawn denied: no prompt was provided."
+
+        fingerprint = hashlib.sha256(json.dumps([prompt, description, subagent_type or "general-purpose", model,
+            run_in_background, inherit_context, count, reasoning_effort], ensure_ascii=False).encode()).hexdigest()
+        if request_id:
+            existing = [row for row in self.context.get("subagent_registry", []) if row.get("request_id") == request_id]
+            if existing:
+                if len(existing) != count or any(row.get("request_digest") != fingerprint for row in existing):
+                    raise ValueError("Spawn request already exists with different arguments or incomplete registration; inspect its actual workers before continuing")
+                rows = [row for row in self._inventory() if row["agent_id"] in {saved["agent_id"] for saved in existing}]
+                return json.dumps({"agents": rows, "reused": True, "request_id": request_id}, ensure_ascii=False)
+
+        parent_depth = int(self.context.get("agent_depth", 0) or 0)
+        if parent_depth >= MAX_SUBAGENT_DEPTH:
+            return (
+                f"Sub-agent spawn denied: maximum depth {MAX_SUBAGENT_DEPTH} reached. "
+                "Complete the remaining work in the current agent."
+            )
+
+        registry = self.context.get("agent_registry") or AgentRegistry(self.context.get("session_cwd"))
+        builtin_def = registry.resolve(subagent_type or "general-purpose")
+        builtin_def = copy.deepcopy(builtin_def)
+        builtin_def["disallowed_tools"] = list(builtin_def.get("disallowed_tools", []))
+        builtin_def["reasoning_effort"] = builtin_def.get("reasoning_effort") or self.context.get("reasoning_effort")
+        if reasoning_effort:
+            if reasoning_effort not in {"low", "medium", "high", "xhigh"}:
+                raise ValueError("Unsupported reasoning_effort")
+            builtin_def["reasoning_effort"] = reasoning_effort
+        parent_agent_id = self.context.get("agent_id")
+
+        allowed = builtin_def.get("allowed_tools")
+        if allowed and "*" not in allowed:
+            available = {**self.context.get("engine_available_tools", {}), **self.context.get("latent_tools_registry", {})}
+            unknown = set(allowed) - set(available)
+            if unknown:
+                raise ValueError("Subagent requires unavailable tools: " + ", ".join(sorted(unknown)))
+        # Check the complete batch before registering or scheduling any workers.
+        # launch_batch checks again without yielding, so concurrent calls cannot
+        # partially launch an over-capacity batch.
+        from xuloom.agents.collaboration import require_delegation
+        require_delegation(self.context)
+        tasks.check_capacity(count)
+        from xuloom.agents.collaboration import admit
+        admit(self.context, count)
+        records = [{
+            "agent_id": "subagent-" + str(uuid.uuid4()),
+            "parent_agent_id": parent_agent_id,
+            "agent_depth": parent_depth + 1,
+            "agent_role": builtin_def.get("agent_role", "subagent"),
+            "agent_type": builtin_def.get("agent_type", subagent_type or "general-purpose"),
+            "status": "running", "phase": "starting",
+            "task": prompt[:240] + ("..." if len(prompt) > 240 else ""),
+            "description": f"{description or '子代理'} {index + 1}/{count}" if count > 1 else description,
+            "model": model or builtin_def.get("model") or self.context.get("primary_model"),
+            "background": run_in_background,
+            "role_definition": copy.deepcopy(builtin_def),
+            "turn": 1,
+            "pending_messages": [],
+            "request_id": request_id, "request_digest": fingerprint if request_id else None,
+            "started_at": int(time.time() * 1000),
+        } for index in range(count)]
+        # Register every card before any child can make a model request.
+        try:
+            for record in records:
+                await self._write_subagent_registry_record(record)
+            coroutines = {record["agent_id"]: self._run_registered_subagent(
+                record, task=prompt,
+                allowed_tools=allowed,
+                inherit_context=inherit_context,
+                parent_depth=parent_depth,
+                parent_agent_id=parent_agent_id,
+                builtin_agent_def=builtin_def,
+                model=model,
+                child_agent_id=record["agent_id"],
+                background=run_in_background,
+                description=record["description"],
+            ) for record in records}
+            tasks.launch_batch(coroutines, on_cancelled_before_start=self.context.get("register_subagent_record"))
+            if run_in_background:
+                if response_format == "json":
+                    return json.dumps({"agents": [{k: v for k, v in row.items() if k != "role_definition"} for row in records]}, ensure_ascii=False)
+                if count == 1:
+                    return "Background subagent started. agent_id=" + records[0]["agent_id"]
+                return "Background subagents started in parallel. count={}\n{}".format(count, "\n".join(record["agent_id"] for record in records))
+            payloads = await asyncio.gather(*(tasks.tasks[row["agent_id"]] for row in records))
+            tasks.delivered.update(row["agent_id"] for row in records)
+            if response_format == "json":
+                return json.dumps({"agents": payloads}, ensure_ascii=False)
+            return self._format_single_report(payloads[0]) if count == 1 else self._format_batch_report(payloads, parallel=True)
+        except BaseException as exc:
+            terminal_ids = {item["agent_id"] for item in self.context.get("subagent_registry", [])
+                            if item.get("status") not in {"running"}}
+            for record in records:
+                if record["agent_id"] in terminal_ids:
+                    continue
+                await self._write_subagent_registry_record({"agent_id": record["agent_id"],
+                    "status": "cancelled" if isinstance(exc, asyncio.CancelledError) else "crashed",
+                    "finished_at": int(time.time() * 1000), "result": str(exc)})
+            raise
+
+    async def _run_registered_subagent(self, record, **kwargs):
+        # Initialization can fail before the engine's run try/finally starts.
+        # Every allocated worker must still reach a terminal status.
+        try:
+            async with self.context["subagent_execution_semaphore"]:
+                from xuloom.agents.collaboration import DELEGATION_BUDGET
+                token = DELEGATION_BUDGET.set(self.context.get("collaboration_run"))
+                try:
+                    payload = await self._run_single_subagent(**kwargs)
+                finally:
+                    DELEGATION_BUDGET.reset(token)
+        except asyncio.CancelledError:
+            if self._worker(record["agent_id"]).get("status") != "cancelled":
+                await self._write_subagent_registry_record({"agent_id": record["agent_id"],
+                    "status": "cancelled", "finished_at": int(time.time() * 1000)})
+            raise
+        except Exception as exc:
+            payload = {"agent_id": record["agent_id"], "agent_role": record["agent_role"],
+                "task": kwargs["task"], "status": "crashed", "result": str(exc)}
+            await self._write_subagent_registry_record({**payload, "finished_at": int(time.time() * 1000)})
+        return payload

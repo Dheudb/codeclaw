@@ -1,0 +1,197 @@
+"""
+Persistent configuration for Xuloom.
+
+Stores model/provider settings in ~/.xuloom/config.json so they survive
+across terminal sessions. Values are loaded into os.environ on startup and
+written back when /model changes them.
+"""
+
+import json
+import os
+import tempfile
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+from xuloom.branding import configuration_file
+
+CONFIG_DIR = Path(os.environ.get("XULOOM_CONFIG_DIR", str(configuration_file(Path.home(), "config.json").parent))).expanduser()
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+def normalize_api_base_url(provider: str, value: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.fragment:
+        raise ValueError("API URL must be a valid HTTP(S) address without a fragment")
+    path = parsed.path.rstrip("/")
+    if provider == "openai" and path.endswith("/chat/completions"):
+        path = path[:-len("/chat/completions")]
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
+
+# Keys we persist — maps config key → environment variable name
+_PERSISTED_KEYS = {
+    "network_mode": "XULOOM_NETWORK_MODE",
+    "model_provider": "XULOOM_MODEL_PROVIDER",
+    "anthropic_model": "ANTHROPIC_MODEL",
+    "openai_model": "OPENAI_MODEL",
+    "anthropic_base_url": "ANTHROPIC_BASE_URL",
+    "openai_base_url": "OPENAI_BASE_URL",
+    "anthropic_api_key": "ANTHROPIC_API_KEY",
+    "openai_api_key": "OPENAI_API_KEY",
+    "max_output_tokens": "XULOOM_MAX_OUTPUT_TOKENS",
+    "max_turns": "XULOOM_MAX_TURNS",
+}
+
+
+def _ensure_dir():
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_config() -> dict:
+    """Read config from disk. Returns empty dict on any failure."""
+    try:
+        if CONFIG_FILE.exists():
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def save_config(cfg: dict):
+    """Write config dict to disk."""
+    _ensure_dir()
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=CONFIG_DIR, prefix=".config-", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(json.dumps(cfg, indent=2, ensure_ascii=False))
+        os.replace(temporary, CONFIG_FILE)
+    finally:
+        if temporary and temporary.exists():
+            temporary.unlink()
+
+
+def load_config_into_env():
+    """
+    Called once at startup. For each persisted key, if the env var is NOT
+    already set by the user's shell, inject the saved value.
+    """
+    cfg = load_config()
+    if "model_connections" in cfg and not cfg["model_connections"]:
+        from xuloom.core.model_catalog import apply_catalog_env
+        apply_catalog_env(cfg)
+        cfg = dict(cfg)
+        for provider in ("openai", "anthropic"):
+            for suffix in ("model", "models", "base_url", "api_key"):
+                cfg.pop(provider + "_" + suffix, None)
+    if cfg.get("model_connections"):
+        from xuloom.core.model_catalog import active_connection, connections, project_active
+        cfg = project_active(dict(cfg), active_connection(cfg), connections(cfg))
+    for cfg_key, env_key in _PERSISTED_KEYS.items():
+        val = cfg.get(cfg_key, "")
+        if val and not os.environ.get(env_key):
+            os.environ[env_key] = str(val)
+
+
+def save_current_env_to_config():
+    """
+    Snapshot current env vars back into the config file.
+    Only writes non-empty values.
+    """
+    cfg = load_config()
+    for cfg_key, env_key in _PERSISTED_KEYS.items():
+        val = os.environ.get(env_key, "")
+        if val:
+            cfg[cfg_key] = val
+        else:
+            cfg.pop(cfg_key, None)
+    if cfg.get(cfg.get("model_provider", "anthropic") + "_model"):
+        from xuloom.core.model_catalog import sync_legacy_connection
+        cfg = sync_legacy_connection(cfg)
+    save_config(cfg)
+
+
+# ── Model Output Token Limits ──────────────────────────────────────
+
+# Slot-reservation cap: most requests use < 5k output tokens, so the
+# main loop caps to DEFAULT_CAPPED to avoid wasting slot capacity.
+# On overflow the loop escalates to ESCALATED.
+DEFAULT_CAPPED_MAX_TOKENS = 16_000
+ESCALATED_MAX_TOKENS = 64_000
+COMPACT_MAX_OUTPUT_TOKENS = 20_000
+
+
+def get_model_max_output_tokens(model: str) -> tuple:
+    """Return (default, upper_limit) for the given model.
+
+    Env override: set XULOOM_MODEL_MAX_OUTPUT_TOKENS=<number> to force
+    a specific limit (useful for local models with small output windows).
+
+    Only genuinely old models with hard low limits need special-casing.
+    Everything else gets a generous 64k default; most APIs silently cap
+    if the model can't actually produce that many tokens.
+    """
+    env_val = os.environ.get("XULOOM_MODEL_MAX_OUTPUT_TOKENS", "")
+    if env_val:
+        try:
+            v = int(env_val)
+            if v > 0:
+                return v, v
+        except ValueError:
+            pass
+    m = model.lower()
+    if any(k in m for k in ("claude-3-opus", "claude-3-haiku", "gpt-3.5")):
+        return 4_096, 4_096
+    if any(k in m for k in ("claude-3-sonnet", "3-5-sonnet", "3-5-haiku")):
+        return 8_192, 8_192
+    return 64_000, 128_000
+
+
+async def safe_llm_call(client, model: str, provider: str, messages: list,
+                        max_tokens: int, _retried: bool = False):
+    from xuloom.core.output_limits import active_budgets, reserve, settle
+    budgets = active_budgets()
+    reserved = reserve(max_tokens, budgets) if budgets else max_tokens
+    usage = []
+    try:
+        return await _safe_llm_call(client, model, provider, messages, reserved, _retried, usage)
+    finally:
+        if budgets:
+            settle(budgets, reserved, usage[-1] if usage else 0)
+
+
+async def _safe_llm_call(client, model, provider, messages, max_tokens, _retried, usage):
+    """LLM call with automatic max_tokens fallback.
+
+    If the API rejects the request because max_tokens is too large
+    (common with local models), retries once at half the value.
+    """
+    try:
+        if provider == "openai":
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens,
+            )
+            usage.append(int(getattr(getattr(resp, "usage", None), "completion_tokens", 0) or 0))
+            return str(
+                getattr(getattr(resp.choices[0], "message", None), "content", "") or ""
+            )
+        else:
+            resp = await client.messages.create(
+                model=model, messages=messages, max_tokens=max_tokens,
+            )
+            usage.append(int(getattr(getattr(resp, "usage", None), "output_tokens", 0) or 0))
+            for block in resp.content:
+                if getattr(block, "type", "") == "text":
+                    return getattr(block, "text", "")
+            return ""
+    except Exception as e:
+        err = str(e).lower()
+        if not _retried and ("max_tokens" in err or "max_output" in err
+                             or "maximum" in err or "too large" in err):
+            fallback = max(1, max_tokens // 2)
+            return await _safe_llm_call(
+                client, model, provider, messages, fallback, True, usage
+            )
+        raise

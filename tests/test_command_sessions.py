@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from codeclaw.utils.command_sessions import CommandSessions
-from codeclaw.tools.command_tool import CommandTool, CommandInput
-from codeclaw.security.permissions import ApprovalPolicy, PermissionManager
+from xuloom.utils.command_sessions import CommandSessions
+from xuloom.tools.command_tool import CommandTool, CommandInput
+from xuloom.security.permissions import ApprovalPolicy, PermissionManager
 
 
 class CommandTests(unittest.IsolatedAsyncioTestCase):

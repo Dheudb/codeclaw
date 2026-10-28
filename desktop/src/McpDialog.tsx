@@ -110,7 +110,7 @@ export default function McpDialog({
       .then((value) => alive && setSnapshot(value))
       .catch((e) => alive && setError(String(e)));
     load("builtin", "");
-    const unsubscribe = window.codeclaw.onEvent((event) => {
+    const unsubscribe = window.xuloom.onEvent((event) => {
       if (event.session === sessionId && event.type === "mcp_changed")
         setSnapshot(event.snapshot);
     });
@@ -373,7 +373,7 @@ export default function McpDialog({
                             <button
                               className="mcp-doc-link"
                               onClick={() =>
-                                window.codeclaw
+                                window.xuloom
                                   .invoke("external.open", {
                                     url: entry.homepage,
                                   })

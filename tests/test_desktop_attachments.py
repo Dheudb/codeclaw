@@ -8,15 +8,15 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 from PIL import Image
-from codeclaw.core.storage import history_root
-from codeclaw.core.engine import QueryEngine
-from codeclaw.desktop.attachments import prepare_attachments
-from codeclaw.desktop.turns import conversation_history
+from xuloom.core.storage import history_root
+from xuloom.core.engine import QueryEngine
+from xuloom.desktop.attachments import prepare_attachments
+from xuloom.desktop.turns import conversation_history
 
 
 class AttachmentTests(unittest.TestCase):
     def test_visual_bytes_and_file_references_are_separate_from_displayed_text(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"CODECLAW_DATA_DIR": directory}):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XULOOM_DATA_DIR": directory}):
             root = history_root(directory) / "tool-results/session/attachments"; root.mkdir(parents=True)
             image_id, pdf_id = str(uuid.uuid4()), str(uuid.uuid4())
             Image.new("RGBA", (32, 20), (0, 0, 0, 0)).save(root / (image_id + ".png"))

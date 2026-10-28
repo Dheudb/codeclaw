@@ -6,15 +6,15 @@ if (process.platform !== "win32")
 const root = path.resolve(__dirname, "..");
 const repository = path.resolve(root, "..");
 const candidates = [
-  process.env.CODECLAW_BUILD_PYTHON,
-  process.env.CODECLAW_PYTHON,
+  process.env.XULOOM_BUILD_PYTHON,
+  process.env.XULOOM_PYTHON,
   path.join(repository, ".venv/Scripts/python.exe"),
   path.join(repository, ".venv-mcp/Scripts/python.exe"),
 ].filter(Boolean);
 const python = candidates.find((value) => fs.existsSync(value)) || "python";
 const release = path.join(root, "release");
 const packageName =
-  process.env.CODECLAW_PACKAGE_NAME || "CodeClaw-win32-" + process.arch;
+  process.env.XULOOM_PACKAGE_NAME || process.env.XULOOM_PACKAGE_NAME || "Xuloom-win32-" + process.arch;
 if (!/^[A-Za-z0-9_-]+$/.test(packageName))
   throw new Error("Invalid package name");
 const output = path.join(release, packageName);
@@ -49,7 +49,7 @@ fs.writeFileSync(
   JSON.stringify(
     {
       name: metadata.name,
-      productName: "CodeClaw",
+      productName: "Xuloom",
       version: metadata.version,
       main: "electron/main.cjs",
     },
@@ -62,14 +62,14 @@ fs.cpSync(path.join(root, "build/python"), path.join(resources, "python"), {
 });
 fs.renameSync(
   path.join(output, "electron.exe"),
-  path.join(output, "CodeClaw.exe"),
+  path.join(output, "Xuloom.exe"),
 );
 fs.copyFileSync(
   path.join(repository, "LICENSE"),
-  path.join(output, "LICENSE-CodeClaw.txt"),
+  path.join(output, "LICENSE-Xuloom.txt"),
 );
 fs.writeFileSync(
   path.join(output, "START-HERE.txt"),
-  "CodeClaw Desktop\r\n\r\nExtract the complete folder, then run CodeClaw.exe.\r\nPython and MCP dependencies are included. No Python installation or interpreter selection is required.\r\nConfigure a model endpoint, then start a new session in the automatic per-user workspace.\r\nChange the default directory in Settings, or use Open Project for an existing folder.\r\nThird-party MCP programs may have their own runtime requirements.\r\nPython's license and dependency metadata are under resources/python.\r\n",
+  "Xuloom Desktop\r\n\r\nExtract the complete folder, then run Xuloom.exe.\r\nPython and MCP dependencies are included. No Python installation or interpreter selection is required.\r\nConfigure a model endpoint, then start a new session in the automatic per-user workspace.\r\nChange the default directory in Settings, or use Open Project for an existing folder.\r\nThird-party MCP programs may have their own runtime requirements.\r\nPython's license and dependency metadata are under resources/python.\r\n",
 );
-console.log("Self-contained desktop: " + path.join(output, "CodeClaw.exe"));
+console.log("Self-contained desktop: " + path.join(output, "Xuloom.exe"));

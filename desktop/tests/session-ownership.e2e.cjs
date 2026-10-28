@@ -7,11 +7,11 @@ const fs = require("node:fs"), path = require("node:path"), os = require("node:o
 const { atomicJSON, sessionKey } = require("../electron/catalog.cjs");
 const { historyRoot } = require("../electron/history-storage.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-ownership-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-ownership-e2e-"));
 const project = path.join(fixture, "workspace"), other = path.join(fixture, "target"), data = path.join(fixture, "data"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const directory of [project, other, data, config, home]) fs.mkdirSync(directory);
-const env = { ...process.env, USERPROFILE: home, HOME: home, CODECLAW_DATA_DIR: data, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", CODECLAW_SKILLS_PATHS: "", PYTHONPATH: path.dirname(root) };
-for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
+const env = { ...process.env, USERPROFILE: home, HOME: home, XULOOM_DATA_DIR: data, XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1", XULOOM_SKILLS_PATHS: "", PYTHONPATH: path.dirname(root) };
+for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
 let app, page, owner, lines, requests = 0;
 const server = http.createServer((req, res) => {
   let raw = ""; req.on("data", (chunk) => raw += chunk);
@@ -29,24 +29,24 @@ async function main() {
   try {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "fixture", openai_api_key: "fixture", openai_base_url: `http://127.0.0.1:${server.address().port}/v1` });
-    const python = process.env.CODECLAW_PYTHON || path.join(path.dirname(root), ".venv-mcp/Scripts/python.exe");
+    const python = process.env.XULOOM_PYTHON || path.join(path.dirname(root), ".venv-mcp/Scripts/python.exe");
     owner = spawn(python, [path.join(root, "../tests/fixtures/session_writer.py"), project, "hold", "shared"], { env, cwd: path.dirname(root), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     let stderr = ""; owner.stderr.on("data", (chunk) => stderr += chunk);
     lines = readline.createInterface({ input: owner.stdout });
     assert.equal((await once(lines, "line"))[0], "OWNED", stderr);
     atomicJSON(path.join(data, "workbench.json"), { projects: [project, other], workspace: [{ project, resumeId: "shared", active: true }] });
     const history = path.join(historyRoot(project, data), "sessions/shared.json"), before = fs.readFileSync(history);
-    app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+    app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
     page = await app.firstWindow(); page.setDefaultTimeout(45000);
     const errors = []; page.on("pageerror", (error) => errors.push(error.message));
     await page.locator(".session-item.active").waitFor();
     const id = sessionKey(project, "shared");
     assert.equal(await page.locator(".user-message").count() > 0 || (await page.locator("body").innerText()).includes("first"), true, "Owned history remains readable");
-    await page.evaluate(({ id }) => window.codeclaw.invoke("prompt", { session: id, text: "Must not request the model", skills: [], mode: "normal" }), { id });
+    await page.evaluate(({ id }) => window.xuloom.invoke("prompt", { session: id, text: "Must not request the model", skills: [], mode: "normal" }), { id });
     await page.getByText(/Session is in use by another writer/).waitFor();
     assert.equal(requests, 0);
     for (const [method, params] of [["session.fork", { id }], ["session.move", { id, path: other }], ["session.delete", { id, confirm: true }]]) {
-      const error = await page.evaluate(async ({ method, params }) => { try { await window.codeclaw.invoke(method, params); return ""; } catch (error) { return String(error); } }, { method, params });
+      const error = await page.evaluate(async ({ method, params }) => { try { await window.xuloom.invoke(method, params); return ""; } catch (error) { return String(error); } }, { method, params });
       assert.match(error, /Session is in use by another writer/, method);
       assert.deepEqual(fs.readFileSync(history), before, method + " must preserve the owner's checkpoint");
     }

@@ -4,7 +4,7 @@ const { spawn } = require("node:child_process"), { once } = require("node:events
 const { resolveEnginePython } = require("../electron/runtime.cjs");
 const { atomicJSON, projectKey } = require("../electron/catalog.cjs");
 const { historyRoot } = require("../electron/history-storage.cjs");
-const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-preferences-e2e-"));
+const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-preferences-e2e-"));
 const data = path.join(fixture, "data"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const directory of [data, config, home]) fs.mkdirSync(directory);
 atomicJSON(path.join(data, "workbench.json"), { projects: [], activeConversation: null, layout: { sidebarWidth: 280, inspectorWidth: 360 } });
@@ -21,16 +21,16 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch(label) {
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CODECLAW_DATA_DIR: data,
-    CODECLAW_USER_DATA: path.join(fixture, "browser-" + label), CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", CODECLAW_SKILLS_PATHS: "" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  const app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  const env = { ...process.env, USERPROFILE: home, HOME: home, XULOOM_DATA_DIR: data,
+    XULOOM_USER_DATA: path.join(fixture, "browser-" + label), XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1", XULOOM_SKILLS_PATHS: "" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  const app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   apps.push(app);
   const page = await app.firstWindow(); page.setDefaultTimeout(45000); page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
   return { app, page };
 }
-const invoke = (page, method, params = {}) => page.evaluate(({ method, params }) => window.codeclaw.invoke(method, params), { method, params });
+const invoke = (page, method, params = {}) => page.evaluate(({ method, params }) => window.xuloom.invoke(method, params), { method, params });
 async function main() {
   try {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -55,10 +55,10 @@ async function main() {
     assert(!saved.projects.includes(projects[0])); assert(!saved.projectMeta[projectKey(projects[0])]);
     assert.equal(saved.projects.length, 5); assert.equal(saved.layout.inspectorWidth, 540); assert.equal(saved.layout.sidebarWidth, 324);
     assert(saved.workspace.some((entry) => entry.project === saved.activeConversation.project && entry.resumeId === saved.activeConversation.resumeId));
-    const packaged = !!process.env.CODECLAW_TEST_EXECUTABLE;
-    const python = resolveEnginePython({ packaged, resourcesPath: packaged ? path.join(path.dirname(process.env.CODECLAW_TEST_EXECUTABLE), "resources") : undefined, projectRoot: path.dirname(root) });
+    const packaged = !!process.env.XULOOM_TEST_EXECUTABLE;
+    const python = resolveEnginePython({ packaged, resourcesPath: packaged ? path.join(path.dirname(process.env.XULOOM_TEST_EXECUTABLE), "resources") : undefined, projectRoot: path.dirname(root) });
     holder = spawn(python, [...(packaged ? ["-I"] : []), path.join(root, "../tests/fixtures/settings_writer.py"), "unused", "hold"], {
-      windowsHide: true, stdio: ["pipe", "pipe", "pipe"], cwd: path.dirname(root), env: { ...process.env, CODECLAW_DATA_DIR: data, PYTHONPATH: path.dirname(root) },
+      windowsHide: true, stdio: ["pipe", "pipe", "pipe"], cwd: path.dirname(root), env: { ...process.env, XULOOM_DATA_DIR: data, PYTHONPATH: path.dirname(root) },
     });
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Preference holder readiness timeout")), 10000);
@@ -66,7 +66,7 @@ async function main() {
       holder.stdout.on("data", (chunk) => { output += chunk; if (output.includes("OWNED")) { clearTimeout(timer); resolve(); } });
       holder.once("exit", (code) => { clearTimeout(timer); if (!output.includes("OWNED")) reject(new Error("Preference holder exited: " + code)); });
     });
-    await one.page.evaluate(() => { window.preferenceTestEvents = []; window.codeclaw.onEvent((event) => window.preferenceTestEvents.push(event)); });
+    await one.page.evaluate(() => { window.preferenceTestEvents = []; window.xuloom.onEvent((event) => window.preferenceTestEvents.push(event)); });
     await invoke(one.page, "prompt", { session: createdOne.id, text: "Say hello", skills: [], mode: "normal" });
     await one.page.getByRole("alert").filter({ hasText: "工作台设置更新失败" }).waitFor();
     await one.page.waitForFunction(() => window.preferenceTestEvents.some((event) => event.type === "turn_finished"));

@@ -1,11 +1,11 @@
 const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), http = require("node:http"), assert = require("node:assert/strict"), { execFileSync } = require("node:child_process");
 const { atomicJSON } = require("../electron/catalog.cjs");
-const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-attachments-e2e-"));
+const root = path.resolve(__dirname, ".."), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-attachments-e2e-"));
 const data = path.join(fixture, "data"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const dir of [data, config, home]) fs.mkdirSync(dir);
 const image = path.join(fixture, "示例 图片.png"), pdf = path.join(fixture, "研究论文.pdf");
-const python = process.env.CODECLAW_TEST_EXECUTABLE ? path.join(path.dirname(process.env.CODECLAW_TEST_EXECUTABLE), "resources/python/python.exe") : path.join(root, "../.venv-mcp/Scripts/python.exe");
+const python = process.env.XULOOM_TEST_EXECUTABLE ? path.join(path.dirname(process.env.XULOOM_TEST_EXECUTABLE), "resources/python/python.exe") : path.join(root, "../.venv-mcp/Scripts/python.exe");
 execFileSync(python, ["-c", "from PIL import Image; import fitz,sys; Image.new('RGB',(100,60),'#bd654d').save(sys.argv[1]); d=fitz.open(); p=d.new_page(); p.insert_text((50,50),'PDF_FILE_PROOF'); d.save(sys.argv[2]); d.close()", image, pdf], { windowsHide: true });
 const png = fs.readFileSync(image), failures = [], requests = [];
 let app, page;
@@ -36,9 +36,9 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, CODECLAW_DATA_DIR: data, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, HOME: home, USERPROFILE: home, CODECLAW_TEST_HEADLESS: "1" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env });
+  const env = { ...process.env, XULOOM_DATA_DIR: data, XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, HOME: home, USERPROFILE: home, XULOOM_TEST_HEADLESS: "1" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env });
   page = await app.firstWindow(); page.setDefaultTimeout(90000); page.on("pageerror", (error) => failures.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }

@@ -7,11 +7,11 @@ const assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
 const { encodeDSML } = require("./dsml-fixture.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-permissions-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-permissions-e2e-"));
 const project = path.join(fixture, "project"), data = path.join(fixture, "profile"), config = path.join(fixture, "config");
 for (const directory of [project, data, config]) fs.mkdirSync(directory);
 atomicJSON(path.join(data, "workbench.json"), { projects: [], activeConversation: null, defaultDirectory: project });
-const agent = path.join(project, ".codeclaw/agents/writer.md");
+const agent = path.join(project, ".xuloom/agents/writer.md");
 fs.mkdirSync(path.dirname(agent), { recursive: true });
 fs.writeFileSync(agent, "---\nname: writer\ndescription: Permission test writer\ntools: Write, Bash\n---\nPERMISSION_CHILD_PROOF: write the requested test file.");
 const textOf = (message) => typeof message.content === "string" ? message.content : (message.content || []).map((block) => block.text || "").join("\n");
@@ -35,7 +35,7 @@ const server = http.createServer((req, res) => {
     }
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "test", model: body.model, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
-    if (tool && process.env.CODECLAW_TEST_DSML === "1") {
+    if (tool && process.env.XULOOM_TEST_DSML === "1") {
       const wire = encodeDSML([{ name: tool.name, input: tool.arguments }]);
       for (let offset = 0; offset < wire.length; offset += 7) chunk({ content: wire.slice(offset, offset + 7) });
       chunk({}, "stop");
@@ -48,12 +48,12 @@ const server = http.createServer((req, res) => {
 let app, page, workingDirectory;
 const errors = [];
 async function launch() {
-  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(60000); page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
-  await page.evaluate(() => { window.permissionEvents = []; window.textEvents = []; window.codeclaw.onEvent((event) => { if (event.type === "permission") window.permissionEvents.push(event); if (event.type === "text_delta") window.textEvents.push(event.text); }); });
+  await page.evaluate(() => { window.permissionEvents = []; window.textEvents = []; window.xuloom.onEvent((event) => { if (event.type === "permission") window.permissionEvents.push(event); if (event.type === "text_delta") window.textEvents.push(event.text); }); });
 }
 const mode = () => page.getByLabel("访问权限", { exact: true });
 const row = (id) => page.locator(`[data-session-id="${id}"]`);

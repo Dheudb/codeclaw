@@ -5,8 +5,8 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import test_tool_recovery as recovery
-from codeclaw.features import goals
-from codeclaw.core.run_result import PersistenceError
+from xuloom.features import goals
+from xuloom.core.run_result import PersistenceError
 
 
 class GoalTests(unittest.IsolatedAsyncioTestCase):
@@ -120,7 +120,7 @@ class GoalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(goals.available_output(self.engine.goal), 13)
 
     async def test_compaction_and_memory_auxiliary_calls_share_the_goal_budget(self):
-        from codeclaw.core.config import safe_llm_call
+        from xuloom.core.config import safe_llm_call
         from types import SimpleNamespace as NS
         self.create(output_tokens=100)
         token = goals.CURRENT_BUDGET.set(self.engine.goal)
@@ -153,7 +153,7 @@ class GoalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"],"budget_exhausted")
 
     async def test_status_of_a_live_owner_is_not_misreported_as_interrupted(self):
-        from codeclaw.core.session import SessionManager
+        from xuloom.core.session import SessionManager
         self.create()
         self.engine.goal["status"], self.engine.goal["phase"] = "active", "executing"
         with SessionManager(cwd=self.root) as viewer:

@@ -7,7 +7,7 @@ const assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
 const { encodeDSML } = require("./dsml-fixture.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-subagents-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-subagents-e2e-"));
 const project = path.join(fixture, "project"), data = path.join(fixture, "profile"), config = path.join(fixture, "config");
 for (const directory of [project, data, config]) fs.mkdirSync(directory);
 atomicJSON(path.join(data, "workbench.json"), { projects: [], activeConversation: null, defaultDirectory: project });
@@ -16,7 +16,7 @@ let app, page, batch = 0;
 function reply(res, text, tools) {
   res.writeHead(200, { "Content-Type": "text/event-stream" });
   const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
-  if (tools && process.env.CODECLAW_TEST_DSML === "1") {
+  if (tools && process.env.XULOOM_TEST_DSML === "1") {
     const wire = encodeDSML(tools.map((input) => ({ name: "agent_tool", input })));
     for (let offset = 0; offset < wire.length; offset += 17) chunk({ content: wire.slice(offset, offset + 17) });
     chunk({}, "stop");
@@ -64,18 +64,20 @@ const server = http.createServer((req, res) => {
 });
 async function main() {
   try {
+    // Explicit host override tests the transport maximum; product defaults are 3/8.
+    atomicJSON(path.join(project, ".xuloom", "capabilities.json"), { agent_concurrency: 10 });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "subagent-fixture", openai_api_key: "fixture-key", openai_base_url: `http://127.0.0.1:${server.address().port}/v1` });
-    const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
-    for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-    app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+    const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1" };
+    for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+    app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
     page = await app.firstWindow(); page.setDefaultTimeout(60000);
     page.on("pageerror", (error) => failures.push(error.message));
     await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
     await page.locator(".new-task").click(); await page.locator(".session-item.active").waitFor();
     await page.getByLabel("访问权限", { exact: true }).selectOption("full");
     await page.waitForFunction(() => !document.querySelector(".permission-picker").disabled);
-    await page.evaluate(() => { window.workerEvents = []; window.codeclaw.onEvent((event) => { if (event.type === "subagent_status") window.workerEvents.push(event.agent); }); });
+    await page.evaluate(() => { window.workerEvents = []; window.xuloom.onEvent((event) => { if (event.type === "subagent_status") window.workerEvents.push(event.agent); }); });
     for (const [index, task] of ["启动10个subagent，都发送你好", "启动10个后台subagent，都发送你好", "启动10个subagent，单次批量，都发送你好", "启动10个后台subagent，单次批量，都发送你好"].entries()) {
       await page.getByRole("textbox", { name: "任务输入" }).fill(task);
       await page.getByRole("button", { name: "发送任务", exact: true }).click();
@@ -83,6 +85,7 @@ async function main() {
       await page.waitForFunction(() => !document.querySelector(".send-button.stop"));
       assert.equal(childRequests.length, (index + 1) * 10);
     }
+    if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
     await page.getByRole("button", { name: "代理", exact: true }).click();
     assert.equal(await page.locator(".capability-card").filter({ hasText: "问候测试" }).count(), 40);
     assert.equal(await page.locator(".capability-card").filter({ hasText: "已完成" }).count(), 40);

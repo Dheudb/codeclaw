@@ -4,9 +4,9 @@ import time
 import unittest
 from unittest.mock import AsyncMock, patch
 import test_tool_recovery as recovery
-from codeclaw.features import schedules
-from codeclaw.core.session_lock import SessionBusyError, SessionLock
-from codeclaw.core.storage import data_directory
+from xuloom.features import schedules
+from xuloom.core.session_lock import SessionBusyError, SessionLock
+from xuloom.core.storage import data_directory
 
 
 class ScheduleTests(unittest.IsolatedAsyncioTestCase):
@@ -59,7 +59,7 @@ class ScheduleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_final_checkpoint_does_not_acknowledge_delivery(self):
         row = schedules.add(self.engine, "Check", due_at=time.time()-1)
-        from codeclaw.core.run_result import PersistenceError
+        from xuloom.core.run_result import PersistenceError
         real = self.engine.persist_session_state
         def save():
             if self.engine.scheduled_deliveries.get(row["id"], {}).get("status") == "completed": return False

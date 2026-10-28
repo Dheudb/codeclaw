@@ -3,7 +3,7 @@ const fs = require("node:fs/promises"), path = require("node:path"), os = requir
 const { HtmlPreviews } = require("../electron/html-preview.cjs");
 
 test("HTML preview serves current workspace assets and rejects hidden files, traversal, writes and expired pages", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codeclaw-html-unit-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xuloom-html-unit-"));
   const project = path.join(root, "project"); await fs.mkdir(path.join(project, "nested"), { recursive: true });
   await fs.writeFile(path.join(project, "nested/page.html"), "<h1>preview</h1>");
   await fs.writeFile(path.join(project, "style.css"), "body {color:red}");
@@ -12,7 +12,7 @@ test("HTML preview serves current workspace assets and rejects hidden files, tra
   await fs.writeFile(path.join(root, "outside.html"), "outside");
   const pages = new HtmlPreviews(), view = await pages.create("session-a", project, path.join(project, "nested/page.html"));
   const request = (relative, method = "GET") => pages.respond(new Request(new URL(relative, view.url), { method }));
-  assert.match(view.url, /^codeclaw-preview:\/\/[a-z0-9-]+\/nested\/page.html$/);
+  assert.match(view.url, /^xuloom-preview:\/\/[a-z0-9-]+\/nested\/page.html$/);
   assert.match(await (await request(view.url)).text(), /preview/);
   const css = await request("../style.css"); assert.equal(css.headers.get("content-type"), "text/css; charset=utf-8");
   assert.equal(css.headers.get("cache-control"), "no-store");
@@ -28,7 +28,7 @@ test("HTML preview serves current workspace assets and rejects hidden files, tra
 });
 
 test("explicitly modified external HTML does not grant access to its neighboring files", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codeclaw-html-outside-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xuloom-html-outside-"));
   const project = path.join(root, "project"); await fs.mkdir(project);
   await fs.writeFile(path.join(root, "page.htm"), "outside preview"); await fs.writeFile(path.join(root, "data.json"), "{}");
   const pages = new HtmlPreviews(), view = await pages.create("a", project, path.join(root, "page.htm"));

@@ -10,7 +10,7 @@ class EngineTransport {
     this.stderr = "";
     this.child = spawn(
       python,
-      [...(isolated ? ["-I"] : []), "-u", "-m", "codeclaw.desktop.bridge"],
+      [...(isolated ? ["-I"] : []), "-u", "-m", "xuloom.desktop.bridge"],
       {
         cwd: project,
         windowsHide: true,

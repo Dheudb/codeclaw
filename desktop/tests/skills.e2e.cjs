@@ -2,7 +2,7 @@ const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), http = require("node:http"), assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-skills-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-skills-e2e-"));
 const project = path.join(fixture, "project-a"), other = path.join(fixture, "project-b");
 const data = path.join(fixture, "profile"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const directory of [project, other, data, config, home]) fs.mkdirSync(directory);
@@ -11,16 +11,16 @@ function skill(parent, name, description, body = "FIXTURE_" + name) {
   fs.writeFileSync(path.join(directory, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}`, "utf8");
   return directory;
 }
-const local = path.join(project, ".codeclaw/skills");
+const local = path.join(project, ".xuloom/skills");
 skill(local, "project-check", "检查当前项目的真实目录技能", "PROJECT_BODY_PROOF");
 skill(local, "code-review", "当前项目覆盖内置审查", "CUSTOM_REVIEW_BODY_PROOF");
 const disabled = skill(local, "disabled-skill", "旧停用配置中的技能仍可直接选择");
 const invalid = skill(local, "invalid-skill", "格式错误不应显示");
 fs.writeFileSync(path.join(invalid, "SKILL.md"), "not frontmatter", "utf8");
 const imported = skill(path.join(fixture, "mounted"), "imported-check", "挂载目录的技能");
-skill(path.join(home, ".codeclaw/skills"), "global-check", "全局技能");
+skill(path.join(home, ".xuloom/skills"), "global-check", "全局技能");
 skill(path.join(other, ".agents/skills"), "other-project", "第二个项目独有技能");
-atomicJSON(path.join(project, ".codeclaw/capabilities.json"), {
+atomicJSON(path.join(project, ".xuloom/capabilities.json"), {
   skill_roots: [imported], disabled_skills: [process.platform === "win32" ? path.join(disabled, "SKILL.md").toLowerCase() : path.join(disabled, "SKILL.md")],
 });
 atomicJSON(path.join(data, "workbench.json"), { projects: [project, other], workspace: [], defaultDirectory: project });
@@ -40,9 +40,9 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, CODECLAW_SKILLS_PATHS: "" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, XULOOM_SKILLS_PATHS: "" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(90000);
   page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
@@ -107,7 +107,7 @@ async function main() {
     assert.equal(requests.length, 1);
     const prompt = requests[0].messages.find((message) => message.role === "user").content;
     for (const proof of ["PROJECT_BODY_PROOF", "CUSTOM_REVIEW_BODY_PROOF", "Skill: debug-issue"]) assert(prompt.includes(proof), "Missing full instructions: " + proof);
-    const builtinBody = fs.readFileSync(path.join(root, "../codeclaw/skills/builtin/debug-issue/SKILL.md"), "utf8").split("---")[2].trim();
+    const builtinBody = fs.readFileSync(path.join(root, "../xuloom/skills/builtin/debug-issue/SKILL.md"), "utf8").split("---")[2].trim();
     assert(prompt.includes(builtinBody), "Bundled skill must inject its actual body");
     assert(!prompt.includes("Skill: imported-check"));
     const displayed = await page.locator(".message.user").innerText();

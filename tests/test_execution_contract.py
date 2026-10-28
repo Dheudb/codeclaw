@@ -7,11 +7,11 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import test_tool_recovery as recovery
-from codeclaw.core.run_result import RunResult, PersistenceError
-from codeclaw.context.tool_results import serialize_tool_result
-from codeclaw.protocols.mcp_bridge import MCP_AVAILABLE, MCPToolWrapper
-from codeclaw.security.permissions import ApprovalPolicy, PermissionDecision, PermissionManager
-from codeclaw.tools.repl_tool import ReplTool
+from xuloom.core.run_result import RunResult, PersistenceError
+from xuloom.context.tool_results import serialize_tool_result
+from xuloom.protocols.mcp_bridge import MCP_AVAILABLE, MCPToolWrapper
+from xuloom.security.permissions import ApprovalPolicy, PermissionDecision, PermissionManager
+from xuloom.tools.repl_tool import ReplTool
 
 
 class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
@@ -64,7 +64,7 @@ class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
             parent_agent_id=self.engine.agent_id)
 
     async def test_budget_receipt_is_not_misclassified_by_subagent_wrapper(self):
-        with patch("codeclaw.core.engine.QueryEngine.run", new=AsyncMock(return_value=RunResult("out of budget", "budget_exhausted", True))):
+        with patch("xuloom.core.engine.QueryEngine.run", new=AsyncMock(return_value=RunResult("out of budget", "budget_exhausted", True))):
             row = await self.child()
         self.assertEqual(row["status"], "crashed")
         self.assertEqual(row["receipt"]["reason"], "budget_exhausted")
@@ -75,7 +75,7 @@ class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
         def save(agent_id, payload):
             return False if payload.get("status") == "completed" else original(agent_id, payload)
         with patch.object(self.engine.session_manager, "save_subagent_transcript", side_effect=save), \
-             patch("codeclaw.core.engine.QueryEngine.run", new=AsyncMock(return_value=RunResult("partial evidence", "completed", True))):
+             patch("xuloom.core.engine.QueryEngine.run", new=AsyncMock(return_value=RunResult("partial evidence", "completed", True))):
             row = await self.child()
         self.assertEqual(row["status"], "crashed")
         self.assertEqual(row["receipt"]["reason"], "persistence_error")
@@ -86,7 +86,7 @@ class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_initial_child_save_failure_does_not_start_model(self):
         model = AsyncMock(side_effect=AssertionError("No model call without initial checkpoint"))
         with patch.object(self.engine.session_manager, "save_subagent_transcript", return_value=False), \
-             patch("codeclaw.core.engine.QueryEngine.run", new=model):
+             patch("xuloom.core.engine.QueryEngine.run", new=model):
             row = await self.child()
         model.assert_not_called()
         self.assertEqual(row["status"], "crashed")
@@ -129,7 +129,7 @@ class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.behavior, "deny")
 
     async def test_desktop_full_access_and_mode_switch_preserve_explicit_ask(self):
-        from codeclaw.desktop.bridge import DesktopBridge
+        from xuloom.desktop.bridge import DesktopBridge
         bridge = DesktopBridge(lambda _: None, cwd=str(self.root))
         bridge.approval_policy.set_mode("full")
         manager = PermissionManager(prompt_handler=bridge.permission, approval_policy=bridge.approval_policy,
@@ -154,7 +154,7 @@ class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(pending, return_exceptions=True)
 
     async def test_success_content_cannot_spoof_error_status(self):
-        from codeclaw.context.tool_results import build_tool_result
+        from xuloom.context.tool_results import build_tool_result
         self.tool.execute = AsyncMock(return_value=build_tool_result(ok=True, content="Example: Status: error\nTool Exception Caught"))
         result = await self.engine._execute_tool_wrapper({"id": "status", "name": "record_tool", "input": {}}, lambda _: None)
         self.assertFalse(result["is_error"])
@@ -181,7 +181,7 @@ class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
         self.tool.execute.assert_not_called()
 
     async def test_more_than_twelve_current_turn_receipts_are_durable(self):
-        from codeclaw.core.messages import create_user_message
+        from xuloom.core.messages import create_user_message
         self.engine.messages.append(create_user_message("batch"))
         for i in range(16):
             await self.engine._execute_tool_wrapper({"id": "batch-" + str(i), "name": "record_tool", "input": {"value": str(i)}}, lambda _: None)
@@ -219,7 +219,7 @@ class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_output_archive_failure_is_explicit_and_preserves_full_text(self):
         text = "x" * 6000 + "TAIL_PROOF"
-        with patch("codeclaw.core.storage.atomic_text", side_effect=OSError("disk full")):
+        with patch("xuloom.core.storage.atomic_text", side_effect=OSError("disk full")):
             result = serialize_tool_result(text, artifact_dir=str(self.root))
         self.assertIn("Status: error", result)
         self.assertIn("TAIL_PROOF", result)

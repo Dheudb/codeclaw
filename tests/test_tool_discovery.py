@@ -7,8 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, patch
 
-from codeclaw.desktop.bridge import DesktopBridge
-from codeclaw.protocols.mcp_bridge import MCP_AVAILABLE, MCPToolWrapper
+from xuloom.desktop.bridge import DesktopBridge
+from xuloom.protocols.mcp_bridge import MCP_AVAILABLE, MCPToolWrapper
 import test_tool_recovery as recovery
 
 
@@ -24,7 +24,7 @@ class ToolDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cli_discovery_loads_schema_on_next_request_and_keeps_explicit_ask(self):
         remote = self.remote()
-        with patch("codeclaw.core.engine.MCPBridge.load_and_connect", new=AsyncMock(return_value={remote.name: remote})):
+        with patch("xuloom.core.engine.MCPBridge.load_and_connect", new=AsyncMock(return_value={remote.name: remote})):
             await self.engine.start_protocols(lambda _: None)
         self.assertNotIn(remote.name, self.engine.available_tools)
         self.assertIn(remote.name, self.engine.latent_tools)

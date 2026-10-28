@@ -3,27 +3,27 @@ const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), http = require("node:http"), assert = require("node:assert/strict");
 const { atomicJSON, sessionKey, projectKey } = require("../electron/catalog.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-moves-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-moves-e2e-"));
 const first = path.join(fixture, "project-a"), second = path.join(fixture, "项目 b"), data = path.join(fixture, "profile"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const directory of [first, second, data, config, home]) fs.mkdirSync(directory);
-const legacyHistory = (directory, id) => path.join(directory, ".codeclaw/sessions", id + ".json");
+const legacyHistory = (directory, id) => path.join(directory, ".xuloom/sessions", id + ".json");
 const history = (directory, id) => path.join(historyRoot(directory, data), "sessions", id + ".json");
 atomicJSON(legacyHistory(first, "moving"), { messages: [{ role: "user", content: "原来的问题" }, { role: "assistant", content: "原来的回答" }], metadata: {
   memory_files: { cwd: first }, permissions: { always_allow_tools: ["file_write_tool", "bash_tool"] },
   turn_traces: [{ id: "old-turn", status: "completed", elapsedMs: 2345, answer: "原来的回答", steps: [] }],
 } });
 atomicJSON(legacyHistory(first, "inactive"), { messages: [{ role: "user", content: "未打开的历史" }, { role: "assistant", content: "未打开的回复" }], metadata: {} });
-atomicJSON(path.join(first, ".codeclaw/session-index.json"), { version: 1, sessions: {
+atomicJSON(path.join(first, ".xuloom/session-index.json"), { version: 1, sessions: {
   moving: { title: "迁移中的会话", scope: "standalone", workspaceIsolated: true, draft: "未发送的草稿", pinned: true, permissionMode: "ask" },
 } });
 for (const [directory, name] of [[first, "only-first"], [second, "only-second"]]) {
-  const file = path.join(directory, ".codeclaw/skills", name, "SKILL.md"); fs.mkdirSync(path.dirname(file), { recursive: true });
+  const file = path.join(directory, ".xuloom/skills", name, "SKILL.md"); fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `---\nname: ${name}\ndescription: Project skill ${name}\n---\n${name}`);
   fs.writeFileSync(path.join(directory, "marker.txt"), directory === first ? "FIRST_PROJECT_MARKER" : "SECOND_PROJECT_MARKER");
 }
-const definition = path.join(second, ".codeclaw/agents/location-worker.md"); fs.mkdirSync(path.dirname(definition), { recursive: true });
+const definition = path.join(second, ".xuloom/agents/location-worker.md"); fs.mkdirSync(path.dirname(definition), { recursive: true });
 fs.writeFileSync(definition, "---\nname: location-worker\ndescription: Check current project marker\ntools: Read\n---\nSECOND_WORKER_DEFINITION");
-atomicJSON(path.join(second, "mcp_servers.json"), { mcpServers: {} });
+atomicJSON(path.join(second, ".xuloom", "mcp_servers.json"), { mcpServers: {} });
 atomicJSON(path.join(data, "workbench.json"), { projects: [first, second], standaloneDirectories: [first], defaultDirectory: first,
   workspace: [{ project: first, resumeId: "moving", scope: "standalone", active: true }],
   projectMeta: { [projectKey(second)]: { open: false, collapsed: true } },
@@ -57,9 +57,9 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, CODECLAW_SKILLS_PATHS: "" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, XULOOM_SKILLS_PATHS: "" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(45000); page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }
@@ -81,6 +81,7 @@ async function main() {
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "move-fixture", openai_api_key: "fixture-key", openai_base_url: `http://127.0.0.1:${server.address().port}/v1` });
     await launch();
     const old = sessionKey(first, "moving"), next = sessionKey(second, "moving");
+    if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
     await page.locator(".capability-card").filter({ has: page.getByText("only-first", { exact: true }) }).getByRole("button", { name: "选择使用", exact: true }).click();
     assert.equal(await page.locator(".selected-skills button").count(), 1);
     await page.getByRole("textbox", { name: "任务输入" }).fill("拖动前最后输入的草稿");
@@ -97,14 +98,15 @@ async function main() {
     assert.equal(fs.readFileSync(path.join(second, "move-proof.txt"), "utf8"), "TARGET_DIRECTORY_WRITE"); assert(!fs.existsSync(path.join(first, "move-proof.txt")));
     await send("MOVE_SHELL", true); assert(fs.readFileSync(path.join(second, "shell-proof.txt"), "utf8").includes("TARGET_DIRECTORY_SHELL")); assert(!fs.existsSync(path.join(first, "shell-proof.txt")));
     await send("MOVE_CHILD", true);
+    if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
     await page.getByRole("button", { name: "代理", exact: true }).click();
     await page.locator(".worker-result").getByText(/SECOND_PROJECT_MARKER/).waitFor({ state: "attached" });
-    const mcp = await page.evaluate((id) => window.codeclaw.invoke("mcp.list", { session: id }), next); assert.equal(projectKey(mcp.project), projectKey(second));
+    const mcp = await page.evaluate((id) => window.xuloom.invoke("mcp.list", { session: id }), next); assert.equal(projectKey(mcp.project), projectKey(second));
     assert(requests.some((request) => textOf(request.messages[0]).includes("Conversation working directory") && textOf(request.messages[0]).includes(fs.realpathSync(second))));
     // Running tasks cannot change directory under a live tool call.
     await page.getByRole("textbox", { name: "任务输入" }).fill("MOVE_SLOW"); await page.getByRole("button", { name: "发送任务", exact: true }).click();
     await page.getByText("正在运行迁移保护测试", { exact: true }).waitFor(); assert.equal(await row(next).getAttribute("draggable"), "false");
-    const blocked = await page.evaluate(async ({ id, path }) => { try { await window.codeclaw.invoke("session.move", { id, path }); return ""; } catch (error) { return String(error); } }, { id: next, path: first });
+    const blocked = await page.evaluate(async ({ id, path }) => { try { await window.xuloom.invoke("session.move", { id, path }); return ""; } catch (error) { return String(error); } }, { id: next, path: first });
     assert.match(blocked, /先停止/); assert(fs.existsSync(history(second, "moving"))); assert(!fs.existsSync(history(first, "moving")));
     await page.getByRole("button", { name: "停止任务", exact: true }).click(); await page.waitForFunction(() => !document.querySelector(".send-button.stop"));
     // Keyboard-accessible menu path also moves an existing project conversation.

@@ -3,10 +3,10 @@ const { _electron: electron } = require("playwright");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-links-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-links-e2e-"));
 const project = path.join(fixture, "project"), data = path.join(fixture, "profile"), config = path.join(fixture, "config");
 for (const directory of [project, data, config]) fs.mkdirSync(directory);
-const history = path.join(project, ".codeclaw/sessions/links.json");
+const history = path.join(project, ".xuloom/sessions/links.json");
 atomicJSON(history, { messages: [{ role: "user", content: "查看来源链接" }, { role: "assistant", content: "Sources:\n- [Chemistry paper](https://arxiv.org/abs/2506.17238)\n- [HTTP source](http://example.org/paper?from=search#abstract)\n- https://example.org/bare\n- [Unsafe](javascript:alert(1))\n- ![Image](https://example.org/image.png)" }], metadata: {} });
 const original = fs.readFileSync(history);
 atomicJSON(path.join(data, "workbench.json"), { projects: [project], workspace: [{ project, resumeId: "links", active: true }] });
@@ -21,9 +21,9 @@ async function opened(count) {
 }
 async function main() {
   try {
-    const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
-    for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-    app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+    const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1" };
+    for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+    app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
     page = await app.firstWindow(); page.setDefaultTimeout(30000);
     const errors = []; page.on("pageerror", (error) => errors.push(error.message));
     await page.locator(".session-item.active").waitFor();
@@ -46,7 +46,7 @@ async function main() {
     assert.equal(await page.locator(".markdown img").count(), 0);
     for (const url of ["javascript:alert(1)", "file:///C:/Windows/system.ini", "data:text/html,test", "https://user:password@example.org/"]) {
       assert.equal(await page.evaluate(async (url) => {
-        try { await window.codeclaw.invoke("external.open", { url }); return true; } catch { return false; }
+        try { await window.xuloom.invoke("external.open", { url }); return true; } catch { return false; }
       }, url), false);
     }
     await app.evaluate(() => { globalThis.failLinkOpen = true; });

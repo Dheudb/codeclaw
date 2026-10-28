@@ -26,16 +26,16 @@ function Assert-Child([string]$candidate, [string]$root) {
 }
 $changes = [System.Collections.Generic.List[object]]::new()
 try {
-    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'CodeClaw.exe') -PathType Leaf)) { throw 'The original CodeClaw.exe is missing.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'Xuloom.exe') -PathType Leaf)) { throw 'The original Xuloom.exe is missing.' }
     $manifest = Get-Content -LiteralPath (Join-Path $stageRoot 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($manifest.metadataDirectory -notmatch '^codeclaw-[0-9A-Za-z_.-]+\.dist-info$') { throw 'Invalid Python package metadata directory.' }
+    if ($manifest.metadataDirectory -notmatch '^xuloom-[0-9A-Za-z_.-]+\.dist-info$') { throw 'Invalid Python package metadata directory.' }
     $entries = @(
         @{ Source = (Join-Path $stageRoot 'app'); Target = (Join-Path $packageRoot 'resources\app'); Backup = (Join-Path $stageRoot 'backup\app') },
-        @{ Source = (Join-Path $stageRoot 'codeclaw'); Target = (Join-Path $packageRoot 'resources\python\Lib\site-packages\codeclaw'); Backup = (Join-Path $stageRoot 'backup\codeclaw') },
+        @{ Source = (Join-Path $stageRoot 'xuloom'); Target = (Join-Path $packageRoot 'resources\python\Lib\site-packages\xuloom'); Backup = (Join-Path $stageRoot 'backup\xuloom') },
         @{ Source = (Join-Path $stageRoot 'metadata'); Target = (Join-Path $packageRoot ('resources\python\Lib\site-packages\' + $manifest.metadataDirectory)); Backup = (Join-Path $stageRoot 'backup\metadata') }
     )
     foreach ($dependency in $manifest.pythonPackages) {
-        if ($dependency -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$' -or $dependency -in @('codeclaw', $manifest.metadataDirectory)) { throw 'Invalid Python dependency directory.' }
+        if ($dependency -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$' -or $dependency -in @('xuloom', $manifest.metadataDirectory)) { throw 'Invalid Python dependency directory.' }
         if ($entries | Where-Object { (Split-Path -Leaf $_.Target) -eq $dependency }) { throw 'Duplicate Python dependency directory.' }
         $entries += @{ Source = (Join-Path $stageRoot ('dependencies\' + $dependency)); Target = (Join-Path $packageRoot ('resources\python\Lib\site-packages\' + $dependency)); Backup = (Join-Path $stageRoot ('backup\dependencies\' + $dependency)) }
     }
@@ -55,11 +55,11 @@ try {
     Write-Status 'waiting_for_exit'
     $deadline = (Get-Date).AddSeconds($WaitSeconds)
     do {
-        $running = @(Get-CimInstance Win32_Process -Filter "Name = 'CodeClaw.exe' OR Name = 'python.exe'" | Where-Object {
+        $running = @(Get-CimInstance Win32_Process -Filter "Name = 'Xuloom.exe' OR Name = 'python.exe'" | Where-Object {
             $_.ExecutablePath -and $_.ExecutablePath.StartsWith($packageRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)
         })
         if ($running.Count -eq 0) { break }
-        if ((Get-Date) -gt $deadline) { throw 'CodeClaw is still open. The update payload is preserved for retry.' }
+        if ((Get-Date) -gt $deadline) { throw 'Xuloom is still open. The update payload is preserved for retry.' }
         Start-Sleep -Seconds 1
     } while ($true)
     Write-Status 'applying'

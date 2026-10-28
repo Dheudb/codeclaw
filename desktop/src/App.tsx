@@ -5,7 +5,7 @@ import {
   Bot,
   Check,
   ChevronRight,
-  Code2,
+  Workflow,
   Folder,
   FolderOpen,
   LoaderCircle,
@@ -21,12 +21,20 @@ import {
   Pencil,
   Play,
   Paperclip,
+  Activity,
+  FolderTree,
+  CircleCheck,
+  Target,
+  Lightbulb,
 } from "lucide-react";
 import type { SessionView, ModelConfig, SessionCatalog, PermissionMode, FileChange, Attachment } from "./types";
 import { applyEvent, beginTurn, createSession } from "./state";
 import CapabilityPanel from "./CapabilityPanel";
 import { InteractionCard, SettingsDialog } from "./Dialogs";
 import Markdown from "./Markdown";
+import MessageActions from "./MessageActions";
+import ComposerMenu from "./ComposerMenu";
+import GoalPanel from "./GoalPanel";
 import McpDialog from "./McpDialog";
 import SessionSidebar from "./SessionSidebar";
 import { CatalogPreferences } from "./catalog-preferences";
@@ -52,8 +60,10 @@ export default function App() {
   const [globalModel, setGlobalModel] = useState<ModelConfig>();
   const [modelChanging, setModelChanging] = useState(false);
   const [permissionChanging, setPermissionChanging] = useState(false);
+  const [goalDialog, setGoalDialog] = useState<"goal" | "all" | null>(null);
+  const [collaborationChanging, setCollaborationChanging] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [panelTab, setPanelTab] = useState("skills");
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [sidebarWidth, setSidebarWidth] = useState<number>();
@@ -82,22 +92,22 @@ export default function App() {
 
   useEffect(() => {
     const flush = (event: Event) => {
-      if (window.codeclaw?.flushDrafts(draftSessions.current.map((session) => ({ id: session.id, draft: session.draft, draftEditId: session.editingId || "", draftAttachments: session.attachments.map((item) => item.id) }))) === false) {
+      if (window.xuloom?.flushDrafts(draftSessions.current.map((session) => ({ id: session.id, draft: session.draft, draftEditId: session.editingId || "", draftAttachments: session.attachments.map((item) => item.id) }))) === false) {
         event.preventDefault();
         if (event.type === "beforeunload") (event as BeforeUnloadEvent).returnValue = "";
         setNotice("草稿保存失败，窗口已保留。请检查存储空间、权限或会话占用，恢复后重试退出。");
       }
     };
     window.addEventListener("beforeunload", flush);
-    window.addEventListener("codeclaw-before-quit", flush);
-    return () => { window.removeEventListener("beforeunload", flush); window.removeEventListener("codeclaw-before-quit", flush); };
+    window.addEventListener("xuloom-before-quit", flush);
+    return () => { window.removeEventListener("beforeunload", flush); window.removeEventListener("xuloom-before-quit", flush); };
   }, []);
   useEffect(() => {
-    if (!window.codeclaw) {
-      setNotice("请通过 CodeClaw 桌面程序打开工作台。");
+    if (!window.xuloom) {
+      setNotice("请通过 Xuloom 桌面程序打开工作台。");
       return;
     }
-    window.codeclaw
+    window.xuloom
       .invoke("app.initialize")
       .then((value) => {
         setGlobalModel(value.config);
@@ -112,7 +122,7 @@ export default function App() {
       })
       .catch((error) => setNotice(String(error)))
       .finally(() => setOpening(false));
-    return window.codeclaw.onEvent((event) => {
+    return window.xuloom.onEvent((event) => {
       if (event.type === "settings_error") {
         setNotice(event.message);
         return;
@@ -138,11 +148,13 @@ export default function App() {
   useEffect(() => {
     if (!active || opening || importing) return;
     const id = active.id, draft = active.draft, draftEditId = active.editingId || "", draftAttachments = active.attachments.map((item) => item.id);
-    const timer = setTimeout(() => window.codeclaw.invoke("session.update", { id, patch: { draft, draftEditId, draftAttachments } }).catch(onError), 500);
+    const timer = setTimeout(() => window.xuloom.invoke("session.update", { id, patch: { draft, draftEditId, draftAttachments } }).catch(onError), 500);
     return () => clearTimeout(timer);
   }, [activeId, active?.draft, active?.editingId, active?.attachments, opening, importing]);
   useEffect(() => {
-    if (activeId) window.codeclaw.invoke("session.activate", { session: activeId }).catch(onError);
+    if (activeId) window.xuloom.invoke("session.activate", { session: activeId }).catch(onError);
+    setGoalDialog(null);
+    if (activeId) window.xuloom.invoke("goal.get", { session: activeId }).then((goal) => update({ goal }, activeId)).catch(onError);
   }, [activeId]);
   useEffect(() => {
     input.current?.focus();
@@ -183,7 +195,7 @@ export default function App() {
     );
   }
   async function invoke(method: string, params: Record<string, unknown> = {}) {
-    return window.codeclaw.invoke(method, { session: activeId, ...params });
+    return window.xuloom.invoke(method, { session: activeId, ...params });
   }
   async function workspaceAction(method: string, params: Record<string, unknown>) {
     const preferenceWrite = method === "catalog.view" ? preferences.current.begin(params as Partial<SessionCatalog["view"]>) : undefined;
@@ -195,9 +207,9 @@ export default function App() {
     if (changesSelection) setOpening(true);
     setNotice("");
     try {
-      if (active && ["project.open", "session.new", "session.open", "session.select", "session.move"].includes(method))
-        await window.codeclaw.invoke("session.update", { id: active.id, patch: { draft: active.draft, draftEditId: active.editingId || "", draftAttachments: active.attachments.map((item) => item.id) } });
-      const result = await window.codeclaw.invoke(method, params);
+      if (active && ["project.open", "session.new", "session.open", "session.select", "session.move", "session.fork"].includes(method))
+        await window.xuloom.invoke("session.update", { id: active.id, patch: { draft: active.draft, draftEditId: active.editingId || "", draftAttachments: active.attachments.map((item) => item.id) } });
+      const result = await window.xuloom.invoke(method, params);
       if (!result) return;
       if (preferenceWrite) setCatalog(preferences.current.finish(preferenceWrite.id, result));
       else if (result.catalog) receiveCatalog(result.catalog);
@@ -212,7 +224,7 @@ export default function App() {
     } catch (error) {
       if (preferenceWrite) {
         setCatalog(preferences.current.fail(preferenceWrite.id));
-        window.codeclaw.invoke("catalog.refresh").then(receiveCatalog).catch(() => {});
+        window.xuloom.invoke("catalog.refresh").then(receiveCatalog).catch(() => {});
       }
       throw error;
     } finally {
@@ -242,8 +254,29 @@ export default function App() {
     update({ editingId: lastUser.id, draftBeforeEdit: active.draft, draft: lastUser.text, attachmentsBeforeEdit: active.attachments, attachments: lastUser.attachments || [] });
     requestAnimationFrame(() => input.current?.focus());
   }
+  async function branchFrom(index: number) {
+    if (!active || active.busy || opening) return;
+    const message = active.messages[index];
+    const user = active.messages.slice(0, index).reverse().find((item) => item.role === "user");
+    await workspaceAction("session.fork", { id: active.id, through: {
+      turn: active.messages.slice(0, index + 1).filter((item) => item.role === "assistant").length,
+      text: message.text, userId: message.trace?.userMessageId || user?.id, traceId: message.trace?.id,
+    } });
+  }
+  function composerAction(name: string) {
+    if (name === "files") fileInput.current?.click();
+    else if (name === "goal" || name === "schedule") {
+      if (active?.attachments.length) { onError("请先发送附件，或移除附件后设置目标与唤醒。"); return; }
+      setGoalDialog(name === "goal" ? "goal" : "all");
+    } else if (name === "plan") {
+      if (active?.goal && !["completed", "cancelled", "budget_exhausted"].includes(active.goal.status)) { onError("请先结束当前目标，再切换计划模式。"); return; }
+      update({ mode: active?.mode === "plan" ? "normal" : "plan" });
+    } else if (name === "skills") { setPanelOpen(true); setPanelTab("skills"); }
+    else if (name === "mcp") setMcpOpen(true);
+    else if (name === "settings") void openSettings();
+  }
   async function send(continuation?: string) {
-    if (opening || importing || modelChanging || permissionChanging || !active || active.busy || (!(continuation || active.draft).trim() && !active.attachments.length)) return;
+    if (opening || importing || modelChanging || permissionChanging || collaborationChanging || !active || active.busy || (!(continuation || active.draft).trim() && !active.attachments.length)) return;
     conversationScroll.followLatest();
     const id = active.id,
       text = (continuation || active.draft).trim() || "请查看这些附件。",
@@ -257,7 +290,7 @@ export default function App() {
       ),
     );
     try {
-      await window.codeclaw.invoke("prompt", {
+      await window.xuloom.invoke("prompt", {
         session: id,
         text,
         skills: selected,
@@ -286,12 +319,12 @@ export default function App() {
       let id = activeId;
       const existing = active?.attachments.map((item) => item.id) || [];
       if (!active) {
-        const value = await window.codeclaw.invoke("session.new", { scope: "standalone" });
+        const value = await window.xuloom.invoke("session.new", { scope: "standalone" });
         if (value.catalog) receiveCatalog(value.catalog);
         setSessions((previous) => [...previous, createSession(value)]);
         id = value.id; setActiveId(id);
       }
-      const items = await window.codeclaw.importFiles(id, files, existing);
+      const items = await window.xuloom.importFiles(id, files, existing);
       setSessions((previous) => previous.map((session) => session.id === id ? { ...session, attachments: items } : session));
     } catch (error) { onError(error); }
     finally { setImporting(false); }
@@ -323,14 +356,24 @@ export default function App() {
     const id = active.id;
     setPermissionChanging(true);
     try {
-      const result = await window.codeclaw.invoke("permissions.set", { session: id, mode });
+      const result = await window.xuloom.invoke("permissions.set", { session: id, mode });
       update({ permissionMode: result.permissionMode }, id);
     } catch (error) { onError(error); }
     finally { setPermissionChanging(false); }
   }
+  async function setCollaborationMode(mode: SessionView["collaborationMode"]) {
+    if (!active || collaborationChanging) return;
+    const id = active.id;
+    setCollaborationChanging(true);
+    try {
+      const result = await window.xuloom.invoke("collaboration.set", { session: id, mode });
+      update({ collaborationMode: result.collaborationMode }, id);
+    } catch (error) { onError(error); }
+    finally { setCollaborationChanging(false); }
+  }
   async function openSettings() {
     try {
-      const [config, workspace] = await Promise.all([window.codeclaw.invoke("config.get"), window.codeclaw.invoke("workspace.get")]);
+      const [config, workspace] = await Promise.all([window.xuloom.invoke("config.get"), window.xuloom.invoke("workspace.get")]);
       setGlobalModel(config);
       setDefaultDirectory(workspace.defaultDirectory);
       setSettingsOpen(true);
@@ -359,13 +402,13 @@ export default function App() {
       {fileDrag && <div className="file-drop-overlay"><Paperclip size={28} /><strong>{active?.busy ? "请先停止当前任务" : "松开以添加附件"}</strong><span>图片、PDF 和本地文件</span></div>}
       <aside className="sidebar">
         <PanelResizer side="left" width={effectiveSidebarWidth} viewport={viewport} panelOpen={panelOpen} change={setSidebarWidth}
-          save={(sidebarWidth) => { void window.codeclaw.invoke("layout.save", { sidebarWidth }).catch(onError); }} />
+          save={(sidebarWidth) => { void window.xuloom.invoke("layout.save", { sidebarWidth }).catch(onError); }} />
         <div className="brand">
           <span className="brand-mark">
-            <Code2 size={23} strokeWidth={2.4} />
+            <Workflow size={21} />
           </span>
           <strong>
-            CodeClaw
+            Xuloom<span>序织</span>
           </strong>
           <span className="preview-badge">预览</span>
         </div>
@@ -427,9 +470,24 @@ export default function App() {
               <span />
               {active?.busy ? "执行中" : "本地"}
             </span>
+            <div className="panel-shortcuts" aria-label="会话工具">
+              {[
+                { id: "files", label: "文件", icon: FolderTree },
+                { id: "activity", label: "活动", icon: Activity },
+                { id: "goals", label: "目标", icon: CircleCheck },
+              ].map(({ id, label, icon: Icon }) => (
+                <button key={id} className="icon-button" title={label} aria-label={"打开" + label + "面板"}
+                  aria-pressed={panelOpen && !filePreview && panelTab === id}
+                  onClick={() => { setFilePreview(undefined); setPanelTab(id); setPanelOpen(true); }}>
+                  <Icon size={17} />
+                </button>
+              ))}
+            </div>
             <button
               className="icon-button"
+              title={panelOpen ? "收起侧栏" : "技能、子代理与会话工具"}
               aria-label={panelOpen ? "收起能力面板" : "展开能力面板"}
+              aria-expanded={panelOpen}
               onClick={() => setPanelOpen(!panelOpen)}
             >
               {panelOpen ? (
@@ -452,7 +510,7 @@ export default function App() {
           {!active || !active.messages.length ? (
             <div className="welcome">
               <div className="welcome-symbol">
-                <Code2 size={32} />
+                <Workflow size={32} />
               </div>
               <div className="eyebrow">YOUR LOCAL AGENT WORKSPACE</div>
               <h1>
@@ -482,7 +540,7 @@ export default function App() {
                   <div className="starter-grid">
                     {[
                       {
-                        icon: Code2,
+                        icon: Workflow,
                         title: active.scope === "standalone" ? "梳理一个任务" : "理解这个项目",
                         text: active.scope === "standalone" ? "明确目标，拆解步骤。" : "了解资料、文件与已有成果。",
                         prompt:
@@ -538,15 +596,26 @@ export default function App() {
               )}
             </div>
           ) : (
-            <div className="transcript">
+            <div className="transcript" onDragStart={(event) => {
+              if ((event.target as Element).closest(".message-text")) event.preventDefault();
+            }} onMouseDown={(event) => {
+              const target = event.target as Element;
+              if (event.button === 0 && event.detail === 1 && !event.shiftKey && !event.ctrlKey && !event.metaKey &&
+                target.closest(".message-text") && !target.closest("button, a, input, textarea")) {
+                // Starting a fresh selection must not turn old selected text into
+                // an HTML drag operation. Double/triple-click and Shift selection remain native.
+                const selected = window.getSelection();
+                if (selected && !selected.isCollapsed) selected.removeAllRanges();
+              }
+            }}>
               {active.messages.map((message, index) => (
-                <article key={index} className={"message " + message.role} aria-label={message.role === "user" ? "你的消息" : "CodeClaw 回复"}>
+                <article key={index} className={"message " + message.role} aria-label={message.role === "user" ? "你的消息" : "Xuloom 回复"}>
                   <div className="message-avatar">
-                    {message.role === "assistant" ? <Code2 size={16} /> : "你"}
+                    {message.role === "assistant" ? <Workflow size={16} /> : "你"}
                   </div>
                   <div className="message-body">
                     <div className="message-author">
-                      {message.role === "assistant" ? "CodeClaw" : "你"}
+                      {message.role === "assistant" ? "Xuloom" : "你"}
                       {message.role === "assistant" &&
                         active.busy &&
                         index === active.streamIndex && (
@@ -557,9 +626,9 @@ export default function App() {
                         )}
                     </div>
                     {message.trace && <TurnProcess trace={message.trace} />}
-                    <div className="markdown">
+                    <div className="markdown message-text">
                       {message.text ? (
-                        <Markdown text={message.text} onOpenFile={openFile} />
+                        message.role === "user" ? <div className="user-prompt-text">{message.text}</div> : <Markdown text={message.text} onOpenFile={openFile} />
                       ) : active.busy && index === active.streamIndex ? (
                         <div className="thinking">
                           <span />
@@ -572,8 +641,12 @@ export default function App() {
                     </div>
                     {!!message.attachments?.length && <Attachments items={message.attachments} open={openAttachment} />}
                     {!!message.trace?.files?.length && <FileChanges files={message.trace.files} project={active.project} onOpen={openFile} />}
-                    {message === lastUser && message.id && <button className="edit-prompt-button" aria-label="编辑上一条提示词" title="编辑上一条提示词（空输入框连按两次 Esc）"
-                      disabled={opening || active.busy || !!runningWorkers || !!runningCommands} onClick={editLastPrompt}><Pencil size={13} /></button>}
+                    {!!message.text && <MessageActions key={active.id + ":" + index} role={message.role} text={message.text} onError={onError}
+                      fork={message.role === "assistant" ? () => branchFrom(index) : undefined}
+                      disabled={opening || active.busy || !!runningWorkers || !!runningCommands}>
+                      {message === lastUser && message.id && <button aria-label="编辑上一条提示词" title="编辑上一条提示词（空输入框连按两次 Esc）"
+                        disabled={opening || active.busy || !!runningWorkers || !!runningCommands} onClick={editLastPrompt}><Pencil size={13} /></button>}
+                    </MessageActions>}
                   </div>
                 </article>
               ))}
@@ -616,7 +689,7 @@ export default function App() {
           )}
           {!!runningCommands && !active?.busy && <button className="worker-strip" onClick={() => invoke("stop").catch(onError)}><Square size={13} />{runningCommands} 个后台命令正在运行 · 停止所有后台任务</button>}
           {paused && !active?.editingId && <div className="paused-actions" role="status"><span>任务已停止，已收到的内容保留。</span>
-            <button disabled={opening || importing || modelChanging || permissionChanging || !!active?.draft.trim() || !!active?.attachments.length} title={active?.draft.trim() || active?.attachments.length ? "请先发送或清空当前草稿" : "保留上下文，继续未完成的任务"} onClick={() => void send("请从刚才停止的位置继续完成上一项任务。先核对已完成的操作与当前文件状态，避免重复执行；按原任务要求完成并汇报结果。")}><Play size={13} />继续执行</button>
+            <button disabled={opening || importing || modelChanging || permissionChanging || collaborationChanging || !!active?.draft.trim() || !!active?.attachments.length} title={active?.draft.trim() || active?.attachments.length ? "请先发送或清空当前草稿" : "保留上下文，继续未完成的任务"} onClick={() => void send("请从刚才停止的位置继续完成上一项任务。先核对已完成的操作与当前文件状态，避免重复执行；按原任务要求完成并汇报结果。")}><Play size={13} />继续执行</button>
             {lastUser?.id && <button disabled={opening || !!runningWorkers || !!runningCommands} onClick={editLastPrompt}><Pencil size={13} />编辑提示词</button>}
           </div>}
           <div className={"composer " + (!active ? "disabled" : "")} onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); void importFiles(Array.from(event.clipboardData.files)); } }}>
@@ -650,23 +723,24 @@ export default function App() {
             <div className="composer-toolbar">
               <div className="composer-options">
                 <input ref={fileInput} type="file" multiple hidden aria-label="选择附件文件" onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; void importFiles(files); }} />
-                <button className="attach-button" type="button" aria-label="添加附件" title="添加文件或图片，也可直接拖入或粘贴图片" disabled={opening || importing || active?.busy} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>
-                <select
-                  aria-label="执行模式"
-                  disabled={opening || !active || active.busy}
-                  value={active?.mode || "normal"}
-                  onChange={(e) => update({ mode: e.target.value })}
-                >
-                  <option value="normal">Agent</option>
-                  <option value="plan">Plan</option>
-                </select>
+                <ComposerMenu sessionId={activeId} disabled={opening || importing || !active || active.busy} plan={active?.mode === "plan"} action={composerAction} />
                 <select className={"permission-picker " + (active?.permissionMode === "full" ? "full-access" : "")} aria-label="访问权限"
                   title={active?.permissionMode === "full" ? "默认自动执行；显式权限规则、Plan 限制和中断恢复确认仍然生效" : "文件修改、命令和需要审批的外部工具会请求批准"}
                   disabled={opening || !active || permissionChanging} value={active?.permissionMode || "ask"}
                   onChange={(event) => void setPermissionMode(event.target.value as PermissionMode)}>
                   <option value="ask">请求批准</option><option value="full">完全访问</option>
                 </select>
-                <span className="toolbar-divider" />
+                {active?.mode === "plan" && <button className="composer-mode-chip" aria-label="退出计划模式" title="计划模式 · 点击退出" onClick={() => update({ mode: "normal" })} disabled={active.busy}><Lightbulb size={14} />计划<X size={11} /></button>}
+                {active?.goal && !["completed", "cancelled", "budget_exhausted"].includes(active.goal.status) && <button className="composer-mode-chip" aria-label="管理当前目标" title={active.goal.objective} onClick={() => setGoalDialog("goal")}><Target size={14} />目标</button>}
+              </div>
+              <div className="send-options">
+                <select className="collaboration-picker" aria-label="协作档位"
+                  title="Solo 独立完成；Auto 按需委派（默认并发 3）；Ultra 积极寻找并行机会（默认并发 8）。与模型思考强度及权限独立，上限不是必须启动的数量。"
+                  disabled={opening || !active || collaborationChanging || active.busy || !!runningWorkers || !!runningCommands}
+                  value={active?.collaborationMode || "auto"}
+                  onChange={(event) => void setCollaborationMode(event.target.value as SessionView["collaborationMode"])}>
+                  <option value="solo">Solo · 独立</option><option value="auto">Auto · 自动</option><option value="ultra">Ultra · 增强</option>
+                </select>
                 {globalModel?.connections?.some((connection) => connection.models.length) ? <select
                   className="model-picker" aria-label="选择模型" title="切换 API 与模型"
                   disabled={opening || modelChanging || active?.busy || !!runningWorkers || !!runningCommands}
@@ -677,9 +751,6 @@ export default function App() {
                       {connection.models.map((model) => <option key={model} value={JSON.stringify([connection.connectionId, model])}>{model}</option>)}
                     </optgroup>)}
                 </select> : <button className="model-button" onClick={openSettings}>连接模型<ChevronRight size={12} /></button>}
-                <button className="icon-button" aria-label="管理 API 与模型" title="管理 API 与模型" onClick={openSettings}><Settings2 size={13} /></button>
-              </div>
-              <div className="send-options">
                 {active?.loaded.length ? (
                   <span
                     className="loaded-indicator"
@@ -701,7 +772,7 @@ export default function App() {
                   <button
                     className="send-button"
                     aria-label="发送任务"
-                    disabled={opening || importing || modelChanging || permissionChanging || (!active?.draft.trim() && !active?.attachments.length)}
+                    disabled={opening || importing || modelChanging || permissionChanging || collaborationChanging || (!active?.draft.trim() && !active?.attachments.length)}
                     onClick={() => void send()}
                   >
                     <ArrowUp size={19} />
@@ -716,11 +787,11 @@ export default function App() {
               {active?.permissionMode === "full" ? "完全访问：默认自动执行，遵守显式权限规则" : "请求批准：需要审批的工具会先确认"}
             </span>
             <span>
-              {enabledSkills.length} Skills 可用 ·{" "}
+              <span className="capability-count">{enabledSkills.length} Skills 可用 ·{" "}
               {active?.capabilities.agents.filter(
                 (agent) => agent.valid && !agent.shadowed,
               ).length || 0}{" "}
-              代理角色
+              代理角色</span>
               <span className="shortcut-hint">
                 Enter 发送 · Shift Enter 换行
               </span>
@@ -728,10 +799,25 @@ export default function App() {
           </div>
         </div>
       </main>
+      {goalDialog && active && <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setGoalDialog(null); }}>
+        <section className="dialog composer-goal-dialog" role="dialog" aria-modal="true" aria-label={goalDialog === "goal" ? "目标模式设置" : "目标与定时唤醒"}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") { event.stopPropagation(); setGoalDialog(null); }
+            if (event.key === "Tab") {
+              const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)')];
+              if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1)?.focus(); }
+              else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0]?.focus(); }
+            }
+          }}>
+          <header><strong>{goalDialog === "goal" ? "设置目标模式" : "目标与定时唤醒"}</strong><button aria-label="关闭目标设置" onClick={() => setGoalDialog(null)} autoFocus><X size={17} /></button></header>
+          <GoalPanel key={activeId + goalDialog} compact={goalDialog === "goal"} initialObjective={active.draft} skills={active.selected}
+            busy={active.busy} invoke={invoke} onError={onError} onCreated={() => update({ mode: "normal" })} onStarted={() => setGoalDialog(null)} />
+        </section>
+      </div>}
       {panelOpen && (
         <div className="inspector-shell">
         <PanelResizer width={clampPanelWidth(panelWidth, viewport, effectiveSidebarWidth)} viewport={viewport} sidebarWidth={effectiveSidebarWidth} change={setPanelWidth}
-          save={(inspectorWidth) => { void window.codeclaw.invoke("layout.save", { inspectorWidth }).catch(onError); }} />
+          save={(inspectorWidth) => { void window.xuloom.invoke("layout.save", { inspectorWidth }).catch(onError); }} />
         {filePreview && active ? <FilePreview sessionId={activeId} project={active.project}
           version={active.fileChanges?.find((file) => file.path === (filePreview.change?.path || filePreview.path) || relativeFile(file.path, active.project) === filePreview.path)?.updatedAt}
           {...filePreview} changes={active.fileChanges || []} close={() => setFilePreview(undefined)} onOpen={openFile} /> : <CapabilityPanel
@@ -754,9 +840,9 @@ export default function App() {
           catalog={catalog}
           workspaceAction={workspaceAction}
           defaultDirectory={defaultDirectory}
-          chooseDirectory={() => window.codeclaw.invoke("workspace.choose")}
+          chooseDirectory={() => window.xuloom.invoke("workspace.choose")}
           saveDirectory={async (directory) => {
-            const value = await window.codeclaw.invoke("workspace.save", { defaultDirectory: directory });
+            const value = await window.xuloom.invoke("workspace.save", { defaultDirectory: directory });
             setDefaultDirectory(value.defaultDirectory);
             return value.defaultDirectory;
           }}
@@ -768,7 +854,7 @@ export default function App() {
             setSessions((previous) => previous.map((session) => ({ ...session, config })));
             return config;
           }}
-          discoverModels={(value) => window.codeclaw.invoke("config.models", value)}
+          discoverModels={(value) => window.xuloom.invoke("config.models", value)}
         />
       )}
       {attachmentPreview && <AttachmentPreview image={attachmentPreview} close={() => setAttachmentPreview(undefined)} />}

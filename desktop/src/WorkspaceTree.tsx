@@ -12,7 +12,7 @@ function Directory({ sessionId, path, depth, revision, selected, changes, onOpen
   const [expanded, setExpanded] = useState<Set<string>>(new Set()), [truncated, setTruncated] = useState(false);
   useEffect(() => {
     let cancelled = false; setLoading(true); setError("");
-    window.codeclaw.invoke("files.list", { session: sessionId, path }).then((value) => {
+    window.xuloom.invoke("files.list", { session: sessionId, path }).then((value) => {
       if (!cancelled) { setEntries(value.entries); setTruncated(value.truncated); }
     }).catch((reason) => { if (!cancelled) setError(String(reason)); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };

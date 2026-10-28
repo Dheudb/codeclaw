@@ -6,7 +6,7 @@ const path = require("node:path");
 const { resolveEnginePython } = require("../electron/runtime.cjs");
 
 test("portable app uses its runtime and ignores developer/system overrides", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-runtime-test-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-runtime-test-"));
   try {
     const executable = path.join(root, "python/python.exe");
     fs.mkdirSync(path.dirname(executable), { recursive: true });
@@ -16,7 +16,7 @@ test("portable app uses its runtime and ignores developer/system overrides", () 
         packaged: true,
         resourcesPath: root,
         projectRoot: "missing",
-        env: { CODECLAW_PYTHON: "missing-system-python" },
+        env: { XULOOM_PYTHON: "missing-system-python" },
       }),
       executable,
     );
@@ -30,8 +30,8 @@ test("missing portable runtime reports a damaged package without a system fallba
     () =>
       resolveEnginePython({
         packaged: true,
-        resourcesPath: path.join(os.tmpdir(), "codeclaw-missing-runtime"),
-        env: { CODECLAW_PYTHON: "python" },
+        resourcesPath: path.join(os.tmpdir(), "xuloom-missing-runtime"),
+        env: { XULOOM_PYTHON: "python" },
       }),
     /内置运行时缺失/,
   );
@@ -42,7 +42,7 @@ test("source development retains an explicit interpreter override", () => {
     resolveEnginePython({
       packaged: false,
       projectRoot: "/unused",
-      env: { CODECLAW_PYTHON: "developer-python" },
+      env: { XULOOM_PYTHON: "developer-python" },
     }),
     "developer-python",
   );

@@ -4,6 +4,7 @@ export function createSession(initial: InitialSession): SessionView {
   return {
     ...initial,
     permissionMode: initial.permissionMode || "ask",
+    collaborationMode: initial.collaborationMode || "auto",
     busy: false,
     error: "",
     messages: initial.history,
@@ -45,6 +46,9 @@ export function applyEvent(
 ): SessionView {
   if (event.session !== session.id) return session;
   switch (event.type) {
+    case "goal_changed":
+    case "goal_final":
+      return { ...session, goal: event.goal };
     case "managed_turn_started":
       return beginTurn({ ...session, attachments: [] }, event.text);
     case "turn_restarted":
@@ -55,6 +59,8 @@ export function applyEvent(
       return { ...session, fileChanges: [event.change, ...(session.fileChanges || []).filter((file) => file.path !== event.change.path)].slice(0, 100) };
     case "permission_mode_changed":
       return ["ask", "full"].includes(event.permissionMode) ? { ...session, permissionMode: event.permissionMode } : session;
+    case "collaboration_mode_changed":
+      return ["solo", "auto", "ultra"].includes(event.collaborationMode) ? { ...session, collaborationMode: event.collaborationMode } : session;
     case "session_started":
       return {
         ...session,

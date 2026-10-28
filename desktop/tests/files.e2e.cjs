@@ -3,7 +3,7 @@ const fs = require("node:fs"), path = require("node:path"), os = require("node:o
 const { atomicJSON, sessionKey } = require("../electron/catalog.cjs");
 const { execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-files-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-files-e2e-"));
 const project = path.join(fixture, "project"), other = path.join(fixture, "other"), data = path.join(fixture, "profile"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const directory of [project, other, data, config, home]) fs.mkdirSync(directory);
 fs.writeFileSync(path.join(project, "legacy.md"), "legacy one\nlegacy two\n");
@@ -11,19 +11,19 @@ fs.writeFileSync(path.join(fixture, "outside.md"), "must not expose");
 fs.mkdirSync(path.join(project, "nested")); fs.writeFileSync(path.join(project, "nested/tree.md"), "# Tree\nTREE_FILE_PROOF\n");
 const git = (...args) => execFileSync("git", args, { cwd: other, windowsHide: true });
 git("init", "-q");
-git("config", "core.autocrlf", "false"); fs.writeFileSync(path.join(other, ".gitignore"), ".codeclaw/\n");
+git("config", "core.autocrlf", "false"); fs.writeFileSync(path.join(other, ".gitignore"), ".xuloom/\n");
 fs.writeFileSync(path.join(other, "tracked.txt"), "old\nkeep\n"); fs.writeFileSync(path.join(other, "deleted.txt"), "deleted proof\n");
 git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "baseline");
 fs.writeFileSync(path.join(other, "tracked.txt"), "new\nkeep\nextra\n"); fs.unlinkSync(path.join(other, "deleted.txt"));
 fs.writeFileSync(path.join(other, "untracked.md"), "# New\nUNTRACKED_PROOF\n");
-atomicJSON(path.join(project, ".codeclaw/sessions/legacy.json"), { messages: [
+atomicJSON(path.join(project, ".xuloom/sessions/legacy.json"), { messages: [
   { role: "user", content: "写一个旧文件" },
   { role: "assistant", content: [{ type: "tool_use", id: "old-write", name: "file_write_tool", input: { file_path: "legacy.md", content: "legacy one\nlegacy two\n" } }] },
   { role: "user", content: [{ type: "tool_result", tool_use_id: "old-write", content: "Successfully created file legacy.md. Metadata: operation: create" }] },
   { role: "assistant", content: "旧文件已写入：`legacy.md`。" },
 ], metadata: {} });
 atomicJSON(path.join(data, "workbench.json"), { projects: [project, other], defaultDirectory: project, workspace: [{ project, resumeId: "legacy", active: true }] });
-const worker = path.join(project, ".codeclaw/agents/file-writer.md"); fs.mkdirSync(path.dirname(worker), { recursive: true });
+const worker = path.join(project, ".xuloom/agents/file-writer.md"); fs.mkdirSync(path.dirname(worker), { recursive: true });
 fs.writeFileSync(worker, "---\nname: file-writer\ndescription: Write a file for UI testing\ntools: Write\n---\nFILE_CHILD_ROLE");
 let app, page;
 const errors = [];
@@ -63,9 +63,9 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, CODECLAW_SKILLS_PATHS: "" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1", USERPROFILE: home, HOME: home, XULOOM_SKILLS_PATHS: "" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(45000); page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }
@@ -135,7 +135,7 @@ async function main() {
     await page.getByLabel("访问权限", { exact: true }).selectOption("ask"); await page.waitForFunction(() => !document.querySelector(".permission-picker").disabled);
     await send("FILE_DENY"); await page.getByRole("button", { name: "拒绝", exact: true }).click(); await finished("FILE_DENY");
     assert(!fs.existsSync(path.join(project, "denied.md"))); assert.equal(await page.locator(".conversation .file-changes").count(), 3);
-    const denied = await page.evaluate(async (id) => { try { await window.codeclaw.invoke("files.read", { session: id, path: "../outside.md" }); return false; } catch { return true; } }, id); assert(denied);
+    const denied = await page.evaluate(async (id) => { try { await window.xuloom.invoke("files.read", { session: id, path: "../outside.md" }); return false; } catch { return true; } }, id); assert(denied);
     await app.close(); await launch();
     assert.equal(await page.locator(".conversation .file-changes").count(), 3);
     await page.locator(".message-body > .markdown .inline-file-link").filter({ hasText: "note.md" }).first().click(); await dialog().getByText("DISK_REFRESH_PROOF", { exact: true }).waitFor(); await page.keyboard.press("Escape");

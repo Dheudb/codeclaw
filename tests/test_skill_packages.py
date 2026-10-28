@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from codeclaw.agents.registry import AgentRegistry
-from codeclaw.protocols.mcp_config import MCPConfigStore
-from codeclaw.skills.registry import SkillRegistry
+from xuloom.agents.registry import AgentRegistry
+from xuloom.protocols.mcp_config import MCPConfigStore
+from xuloom.skills.registry import SkillRegistry
 
 
 class SkillPackageTests(unittest.TestCase):
@@ -21,10 +21,10 @@ class SkillPackageTests(unittest.TestCase):
         self.home = self.root / 'home'
         self.project.mkdir()
         self.home.mkdir()
-        self.environment = patch.dict(os.environ, {'USERPROFILE': str(self.home), 'HOME': str(self.home), 'CODECLAW_SKILLS_PATHS': ''})
+        self.environment = patch.dict(os.environ, {'USERPROFILE': str(self.home), 'HOME': str(self.home), 'XULOOM_SKILLS_PATHS': ''})
         self.environment.start()
         self.addCleanup(self.environment.stop)
-        self.skill = self.home / '.codeclaw/skills/fixture-package'
+        self.skill = self.home / '.xuloom/skills/fixture-package'
         (self.skill / 'agents').mkdir(parents=True)
         (self.skill / 'SKILL.md').write_text('---\nname: fixture-package\ndescription: Fixture package only\n---\nInspect fixture resources.', encoding='utf-8')
         (self.skill / 'agents/fixture-worker.md').write_text('---\nname: fixture-worker\ndescription: Fixture role\nmodel: inherit\ntools: [Read, Exec]\nweb_search: disabled\nmcp_servers: []\n---\nWork on the assigned fixture.', encoding='utf-8')

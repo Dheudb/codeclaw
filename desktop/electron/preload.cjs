@@ -1,5 +1,5 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
-contextBridge.exposeInMainWorld("codeclaw", {
+contextBridge.exposeInMainWorld("xuloom", {
   flushDrafts: (drafts) => ipcRenderer.sendSync("workbench:drafts", drafts),
   importFiles: async (session, files, existing) => {
     if (!Array.isArray(files) || files.length > 10) throw new Error("每条消息最多添加 10 个附件");

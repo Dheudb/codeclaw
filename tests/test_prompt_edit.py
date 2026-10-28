@@ -6,14 +6,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from codeclaw.context.context import ContextBuilder
-from codeclaw.core.engine import QueryEngine
-from codeclaw.desktop.prompt_edit import replace_latest_turn
+from xuloom.context.context import ContextBuilder
+from xuloom.core.engine import QueryEngine
+from xuloom.desktop.prompt_edit import replace_latest_turn
 
 
 class PromptEditTests(unittest.TestCase):
     def test_edit_targets_latest_human_turn_and_preserves_files_and_recovery_copy(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"CODECLAW_DATA_DIR": directory}):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XULOOM_DATA_DIR": directory}):
             file = Path(directory) / "work.md"
             file.write_text("already written", encoding="utf-8")
             messages = [{"role": "user", "_uuid": "u1", "content": "earlier"},
@@ -47,7 +47,7 @@ class PromptEditTests(unittest.TestCase):
                         self.assertNotIn(model, prompt)
                     self.assertNotIn("Configured request model ID:", prompt)
                     self.assertNotIn("Assistant knowledge cutoff is", prompt)
-                    self.assertIn("introduce yourself as CodeClaw", prompt)
+                    self.assertIn("introduce yourself as Xuloom", prompt)
                     self.assertIn("does not disclose its backend model configuration", prompt)
                     self.assertIn("Do not inspect configuration files", prompt)
         self.assertNotIn("Claude", prompt)

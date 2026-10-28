@@ -6,7 +6,7 @@ const path = require("node:path");
 const { SessionCatalog, sessionKey, projectKey, atomicJSON } = require("../electron/catalog.cjs");
 const { moveSession } = require("../electron/session-move.cjs");
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-catalog-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-catalog-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, "项目 with spaces"); fs.mkdirSync(project);
   let settings = { projects: [] };
@@ -193,9 +193,9 @@ test("a real Windows attachment lock leaves the conversation retryable until rel
   const artifacts = path.join(catalog.artifacts(project), row.sessionId);
   fs.mkdirSync(artifacts, { recursive: true });
   const attachment = path.join(artifacts, "locked.html"); fs.writeFileSync(attachment, "owned attachment");
-  const script = '$locked=[IO.File]::Open($env:CODECLAW_LOCK_FIXTURE,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read); [Console]::Out.WriteLine("LOCKED"); [Console]::Out.Flush(); [Console]::In.ReadLine() | Out-Null; $locked.Dispose()';
+  const script = '$locked=[IO.File]::Open($env:XULOOM_LOCK_FIXTURE,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read); [Console]::Out.WriteLine("LOCKED"); [Console]::Out.Flush(); [Console]::In.ReadLine() | Out-Null; $locked.Dispose()';
   const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, CODECLAW_LOCK_FIXTURE: attachment },
+    windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, XULOOM_LOCK_FIXTURE: attachment },
   });
   const exited = new Promise((resolve) => child.once("exit", resolve));
   t.after(async () => { child.stdin.end(); await exited; });

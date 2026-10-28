@@ -20,7 +20,7 @@ OAuth 登录和旧版 SSE 暂未实现；可以手动填写服务支持的请求
 
 ## 配置格式
 
-项目根目录 `mcp_servers.json` 与 CLI 共用：
+项目 `.xuloom/mcp_servers.json` 与 CLI 共用：
 
 ```json
 {

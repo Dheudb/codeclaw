@@ -3,8 +3,8 @@ import asyncio
 import os
 from pathlib import Path
 import sys
-from codeclaw.core import session_mutation as actor
-from codeclaw.desktop.bridge import serve
+from xuloom.core import session_mutation as actor
+from xuloom.desktop.bridge import serve
 
 target = Path(sys.argv[1])
 original = actor.atomic_bytes

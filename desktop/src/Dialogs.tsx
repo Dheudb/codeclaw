@@ -226,7 +226,7 @@ export function SettingsDialog({
             </select>
           </label>
           <p className="fine-print">
-            沿用 CodeClaw 本机配置；密钥不会返回聊天界面。
+            沿用 Xuloom 本机配置；密钥不会返回聊天界面。
           </p>
         {error && tab === "model" && <p role="alert" className="error">{error}</p>}
         <footer>

@@ -2,7 +2,7 @@ const { _electron: electron } = require('playwright');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const http = require('node:http'), assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'codeclaw-scroll-layout-'));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'xuloom-scroll-layout-'));
 const data = path.join(fixture, 'data'), config = path.join(fixture, 'config');
 for (const directory of [data, config]) fs.mkdirSync(directory);
 fs.writeFileSync(path.join(data, 'workbench.json'), JSON.stringify({ projects: [], activeConversation: null }));
@@ -24,13 +24,14 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, CODECLAW_DATA_DIR: data, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config,
-    CODECLAW_TEST_HEADLESS: '1', USERPROFILE: path.join(fixture, 'home'), HOME: path.join(fixture, 'home'), CODECLAW_SKILLS_PATHS: '' };
-  for (const name of ['ELECTRON_RUN_AS_NODE', 'CODECLAW_DEV_URL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_MODEL', 'CODECLAW_MODEL_PROVIDER']) delete env[name];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 90000 });
+  const env = { ...process.env, XULOOM_DATA_DIR: data, XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config,
+    XULOOM_TEST_HEADLESS: '1', USERPROFILE: path.join(fixture, 'home'), HOME: path.join(fixture, 'home'), XULOOM_SKILLS_PATHS: '' };
+  for (const name of ['ELECTRON_RUN_AS_NODE', 'XULOOM_DEV_URL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_MODEL', 'XULOOM_MODEL_PROVIDER']) delete env[name];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 90000 });
   page = await app.firstWindow(); page.setDefaultTimeout(90000);
   page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector('.new-task')?.disabled === false);
+  await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 1000));
 }
 const metrics = () => page.locator('.conversation').evaluate(element => ({ top: element.scrollTop, height: element.clientHeight, total: element.scrollHeight }));

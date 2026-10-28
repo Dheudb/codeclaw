@@ -1,9 +1,9 @@
 {
-  "name": "codeclaw-desktop",
-  "version": "0.1.0-beta.9",
+  "name": "xuloom-desktop",
+  "version": "0.1.0-beta.10",
   "private": true,
   "type": "module",
-  "description": "CodeClaw desktop workbench",
+  "description": "Xuloom desktop workbench",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.cjs",
@@ -17,6 +17,9 @@
     "test:preferences": "node tests/preferences.e2e.cjs",
     "test:shutdown": "node tests/shutdown.e2e.cjs",
     "test:goals": "node tests/goals.e2e.cjs",
+    "test:collaboration": "node tests/collaboration.e2e.cjs",
+    "test:message-actions": "node tests/message-actions.e2e.cjs",
+    "test:composer": "node tests/composer.e2e.cjs",
     "test:workspace": "node tests/workspace.e2e.cjs",
     "test:storage": "node tests/storage.e2e.cjs",
     "test:archives": "node tests/archives.e2e.cjs",

@@ -7,14 +7,14 @@ const http = require("node:http");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-desktop-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-desktop-e2e-"));
 const project = path.join(fixture, "sample-project");
 const secondProject = path.join(fixture, "another-project");
 const data = path.join(fixture, "app-data");
 const config = path.join(fixture, "config");
 for (const directory of [project, secondProject, data, config])
   fs.mkdirSync(directory, { recursive: true });
-const skill = path.join(project, ".codeclaw/skills/project-review");
+const skill = path.join(project, ".xuloom/skills/project-review");
 fs.mkdirSync(path.join(skill, "references"), { recursive: true });
 fs.writeFileSync(
   path.join(skill, "SKILL.md"),
@@ -24,7 +24,7 @@ fs.writeFileSync(
   path.join(skill, "references/checklist.md"),
   "Verify project boundaries and tests.",
 );
-const agentDir = path.join(project, ".codeclaw/agents");
+const agentDir = path.join(project, ".xuloom/agents");
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(
   path.join(agentDir, "reviewer.md"),
@@ -50,7 +50,7 @@ fs.writeFileSync(
   path.join(data, "workbench.json"),
   JSON.stringify({
     projects: [project, secondProject],
-    python: process.env.CODECLAW_PYTHON || "python",
+    python: process.env.XULOOM_PYTHON || "python",
   }),
 );
 const received = [];
@@ -210,10 +210,10 @@ async function main() {
   const env = {
     ...process.env,
     USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"),
-    CODECLAW_TEST_HEADLESS: "1",
-    CODECLAW_USER_DATA: data,
-    CODECLAW_CONFIG_DIR: config,
-    CODECLAW_MODEL_PROVIDER: "openai",
+    XULOOM_TEST_HEADLESS: "1",
+    XULOOM_USER_DATA: data,
+    XULOOM_CONFIG_DIR: config,
+    XULOOM_MODEL_PROVIDER: "openai",
     OPENAI_API_KEY: "local-test-key",
     OPENAI_BASE_URL: baseUrl,
     OPENAI_MODEL: "desktop-test",
@@ -223,10 +223,10 @@ async function main() {
     NO_PROXY: "",
   };
   delete env.ELECTRON_RUN_AS_NODE;
-  delete env.CODECLAW_DEV_URL;
+  delete env.XULOOM_DEV_URL;
   const launchOptions = {
-    executablePath: process.env.CODECLAW_TEST_EXECUTABLE,
-    args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root],
+    executablePath: process.env.XULOOM_TEST_EXECUTABLE,
+    args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root],
     env,
     timeout: 30000,
   };
@@ -242,7 +242,7 @@ async function main() {
     );
   });
   await page.evaluate(() =>
-    window.codeclaw.onEvent((event) => window.recordWorkbenchEvent(event)),
+    window.xuloom.onEvent((event) => window.recordWorkbenchEvent(event)),
   );
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -315,6 +315,7 @@ async function main() {
       .click();
     await page.getByRole("heading", { name: "今天想完成什么？" }).waitFor();
     await page.getByText("project-review", { exact: true }).waitFor();
+    if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
     await page.locator(".capability-card").filter({ has: page.getByText("project-review", { exact: true }) }).getByRole("button", { name: "查看指令", exact: true }).click();
     await page
       .getByRole("dialog", { name: "技能指令" })
@@ -378,7 +379,7 @@ async function main() {
         if (handledApprovals.has(approval.requestId)) continue;
         await page.evaluate(
           ({ session, requestId }) =>
-            window.codeclaw.invoke("respond", {
+            window.xuloom.invoke("respond", {
               session,
               requestId,
               answer: "allow",
@@ -395,6 +396,7 @@ async function main() {
       if (done && received.filter(isChildRequest).length >= 2) break;
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
+    if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
     await page.getByRole("button", { name: "代理", exact: true }).click();
     await page.locator(".inspector").getByText("已完成", { exact: true }).first().waitFor();
     assert.equal(
@@ -410,6 +412,7 @@ async function main() {
           !body.tools.some((tool) => tool.function.name === "file_write_tool"),
       ),
     );
+    if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
     await page.getByRole("button", { name: "Skills", exact: true }).click();
     await screenshot("workbench.png");
     // A second project owns a distinct Python process and capability catalog.
@@ -440,7 +443,7 @@ async function main() {
     await page.locator(".session-item.active").filter({ hasText: "验收技能：请分析这个项目。" }).waitFor();
     const originalId = await page.locator(".session-item.active").getAttribute("data-session-id");
     const rowsBefore = await page.locator(".session-item").count();
-    await page.evaluate((session) => window.codeclaw.invoke("session.close", { session }), originalId);
+    await page.evaluate((session) => window.xuloom.invoke("session.close", { session }), originalId);
     await page.locator(".session-select").filter({ hasText: "验收技能：请分析这个项目。" }).click();
     await page.locator(".session-item.active").filter({ hasText: "验收技能：请分析这个项目。" }).waitFor();
     assert.equal(await page.locator(".session-item").count(), rowsBefore);

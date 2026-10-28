@@ -1,10 +1,10 @@
-# CodeClaw
+# Xuloom
 
 本地通用 Agent 框架：**桌面 App + CLI，共用 Python 智能体引擎**。
 
 [English](README.en.md) · [使用文档](docs/README.md) · [开发说明](docs/development.md)
 
-CodeClaw 提供普通对话、文件与命令工具、Skills、自定义子代理和 MCP 服务；领域工作流程通过扩展加载。
+Xuloom 提供普通对话、文件与命令工具、Skills、自定义子代理和 MCP 服务；领域工作流程通过扩展加载。
 桌面端采用 Electron + React，CLI 可以单独使用。当前桌面版处于预览阶段。
 
 ## 从哪里开始
@@ -12,7 +12,7 @@ CodeClaw 提供普通对话、文件与命令工具、Skills、自定义子代�
 | 我想做什么 | 入口 |
 |---|---|
 | 直接使用桌面程序 | [桌面使用说明](docs/desktop.md) |
-| 在终端使用 CodeClaw | [CLI 使用说明](docs/cli.md) |
+| 在终端使用 Xuloom | [CLI 使用说明](docs/cli.md) |
 | 目标续跑、非交互批量执行与定时唤醒 | [目标与调度](docs/goals-and-schedules.md) |
 | 接入模型或本地推理服务 | [模型配置与兼容范围](docs/models.md) |
 | 添加 Skills 或子代理 | [Skills 与子代理](docs/capabilities.md) |
@@ -23,9 +23,9 @@ CodeClaw 提供普通对话、文件与命令工具、Skills、自定义子代�
 
 ## 桌面版
 
-[**下载 Windows x64 便携版**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.9) · [所有版本](https://github.com/Dheudb/codeclaw/releases)
+[**下载 Windows x64 便携版**](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.10) · [所有版本](https://github.com/Dheudb/xuloom/releases)
 
-在 Release 的 Assets 中下载 `CodeClaw-v0.1.0-beta.9-windows-x64.zip`，完整解压后运行 `CodeClaw.exe`。
+在 Release 的 Assets 中下载 `Xuloom-v0.1.0-beta.10-windows-x64.zip`，完整解压后运行 `Xuloom.exe`。
 请下载成品 ZIP；GitHub 自动提供的 Source code 是源码。程序依赖同目录的 `resources`，不能只复制 EXE。
 Windows 便携包内置 Python 运行时和 MCP 依赖。
 **使用便携包不需要安装 Python、Node.js，也不需要选择解释器。**
@@ -43,8 +43,8 @@ Windows 便携包内置 Python 运行时和 MCP 依赖。
 MCP 需要 Python 3.10+。`rg` 用于本地代码搜索，需要在 PATH 中。
 
 ```powershell
-git clone https://github.com/Dheudb/codeclaw.git
-cd codeclaw
+git clone https://github.com/Dheudb/xuloom.git xuloom
+cd xuloom
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[mcp]"
 cd desktop
@@ -52,14 +52,14 @@ npm ci
 npm run dev
 ```
 
-源码桌面端自动寻找仓库中的 `.venv`；开发者也可以用 `CODECLAW_PYTHON` 指定运行环境。
+源码桌面端自动寻找仓库中的 `.venv`；开发者也可以用 `XULOOM_PYTHON` 指定运行环境。
 这只影响源码开发，正式便携包始终使用随应用附带的运行时。
 
 CLI 可以直接使用同一虚拟环境：
 
 ```powershell
 # 仓库根目录安装后，进入你要处理的项目目录
-C:\path\to\codeclaw\.venv\Scripts\codeclaw.exe
+C:\path\to\xuloom\.venv\Scripts\xuloom.exe
 ```
 
 ## 当前能力与边界
@@ -84,7 +84,7 @@ C:\path\to\codeclaw\.venv\Scripts\codeclaw.exe
 ## 项目目录
 
 ```text
-codeclaw/       Python 引擎、CLI、桌面桥接、Skills、代理和 MCP
+xuloom/       Python 引擎、CLI、桌面桥接、Skills、代理和 MCP
 desktop/        Electron 主进程、React 界面、构建脚本和界面测试
 tests/          Python 测试及本地 MCP 协议测试服务
 examples/       可导入的 Skills 和自定义代理示例
@@ -94,8 +94,8 @@ setup.py        Python 依赖与 CLI 入口的统一定义
 ```
 
 会话、密钥、虚拟环境、依赖目录和构建产物不进入 Git。
-模型配置在 `~/.codeclaw/config.json`，会话集中存储在当前用户数据目录的 `CodeClaw/history/`（Linux 为 `codeclaw/history/`），
-MCP 配置在项目根目录 `mcp_servers.json`。
+模型配置在 `~/.xuloom/config.json`，会话集中存储在当前用户数据目录的 `Xuloom/history/`（Linux 为 `xuloom/history/`），
+MCP 配置在项目 `.xuloom/mcp_servers.json`。
 
 ## 开发验证
 

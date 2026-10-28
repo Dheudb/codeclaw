@@ -6,9 +6,9 @@ function mutateSync(catalog, spec) {
   const projectRoot = path.resolve(__dirname, "../.."), resourcesPath = process.resourcesPath;
   const packaged = !!process.versions.electron && !process.defaultApp;
   const python = resolveEnginePython({ packaged, resourcesPath, projectRoot });
-  const args = [...(packaged ? ["-I"] : []), "-m", "codeclaw.core.session_mutation"];
+  const args = [...(packaged ? ["-I"] : []), "-m", "xuloom.core.session_mutation"];
   const options = { windowsHide: true, cwd: projectRoot, input: JSON.stringify(spec), encoding: "utf8",
-    stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, CODECLAW_DATA_DIR: catalog.dataRoot,
+    stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, XULOOM_DATA_DIR: catalog.dataRoot,
       PYTHONIOENCODING: "utf-8", PYTHONPATH: projectRoot } };
   let output;
   try { output = execFileSync(python, args, options); }

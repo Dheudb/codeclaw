@@ -10,12 +10,12 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from pydantic import BaseModel, field_validator
-from codeclaw.core.engine import QueryEngine
-from codeclaw.desktop.turns import TurnRecorder, conversation_history
-from codeclaw.memory.memory import MemoryCompactor
-from codeclaw.protocols.dsml import ToolProtocolError, parse_tool_arguments
-from codeclaw.tools.base import BaseAgenticTool
-from codeclaw.tools.todo_tool import TodoWriteTool
+from xuloom.core.engine import QueryEngine
+from xuloom.desktop.turns import TurnRecorder, conversation_history
+from xuloom.memory.memory import MemoryCompactor
+from xuloom.protocols.dsml import ToolProtocolError, parse_tool_arguments
+from xuloom.tools.base import BaseAgenticTool
+from xuloom.tools.todo_tool import TodoWriteTool
 
 
 class RecordInput(BaseModel):
@@ -53,9 +53,9 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.env = patch.dict(os.environ, {"CODECLAW_DATA_DIR": str(self.root / "data"),
+        self.env = patch.dict(os.environ, {"XULOOM_DATA_DIR": str(self.root / "data"),
             "USERPROFILE": str(self.root / "home"), "HOME": str(self.root / "home"),
-            "OPENAI_API_KEY": "fixture", "CODECLAW_MODEL_PROVIDER": "openai"})
+            "OPENAI_API_KEY": "fixture", "XULOOM_MODEL_PROVIDER": "openai"})
         self.env.start()
         self.tokens = patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None)
         self.tokens.start()
@@ -163,7 +163,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.requests), 1)
 
     async def test_long_skill_instructions_are_not_replaced_by_a_preview(self):
-        root = self.root / '.codeclaw/skills/fixture'
+        root = self.root / '.xuloom/skills/fixture'
         root.mkdir(parents=True)
         root.joinpath('SKILL.md').write_text('---\nname: fixture\ndescription: Fixture.\n---\n' + 'instruction\n' * 1000 + 'END_OF_SKILL', encoding='utf-8')
         result = await self.engine._execute_tool_wrapper({"id": "skill", "name": "skill_tool", "input": {"action": "read", "skill_name": "fixture"}}, lambda _: None)
@@ -172,9 +172,9 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     def workflow_skill(self):
         self.engine.permission_manager.always_allow_tools.add('command_tool')
-        root = self.root / '.codeclaw/skills/fixture-workflow'
+        root = self.root / '.xuloom/skills/fixture-workflow'
         root.mkdir(parents=True)
-        root.joinpath('SKILL.md').write_text('---\nname: fixture-workflow\ndescription: Fixture.\nmetadata:\n  codeclaw:\n    completion-protocol: workflow-json-v1\n---\nFollow the runtime.', encoding='utf-8')
+        root.joinpath('SKILL.md').write_text('---\nname: fixture-workflow\ndescription: Fixture.\nmetadata:\n  xuloom:\n    completion-protocol: workflow-json-v1\n---\nFollow the runtime.', encoding='utf-8')
 
     def workflow_command(self, finished):
         payload = {'run_handle': 'fixture:one', 'workflow_finished': finished, 'required_main_action': {'action': 'read-cards'}}
@@ -260,7 +260,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                     closed.set()
             return stream()
         self.engine.client.chat.completions.create = create
-        with patch('codeclaw.protocols.stream_watch.stream_limits', return_value=(1, .1, .05)):
+        with patch('xuloom.protocols.stream_watch.stream_limits', return_value=(1, .1, .05)):
             self.assertEqual(await self.run_task(), 'EARLY_TEXT')
         self.assertTrue(closed.is_set())
         self.assertEqual(self.engine.session_token_usage['input_tokens'], 12)
@@ -279,7 +279,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             return stream()
         self.engine.client.chat.completions.create = create
         self.engine.fallback_model = 'different-fallback'
-        with patch('codeclaw.protocols.stream_watch.stream_limits', return_value=(1, .06, .02)):
+        with patch('xuloom.protocols.stream_watch.stream_limits', return_value=(1, .06, .02)):
             result = await self.run_task()
         self.assertIn('没有新的文本', result)
         self.assertEqual(len(self.requests), 1)
@@ -296,7 +296,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.requests.append(request)
             await asyncio.Event().wait()
         self.engine.client.chat.completions.create = create
-        with patch('codeclaw.protocols.stream_watch.stream_limits', return_value=(.05, .1, .02)):
+        with patch('xuloom.protocols.stream_watch.stream_limits', return_value=(.05, .1, .02)):
             result = await self.run_task()
         self.assertIn('首个有效响应', result)
         self.assertEqual(len(self.requests), 1)
@@ -315,7 +315,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                 yield NS(choices=[NS(delta=NS(content='FINAL_TEXT'), finish_reason='stop')], usage=NS(prompt_tokens=10, completion_tokens=4))
             return stream()
         self.engine.client.chat.completions.create = create
-        with patch('codeclaw.protocols.stream_watch.stream_limits', return_value=(1, .15, .02)):
+        with patch('xuloom.protocols.stream_watch.stream_limits', return_value=(1, .15, .02)):
             self.assertEqual(await self.run_task(), 'FINAL_TEXT')
         self.assertEqual(self.recorder.record['modelStreams'][0]['reasoningChunks'], 4)
         self.assertNotIn('PRIVATE_REASONING', str(self.recorder.record))
@@ -329,7 +329,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.Event().wait()
             return stream()
         self.engine.client.chat.completions.create = create
-        with patch('codeclaw.protocols.stream_watch.stream_limits', return_value=(1, .15, .02)):
+        with patch('xuloom.protocols.stream_watch.stream_limits', return_value=(1, .15, .02)):
             result = await self.run_task()
         self.assertIn('没有新的文本', result)
         self.assertEqual(self.tool.calls, ['once'])

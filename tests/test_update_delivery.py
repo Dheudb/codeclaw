@@ -10,15 +10,15 @@ import unittest
 @unittest.skipUnless(os.name == "nt", "Windows resource updater")
 class UpdateDeliveryTests(unittest.TestCase):
     def test_partial_install_failure_restores_resources_then_the_same_payload_can_retry(self):
-        with tempfile.TemporaryDirectory(prefix="codeclaw-update-fixture-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="xuloom-update-fixture-") as temporary:
             root = Path(temporary).resolve()
             package, stage = root / "installation", root / "stage"
             package.mkdir(); stage.mkdir()
             # Deliberately plain text, never executed; the updater only checks its presence.
-            executable = package / "CodeClaw.exe"
+            executable = package / "Xuloom.exe"
             executable.write_bytes(b"NON_EXECUTABLE_TEST_MARKER")
-            metadata = "codeclaw-0.1.0.dist-info"
-            entries = (("app", "resources/app"), ("codeclaw", "resources/python/Lib/site-packages/codeclaw"),
+            metadata = "xuloom-0.1.0.dist-info"
+            entries = (("app", "resources/app"), ("xuloom", "resources/python/Lib/site-packages/xuloom"),
                 ("metadata", "resources/python/Lib/site-packages/" + metadata))
             for source, target in entries:
                 (stage / source).mkdir(parents=True)

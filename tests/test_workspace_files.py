@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codeclaw.features.workspace_files import list_directory, git_changes, git_file_diff
+from xuloom.features.workspace_files import list_directory, git_changes, git_file_diff
 
 
 class WorkspaceFileTests(unittest.IsolatedAsyncioTestCase):

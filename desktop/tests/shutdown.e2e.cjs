@@ -4,12 +4,12 @@ const readline = require("node:readline");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), http = require("node:http"), assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs"), { historyRoot } = require("../electron/history-storage.cjs");
 const { resolveEnginePython } = require("../electron/runtime.cjs");
-const root = path.resolve(__dirname, ".."), repository = path.dirname(root), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-shutdown-e2e-"));
+const root = path.resolve(__dirname, ".."), repository = path.dirname(root), fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-shutdown-e2e-"));
 const data = path.join(fixture, "data"), project = path.join(fixture, "project"), config = path.join(fixture, "config"), home = path.join(fixture, "home");
 for (const directory of [data, project, config, home]) fs.mkdirSync(directory);
-const env = { ...process.env, CODECLAW_DATA_DIR: data, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config,
-  USERPROFILE: home, HOME: home, CODECLAW_TEST_HEADLESS: "1", CODECLAW_SKILLS_PATHS: "", PYTHONPATH: repository };
-for (const name of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[name];
+const env = { ...process.env, XULOOM_DATA_DIR: data, XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config,
+  USERPROFILE: home, HOME: home, XULOOM_TEST_HEADLESS: "1", XULOOM_SKILLS_PATHS: "", PYTHONPATH: repository };
+for (const name of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[name];
 const checkpoint = path.join(historyRoot(project, data), "sessions/shutdown.json");
 atomicJSON(checkpoint, { messages: [], metadata: {} });
 atomicJSON(path.join(data, "workbench.json"), { projects: [project], activeConversation: { project, resumeId: "shutdown", scope: "project" } });
@@ -29,7 +29,7 @@ async function bounded(promise, label) {
   finally { clearTimeout(timer); }
 }
 async function launch() {
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(45000); page.on("pageerror", (error) => errors.push(error.message));
   await page.locator(".session-item.active").waitFor(); await page.waitForFunction(() => !document.querySelector(".new-task")?.disabled);
 }
@@ -46,7 +46,7 @@ async function main() {
     const input = page.getByRole("textbox", { name: "任务输入" }); await input.fill("Say hello"); await input.press("Enter");
     await page.getByText("SHUTDOWN_RESULT_SAVED", { exact: true }).waitFor(); await page.waitForFunction(() => !document.querySelector(".send-button.stop"));
     const id = await page.locator(".session-item.active").getAttribute("data-session-id");
-    await page.evaluate((id) => window.codeclaw.invoke("agents.list", { session: id }), id);
+    await page.evaluate((id) => window.xuloom.invoke("agents.list", { session: id }), id);
     const original = fs.readFileSync(checkpoint);
     const python = resolveEnginePython({ packaged: false, projectRoot: repository, env });
     holder = spawn(python, [path.join(repository, "tests/fixtures/checkpoint_holder.py"), checkpoint], { cwd: repository, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });

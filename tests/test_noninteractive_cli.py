@@ -45,18 +45,18 @@ class CliTests(unittest.TestCase):
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError): pass
         self.server = ThreadingHTTPServer(("127.0.0.1",0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True); self.thread.start()
-        self.env = {**os.environ, "CODECLAW_DATA_DIR": str(self.root/"data"), "CODECLAW_CONFIG_DIR": str(self.root/"config"),
-            "HOME": str(self.root/"home"), "USERPROFILE": str(self.root/"home"), "CODECLAW_SKILLS_PATHS": "",
-            "OPENAI_API_KEY": "fixture", "OPENAI_MODEL": "fixture", "CODECLAW_MODEL_PROVIDER": "openai",
+        self.env = {**os.environ, "XULOOM_DATA_DIR": str(self.root/"data"), "XULOOM_CONFIG_DIR": str(self.root/"config"),
+            "HOME": str(self.root/"home"), "USERPROFILE": str(self.root/"home"), "XULOOM_SKILLS_PATHS": "",
+            "OPENAI_API_KEY": "fixture", "OPENAI_MODEL": "fixture", "XULOOM_MODEL_PROVIDER": "openai",
             "OPENAI_BASE_URL": f"http://127.0.0.1:{self.server.server_port}/v1", "PYTHONIOENCODING": "utf-8",
-            "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "CODECLAW_NETWORK_MODE": "direct"}
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "XULOOM_NETWORK_MODE": "direct"}
 
     def tearDown(self):
         self.finish_request.set()
         self.server.shutdown(); self.server.server_close(); self.thread.join(5); self.temp.cleanup()
 
     def cli(self, *args, stdin=""):
-        result = subprocess.run([sys.executable, "-m", "codeclaw", *args, "--json", "--cwd", str(self.root)],
+        result = subprocess.run([sys.executable, "-m", "xuloom", *args, "--json", "--cwd", str(self.root)],
             input=stdin, text=True, encoding="utf-8", capture_output=True, env=self.env, timeout=35)
         events = [json.loads(line) for line in result.stdout.splitlines()]
         self.assertEqual(sum(e["type"] == "final" for e in events), 1, result.stdout+result.stderr)
@@ -72,6 +72,18 @@ class CliTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(result["session_id"], sid)
         self.assertIn("Analyze this sentence", json.dumps(self.requests[-1], ensure_ascii=False))
+
+    def test_collaboration_flag_and_resume_preserve_mode_without_changing_permissions(self):
+        first, _, result = self.cli("exec", "Hello", "--collaboration", "ultra")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn("# Collaboration: ultra", json.dumps(self.requests[-1]))
+        sid = result["session_id"]
+        second, _, result = self.cli("exec", "Again", "--session", sid)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("# Collaboration: ultra", json.dumps(self.requests[-1]))
+        third, _, result = self.cli("exec", "Again", "--session", sid, "--collaboration", "solo")
+        self.assertEqual(third.returncode, 0, third.stderr)
+        self.assertIn("# Collaboration: solo", json.dumps(self.requests[-1]))
 
     def test_required_approval_is_explicit_and_no_write_is_performed(self):
         self.mode = "write"
@@ -118,7 +130,7 @@ class CliTests(unittest.TestCase):
 
     def test_another_process_pauses_the_goal_without_taking_its_writer_lease(self):
         self.mode = "hold"
-        process = subprocess.Popen([sys.executable, "-m", "codeclaw", "goal", "start", "Wait for result", "--criterion", "Inspect result", "--json", "--cwd", str(self.root)],
+        process = subprocess.Popen([sys.executable, "-m", "xuloom", "goal", "start", "Wait for result", "--criterion", "Inspect result", "--json", "--cwd", str(self.root)],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=self.env)
         lines = queue.Queue()
         reader = threading.Thread(target=lambda: [lines.put(line) for line in process.stdout], daemon=True); reader.start()

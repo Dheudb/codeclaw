@@ -6,11 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from codeclaw.core.run_result import PersistenceError
-from codeclaw.core.session import SessionManager
-from codeclaw.core.session_lock import SessionBusyError, SessionConflictError
-from codeclaw.desktop.bridge import DesktopBridge
-from codeclaw.protocols.mcp_bridge import MCP_AVAILABLE
+from xuloom.core.run_result import PersistenceError
+from xuloom.core.session import SessionManager
+from xuloom.core.session_lock import SessionBusyError, SessionConflictError
+from xuloom.desktop.bridge import DesktopBridge
+from xuloom.protocols.mcp_bridge import MCP_AVAILABLE
 import test_agent_lifecycle as lifecycle
 
 

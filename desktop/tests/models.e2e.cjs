@@ -6,7 +6,7 @@ const http = require("node:http");
 const assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-models-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-models-e2e-"));
 const data = path.join(fixture, "profile"), config = path.join(fixture, "config"), project = path.join(fixture, "project");
 for (const directory of [data, config, project]) fs.mkdirSync(directory);
 atomicJSON(path.join(data, "workbench.json"), { projects: [], activeConversation: null, defaultDirectory: project });
@@ -25,7 +25,7 @@ function server(name, key, models) {
       if (!body.stream) { res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ id: "memory", choices: [{ message: { role: "assistant", content: "memory" } }] })); return; }
       const system = body.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n");
       assert(!system.includes("Configured request model ID:"), "Routing model IDs must not be injected into identity instructions");
-      assert(system.includes("introduce yourself as CodeClaw"), "Product identity must remain consistent across model switches");
+      assert(system.includes("introduce yourself as Xuloom"), "Product identity must remain consistent across model switches");
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "test", model: body.model, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
       chunk({ role: "assistant", content: "模型回复：" + body.model });
@@ -37,9 +37,9 @@ const first = server("first", "first-fixture-key", ["one", "two", "three"]), sec
 let app, page;
 const errors = [];
 async function launch() {
-  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(60000); page.on("pageerror", (error) => errors.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
   await page.addStyleTag({ content: "*, *::before, *::after { animation: none !important; transition: none !important; }" });
@@ -99,7 +99,7 @@ async function main() {
     assert.equal(readConfig().model_connections.length, 2);
     await send("切到另一个 API", "other");
     assert(requests.some((request) => request.server === "second" && request.body?.model === "other"));
-    const publicConfig = await page.evaluate(() => window.codeclaw.invoke("config.get"));
+    const publicConfig = await page.evaluate(() => window.xuloom.invoke("config.get"));
     assert(!JSON.stringify(publicConfig).includes("fixture-key"));
     await select("legacy-openai", "three");
     await send("返回第一个 API", "three");
@@ -108,12 +108,12 @@ async function main() {
     await page.getByRole("button", { name: "停止任务", exact: true }).waitFor();
     assert(await page.getByLabel("选择模型", { exact: true }).isDisabled());
     const refused = await page.evaluate(async ([session, connectionId]) => {
-      try { await window.codeclaw.invoke("config.select", { session, connectionId, model: "another" }); return false; } catch { return true; }
+      try { await window.xuloom.invoke("config.select", { session, connectionId, model: "another" }); return false; } catch { return true; }
     }, [session, secondId]);
     assert(refused, "Switching a running session must be refused");
     const beforeDelete = fs.readFileSync(path.join(config, "config.json"), "utf8");
     assert(await page.evaluate(async (connectionId) => {
-      try { await window.codeclaw.invoke("config.delete", { connectionId, confirm: true }); return false; } catch { return true; }
+      try { await window.xuloom.invoke("config.delete", { connectionId, confirm: true }); return false; } catch { return true; }
     }, secondId));
     assert.equal(fs.readFileSync(path.join(config, "config.json"), "utf8"), beforeDelete);
     await page.getByRole("button", { name: "停止任务", exact: true }).click();
@@ -141,7 +141,7 @@ async function main() {
     await page.getByRole("button", { name: "保留 API", exact: true }).click();
     assert.equal(fs.readFileSync(path.join(config, "config.json"), "utf8"), beforeCancel);
     assert(await page.evaluate(async (connectionId) => {
-      try { await window.codeclaw.invoke("config.delete", { connectionId }); return false; } catch { return true; }
+      try { await window.xuloom.invoke("config.delete", { connectionId }); return false; } catch { return true; }
     }, secondId), "Backend requires explicit deletion confirmation");
     await confirmDelete();
     assert.equal(readConfig().active_model_connection, "legacy-openai");
@@ -164,7 +164,7 @@ async function main() {
     await page.getByText(/Model not configured/).last().waitFor();
     assert.equal(requests.length, requestCount);
     await app.close(); await launch();
-    const empty = await page.evaluate(() => window.codeclaw.invoke("config.get"));
+    const empty = await page.evaluate(() => window.xuloom.invoke("config.get"));
     assert.deepEqual(empty.connections, []); assert.equal(empty.model, ""); assert.equal(empty.hasKey, false);
     await page.locator(".new-task").click(); await page.locator(".session-item.active").waitFor();
     await settings(); await page.getByRole("button", { name: "新增 API", exact: true }).click();

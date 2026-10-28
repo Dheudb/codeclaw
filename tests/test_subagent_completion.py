@@ -7,17 +7,17 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from codeclaw.core.engine import QueryEngine
-from codeclaw.memory.memory import MemoryCompactor
+from xuloom.core.engine import QueryEngine
+from xuloom.memory.memory import MemoryCompactor
 
 
 class CompletionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.env = patch.dict(os.environ, {"CODECLAW_DATA_DIR": str(self.root / "data"),
+        self.env = patch.dict(os.environ, {"XULOOM_DATA_DIR": str(self.root / "data"),
             "USERPROFILE": str(self.root / "home"), "HOME": str(self.root / "home"),
-            "OPENAI_API_KEY": "fixture", "CODECLAW_MODEL_PROVIDER": "openai"})
+            "OPENAI_API_KEY": "fixture", "XULOOM_MODEL_PROVIDER": "openai"})
         self.env.start()
         self.tokens = patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None)
         self.tokens.start()
@@ -111,7 +111,7 @@ class CompletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.requests), 1)
 
     async def test_empty_worker_output_is_a_failure_with_a_retained_transcript(self):
-        from codeclaw.core.run_result import RunResult
+        from xuloom.core.run_result import RunResult
         with patch.object(QueryEngine, "run", AsyncMock(return_value=RunResult("   ", "completed", True))):
             receipt = json.loads(await self.engine.available_tools["agent_tool"].execute(prompt="fixture", response_format="json"))
         row = receipt["agents"][0]

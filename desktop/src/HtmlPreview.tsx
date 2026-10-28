@@ -4,9 +4,9 @@ export default function HtmlPreview({ sessionId, path, revision }: { sessionId: 
   const [url, setUrl] = useState(""), [error, setError] = useState(""), [loading, setLoading] = useState(true);
   useEffect(() => {
     let cancelled = false, token = "";
-    const release = (value: string) => { void window.codeclaw.invoke("preview.close", { session: sessionId, token: value }).catch(() => {}); };
+    const release = (value: string) => { void window.xuloom.invoke("preview.close", { session: sessionId, token: value }).catch(() => {}); };
     setUrl(""); setError(""); setLoading(true);
-    window.codeclaw.invoke("preview.open", { session: sessionId, path }).then((value) => {
+    window.xuloom.invoke("preview.open", { session: sessionId, path }).then((value) => {
       token = value.token;
       if (cancelled) release(token); else setUrl(value.url);
     }).catch((reason) => { if (!cancelled) { setError(String(reason)); setLoading(false); } });

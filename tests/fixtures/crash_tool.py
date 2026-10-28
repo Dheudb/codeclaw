@@ -5,10 +5,10 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 from pydantic import BaseModel
-from codeclaw.core.engine import QueryEngine
-from codeclaw.core.messages import create_user_message, create_assistant_message
-from codeclaw.memory.memory import MemoryCompactor
-from codeclaw.tools.base import BaseAgenticTool
+from xuloom.core.engine import QueryEngine
+from xuloom.core.messages import create_user_message, create_assistant_message
+from xuloom.memory.memory import MemoryCompactor
+from xuloom.tools.base import BaseAgenticTool
 
 
 class Input(BaseModel):

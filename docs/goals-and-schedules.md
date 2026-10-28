@@ -5,12 +5,12 @@
 ## 非交互执行
 
 ```powershell
-codeclaw exec "总结给定材料" --cwd C:/work --json
-Get-Content -Raw task.txt | codeclaw exec - --cwd C:/work --json
-codeclaw exec "继续上次任务" --cwd C:/work --session SESSION_ID --json
+xuloom exec "总结给定材料" --cwd C:/work --json
+Get-Content -Raw task.txt | xuloom exec - --cwd C:/work --json
+xuloom exec "继续上次任务" --cwd C:/work --session SESSION_ID --json
 ```
 
-源码可用 `python -m codeclaw`；便携包可用自带的 `resources/python/python.exe -I -m codeclaw exec ...`，不需要系统 Python。交互 CLI 和旧 `-p` 保留；自动退出使用 `exec`。
+源码可用 `python -m xuloom`；便携包可用自带的 `resources/python/python.exe -I -m xuloom exec ...`，不需要系统 Python。交互 CLI 和旧 `-p` 保留；自动退出使用 `exec`。
 
 `--json` 在 stdout 输出 JSONL 事件，最后恰有一个 `type=final` 回执，诊断进入 stderr。最终回执在引擎关闭后输出，关闭保存失败不返回成功。字段保留真实 session_id、persisted、reason。框架执行结束与领域验收是两回事。
 
@@ -34,12 +34,12 @@ codeclaw exec "继续上次任务" --cwd C:/work --session SESSION_ID --json
 桌面右侧“目标”面板可创建目标，填写验收条件、轮数、执行时间和输出 Token 预算；支持暂停、恢复、取消及确认验收。普通聊天不自动进入目标模式。
 
 ```powershell
-codeclaw goal start "完成给定分析" --criterion "保存结果并说明证据" --rounds 20 --seconds 1800 --output-tokens 50000 --cwd C:/work --json
-codeclaw goal status --session SESSION_ID --cwd C:/work --json
-codeclaw goal pause --session SESSION_ID --cwd C:/work --json
-codeclaw goal resume --session SESSION_ID --cwd C:/work --json
-codeclaw goal cancel --session SESSION_ID --cwd C:/work --json
-codeclaw goal accept --session SESSION_ID --cwd C:/work --reason "人工检查通过" --json
+xuloom goal start "完成给定分析" --criterion "保存结果并说明证据" --rounds 20 --seconds 1800 --output-tokens 50000 --cwd C:/work --json
+xuloom goal status --session SESSION_ID --cwd C:/work --json
+xuloom goal pause --session SESSION_ID --cwd C:/work --json
+xuloom goal resume --session SESSION_ID --cwd C:/work --json
+xuloom goal cancel --session SESSION_ID --cwd C:/work --json
+xuloom goal accept --session SESSION_ID --cwd C:/work --reason "人工检查通过" --json
 ```
 
 目标保存在现有检查点 metadata.goal。每轮沿用原引擎和已保存的工具结果；未完成时安全续跑。模型通过 goal_report_tool 报告进展、证据、完成声明或具体阻塞。连续三轮没有新工具结果、产物或 worker 证据会阻塞，换说法不清除计数。执行失败不无限重试。
@@ -57,14 +57,14 @@ codeclaw goal accept --session SESSION_ID --cwd C:/work --reason "人工检查�
 桌面“目标”面板可创建延迟消息或每 24 小时重复。聊天可通过工具发现加载 schedule_tool；创建与控制继续遵守权限，子代理不能创建主会话定时消息。
 
 ```powershell
-codeclaw schedule add "检查实验结果" --delay 1800 --cwd C:/work --session SESSION_ID --json
-codeclaw schedule add "每日汇总" --at "2026-10-29T09:00:00+08:00" --interval 86400 --cwd C:/work --session SESSION_ID --json
-codeclaw schedule list --json
-codeclaw schedule pause --id SCHEDULE_ID --json
-codeclaw schedule resume --id SCHEDULE_ID --json
-codeclaw schedule cancel --id SCHEDULE_ID --json
-codeclaw schedule serve --json
-codeclaw schedule serve --once --json
+xuloom schedule add "检查实验结果" --delay 1800 --cwd C:/work --session SESSION_ID --json
+xuloom schedule add "每日汇总" --at "2026-10-29T09:00:00+08:00" --interval 86400 --cwd C:/work --session SESSION_ID --json
+xuloom schedule list --json
+xuloom schedule pause --id SCHEDULE_ID --json
+xuloom schedule resume --id SCHEDULE_ID --json
+xuloom schedule cancel --id SCHEDULE_ID --json
+xuloom schedule serve --json
+xuloom schedule serve --once --json
 ```
 
 绝对时间必须带时区；重复为固定秒数，最低 60 秒，不是带夏令时规则的日历 Cron。错过多个周期合并一次，不集中重放。省略 session 会创建并返回一个真实会话 ID。

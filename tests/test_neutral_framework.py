@@ -5,9 +5,9 @@ import unittest
 from unittest.mock import patch
 
 import test_tool_recovery as recovery
-from codeclaw.agents.registry import AgentRegistry
-from codeclaw.context.context import ContextBuilder
-from codeclaw.skills.registry import SkillRegistry
+from xuloom.agents.registry import AgentRegistry
+from xuloom.context.context import ContextBuilder
+from xuloom.skills.registry import SkillRegistry
 
 
 class NeutralFrameworkTests(unittest.IsolatedAsyncioTestCase):
@@ -28,8 +28,8 @@ class NeutralFrameworkTests(unittest.IsolatedAsyncioTestCase):
         home = self.root / "home"
         (home / ".claude").mkdir(parents=True)
         (home / ".claude/CLAUDE.md").write_text("LEGACY_CODE_RULE", encoding="utf-8")
-        (home / ".codeclaw").mkdir()
-        (home / ".codeclaw/instructions.md").write_text("USER_DEFAULT", encoding="utf-8")
+        (home / ".xuloom").mkdir()
+        (home / ".xuloom/instructions.md").write_text("USER_DEFAULT", encoding="utf-8")
         (self.root / "AGENTS.md").write_text("WORKSPACE_RULE", encoding="utf-8")
         builder = ContextBuilder(str(self.root))
         prompt = builder.generate_system_prompt()
@@ -121,7 +121,7 @@ class NeutralFrameworkTests(unittest.IsolatedAsyncioTestCase):
     async def test_overlapping_programmatic_turn_is_rejected_without_replacing_the_owner(self):
         entered, finish = asyncio.Event(), asyncio.Event()
         async def held(*args, **kwargs):
-            from codeclaw.core.run_result import RunResult
+            from xuloom.core.run_result import RunResult
             entered.set()
             await finish.wait()
             return RunResult("owner answer", "completed", True)
@@ -137,7 +137,7 @@ class NeutralFrameworkTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((await owner).ok)
 
     async def test_large_skill_result_uses_complete_output_archive(self):
-        directory = self.root / ".codeclaw/skills/large-instructions"
+        directory = self.root / ".xuloom/skills/large-instructions"
         directory.mkdir(parents=True)
         directory.joinpath("SKILL.md").write_text("---\nname: large-instructions\ndescription: Archive test.\n---\n" + "Long instruction.\n" * 300 + "TAIL_PROOF", encoding="utf-8")
         receipt = await self.engine._execute_tool_wrapper({"id": "archive-skill", "name": "skill_tool", "input": {"action": "read", "skill_name": "large-instructions", "max_chars": 1000}}, lambda _: None)

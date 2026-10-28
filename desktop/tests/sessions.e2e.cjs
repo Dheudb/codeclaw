@@ -7,16 +7,16 @@ const http = require("node:http");
 const assert = require("node:assert/strict");
 const { atomicJSON, sessionKey } = require("../electron/catalog.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-session-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-session-e2e-"));
 const project = path.join(fixture, "项目 one"), second = path.join(fixture, "project-two");
 const data = path.join(fixture, "app-data"), config = path.join(fixture, "config");
 for (const dir of [project, second, data, config]) fs.mkdirSync(dir);
-const legacyHistory = (directory, id) => path.join(directory, ".codeclaw", "sessions", id + ".json");
+const legacyHistory = (directory, id) => path.join(directory, ".xuloom", "sessions", id + ".json");
 const historyFile = (directory, id) => path.join(historyRoot(directory, data), "sessions", id + ".json");
 for (const [directory, id, title] of [[project, "first", "第一条历史"], [project, "second", "第二条历史"],
   [project, "archived", "以前归档的会话"], [second, "other", "另一项目的历史"]])
   atomicJSON(legacyHistory(directory, id), { messages: [{ role: "user", content: title }, { role: "assistant", content: "已有回复" }], metadata: {} });
-atomicJSON(path.join(project, ".codeclaw/session-index.json"), { version: 1, sessions: { archived: { archived: true } } });
+atomicJSON(path.join(project, ".xuloom/session-index.json"), { version: 1, sessions: { archived: { archived: true } } });
 fs.writeFileSync(path.join(project, "keep.py"), "print('keep project source')");
 atomicJSON(path.join(data, "workbench.json"), { projects: [project, second], workspace: [{ project, resumeId: "first", active: true }] });
 const requests = [];
@@ -40,11 +40,11 @@ async function main() {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "sessions-test",
     openai_base_url: `http://127.0.0.1:${server.address().port}/v1`, openai_api_key: "fixture-key" });
-  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config, CODECLAW_TEST_HEADLESS: "1" };
-  delete env.ELECTRON_RUN_AS_NODE; delete env.CODECLAW_DEV_URL;
-  for (const key of ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  const options = { executablePath: process.env.CODECLAW_TEST_EXECUTABLE,
-    args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 };
+  const env = { ...process.env, USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config, XULOOM_TEST_HEADLESS: "1" };
+  delete env.ELECTRON_RUN_AS_NODE; delete env.XULOOM_DEV_URL;
+  for (const key of ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  const options = { executablePath: process.env.XULOOM_TEST_EXECUTABLE,
+    args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 };
   let app, page;
   const errors = [];
   async function launch() {
@@ -117,7 +117,7 @@ async function main() {
     const runningKey = await activeId(), native = runningKey.split(":")[1];
     // Backend refuses a destructive API call that skips confirmation/stopping.
     const refused = await page.evaluate(async (id) => {
-      try { await window.codeclaw.invoke("session.delete", { id, confirm: true }); return false; } catch { return true; }
+      try { await window.xuloom.invoke("session.delete", { id, confirm: true }); return false; } catch { return true; }
     }, runningKey);
     assert(refused);
     await page.getByRole("button", { name: "会话操作 slow-task", exact: true }).click();
@@ -136,12 +136,14 @@ async function main() {
     await page.getByRole("button", { name: "项目操作 project-two", exact: true }).waitFor({ state: "hidden" });
     assert(fs.existsSync(historyFile(second, "other")));
     // Add example definitions from the real panel; no browser file injection.
+    if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
     await page.getByRole("button", { name: "Skills", exact: true }).click();
     await page.getByRole("button", { name: /Skill 怎么配置/ }).click();
     await page.getByRole("button", { name: "添加示例到当前项目" }).click();
     await page.getByRole("status").filter({ hasText: "已添加 project-review" }).waitFor();
     await page.getByRole("button", { name: "关闭配置说明" }).click();
     await page.getByText("project-review", { exact: true }).waitFor();
+    if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
     await page.getByRole("button", { name: "代理", exact: true }).click();
     await page.getByText("reviewer", { exact: true }).waitFor();
     await page.locator(".capability-card").filter({ has: page.getByText("reviewer", { exact: true }) }).getByRole("button", { name: "查看代理定义" }).click();

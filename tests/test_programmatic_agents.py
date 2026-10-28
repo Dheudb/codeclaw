@@ -3,9 +3,9 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from codeclaw.core.engine import QueryEngine
-from codeclaw.core.messages import create_assistant_message, create_user_message
-from codeclaw.core.run_result import RunResult
+from xuloom.core.engine import QueryEngine
+from xuloom.core.messages import create_assistant_message, create_user_message
+from xuloom.core.run_result import RunResult
 import test_agent_lifecycle as lifecycle
 
 

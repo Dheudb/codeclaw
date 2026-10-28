@@ -1,0 +1,46 @@
+import { useEffect, useRef, useState } from "react";
+import { Plus, Paperclip, Target, Lightbulb, Puzzle, Store, Settings2, Clock3, Check } from "lucide-react";
+
+export default function ComposerMenu({ sessionId, disabled, plan, action }: {
+  sessionId: string; disabled: boolean; plan: boolean;
+  action: (name: "files" | "goal" | "plan" | "skills" | "mcp" | "settings" | "schedule") => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => setOpen(false), [sessionId, disabled]);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", outside);
+    root.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [open]);
+  const options = [
+    { name: "files", label: "文件和图片", description: "添加附件，也支持拖入或粘贴", icon: Paperclip },
+    { name: "goal", label: "目标", description: "设置持续执行的目标、验收条件与预算", icon: Target },
+    { name: "plan", label: "计划模式", description: plan ? "退出计划模式" : "先制定计划，再决定如何执行", icon: Lightbulb },
+    { name: "schedule", label: "定时唤醒", description: "稍后向此会话投递任务", icon: Clock3 },
+    { name: "skills", label: "Skills", description: "选择挂载的技能，也可输入 $", icon: Puzzle },
+    { name: "mcp", label: "MCP 市场", description: "连接和管理外部工具", icon: Store },
+    { name: "settings", label: "模型设置", description: "管理 API 供应商与模型", icon: Settings2 },
+  ] as const;
+  return <div className="composer-add" ref={root} onKeyDown={(event) => {
+    if (!open) return;
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus(); }
+    else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault(); const items = [...root.current!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+      const index = items.indexOf(document.activeElement as HTMLButtonElement);
+      items[event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowUp" ? -1 : 1) + items.length) % items.length]?.focus();
+    } else if (event.key === "Tab") setOpen(false);
+  }}>
+    <button ref={trigger} className="composer-add-button" type="button" aria-label="添加工具与模式" title="添加附件、目标或计划模式"
+      aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}><Plus size={21} /></button>
+    {open && <div className="composer-add-menu" role="menu" aria-label="添加工具与模式">
+      <div className="composer-menu-heading">添加</div>
+      {options.map(({ name, label, description, icon: Icon }, index) => <button type="button" role="menuitem" key={name}
+        className={index === 4 ? "composer-menu-divider" : ""} onClick={() => { setOpen(false); trigger.current?.focus(); action(name); }}>
+        <Icon size={17} /><span>{label}</span><small>{description}</small>{name === "plan" && plan && <Check size={14} />}
+      </button>)}
+    </div>}
+  </div>;
+}

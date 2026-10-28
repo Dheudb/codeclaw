@@ -1,6 +1,6 @@
 import json
 import unittest
-from codeclaw.features.workflow_completion import WorkflowCompletion
+from xuloom.features.workflow_completion import WorkflowCompletion
 
 
 class CompletionTests(unittest.TestCase):

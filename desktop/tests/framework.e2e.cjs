@@ -6,12 +6,12 @@ const http = require("node:http");
 const assert = require("node:assert/strict");
 const { atomicJSON } = require("../electron/catalog.cjs");
 const root = path.resolve(__dirname, "..");
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-framework-e2e-"));
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-framework-e2e-"));
 const data = path.join(fixture, "data"), config = path.join(fixture, "config");
 for (const dir of [data, config]) fs.mkdirSync(dir);
 atomicJSON(path.join(data, "workbench.json"), { projects: [], activeConversation: null });
-const python = process.env.CODECLAW_TEST_EXECUTABLE
-  ? path.join(path.dirname(process.env.CODECLAW_TEST_EXECUTABLE), "resources/python/python.exe")
+const python = process.env.XULOOM_TEST_EXECUTABLE
+  ? path.join(path.dirname(process.env.XULOOM_TEST_EXECUTABLE), "resources/python/python.exe")
   : path.join(root, "../.venv-mcp/Scripts/python.exe");
 const failures = [], children = [];
 const payload = '中文 input "quotes" $HOME `literal`\nsecond line';
@@ -88,10 +88,10 @@ const server = http.createServer((req, res) => {
   });
 });
 async function launch() {
-  const env = { ...process.env, CODECLAW_DATA_DIR: data, CODECLAW_USER_DATA: data, CODECLAW_CONFIG_DIR: config,
-    USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), CODECLAW_TEST_HEADLESS: "1" };
-  for (const key of ["ELECTRON_RUN_AS_NODE", "CODECLAW_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "CODECLAW_MODEL_PROVIDER"]) delete env[key];
-  app = await electron.launch({ executablePath: process.env.CODECLAW_TEST_EXECUTABLE, args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
+  const env = { ...process.env, XULOOM_DATA_DIR: data, XULOOM_USER_DATA: data, XULOOM_CONFIG_DIR: config,
+    USERPROFILE: path.join(fixture, "home"), HOME: path.join(fixture, "home"), XULOOM_TEST_HEADLESS: "1" };
+  for (const key of ["ELECTRON_RUN_AS_NODE", "XULOOM_DEV_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "XULOOM_MODEL_PROVIDER"]) delete env[key];
+  app = await electron.launch({ executablePath: process.env.XULOOM_TEST_EXECUTABLE, args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root], env, timeout: 30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(60000);
   page.on("pageerror", (error) => failures.push(error.message));
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);

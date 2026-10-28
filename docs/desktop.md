@@ -2,11 +2,11 @@
 
 ## 使用 Windows 便携包
 
-下载：[Windows x64 Release](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.4)。
+下载：[Windows x64 Release](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.10)。
 请选择 Assets 中的成品 ZIP，`Source code` 下载项仅包含源码。
 
-1. 解压完整的 `CodeClaw-win32-x64` 目录。
-2. 运行 `CodeClaw.exe`。
+1. 解压完整的 `Xuloom-win32-x64` 目录。
+2. 运行 `Xuloom.exe`。
 3. 点击“新建会话”即可使用自动创建的默认工作区；需要自己的文件夹时再点击“打开项目”。
 4. 在“设置与模型”配置模型协议、地址、模型 ID 和 Key。
 5. 输入任务。文件修改、命令和外部工具按会话权限执行。
@@ -19,6 +19,9 @@
 
 ## 界面入口
 
+工作台采用冷白与浅雾蓝配色。右侧能力面板默认收起，点击顶部侧栏图标可展开 Skills、代理、活动、变更、文件和目标；顶部另有文件、活动、目标的快捷入口。
+窄面板自动简化标签图标，保留完整文字。左侧会话日期在悬停或键盘聚焦时显示，读取错误和未发送草稿仍常驻提示。
+
 | 入口 | 用途 |
 |---|---|
 | 侧边栏项目与会话 | 打开项目、新建会话、恢复项目历史 |
@@ -27,6 +30,8 @@
 | 代理面板 | 导入代理定义、查看和取消后台任务 |
 | 活动面板 | 查看工具调用与任务日志 |
 | 变更面板 | 自动列出会话修改的文件、行数统计和文件预览，另可查看 Git 差异 |
+| 文件面板 | 浏览当前工作目录、打开文件内容和预览 |
+| 目标面板 | 管理目标、预算、暂停恢复和定时唤醒 |
 | MCP 市场 | 安装、配置、测试和启停外部工具 |
 
 模型设置详见[模型配置](models.md)，能力目录规范详见[Skills 与子代理](capabilities.md)。
@@ -35,9 +40,9 @@
 
 | 系统 | 默认工作区 |
 |---|---|
-| Windows | `%LOCALAPPDATA%\CodeClaw\workspaces\default`，未设置时使用当前用户的 `AppData\Local` |
-| Linux | `$XDG_DATA_HOME/codeclaw/workspaces/default`，未设置时为 `~/.local/share/codeclaw/workspaces/default` |
-| macOS | `~/Library/Application Support/CodeClaw/workspaces/default` |
+| Windows | `%LOCALAPPDATA%\Xuloom\workspaces\default`，未设置时使用当前用户的 `AppData\Local` |
+| Linux | `$XDG_DATA_HOME/xuloom/workspaces/default`，未设置时为 `~/.local/share/xuloom/workspaces/default` |
+| macOS | `~/Library/Application Support/Xuloom/workspaces/default` |
 
 目录在首次新建会话时自动创建，可在设置中独立保存新的默认目录，无需先配置模型。
 顶部“新建会话”、欢迎页入口和 Ctrl+N 创建独立会话，在默认根目录下分配专属工作目录，并单独列在侧栏“独立会话”中。项目旁的加号和项目菜单中的“新建会话”才在对应项目下创建对话。修改默认目录不会移动已有项目或历史；独立会话的归档、恢复和删除同样可用。
@@ -58,7 +63,7 @@ PDF、代码和其他文件提供会话内副本路径，代理通过文件读�
 编辑草稿在切换会话、重启后保留。提交后替换最后一轮消息及其过程，保留更早的对话和当前工作目录；已执行的文件修改不会撤销。
 替换前的会话快照保存在集中历史的该会话资源目录中，随会话删除一并清理。
 
-Windows 本地更新始终使用原来的 `CodeClaw.exe` 路径，不另建按功能命名的应用目录。
+Windows 本地更新始终使用原来的 `Xuloom.exe` 路径，不另建按功能命名的应用目录。
 程序运行中只准备资源更新，退出后原位替换并保留回退文件；原有快捷方式、配置和会话继续使用。
 
 OpenAI 兼容接口支持标准工具调用，也兼容 DeepSeek 接口原样返回的完整 DSML 工具块。
@@ -109,9 +114,9 @@ CLI 和桌面端使用同一套用户级集中存储。工作目录只放项目�
 
 ## 集中存储与独立工作区
 
-默认数据根目录由操作系统和当前用户决定：Windows 为 `%LOCALAPPDATA%/CodeClaw`，Linux 为 `${XDG_DATA_HOME:-~/.local/share}/codeclaw`，macOS 为 `~/Library/Application Support/CodeClaw`。CLI 与桌面端一致；可用绝对路径环境变量 `CODECLAW_DATA_DIR` 覆盖数据根目录。
+默认数据根目录由操作系统和当前用户决定：Windows 为 `%LOCALAPPDATA%/Xuloom`，Linux 为 `${XDG_DATA_HOME:-~/.local/share}/xuloom`，macOS 为 `~/Library/Application Support/Xuloom`。CLI 与桌面端一致；可用绝对路径环境变量 `XULOOM_DATA_DIR` 覆盖数据根目录。
 
-聊天、标题、草稿、置顶、归档、执行轨迹、子代理记录和工具输出集中在数据根目录的 `history/<工作目录标识>/`；会话记忆和计划也保存到数据根目录中。项目中的 `.codeclaw` 保留 Skill、Subagent、权限及其他配置，不再新增 `sessions`、`session-index.json` 或工具输出目录。
+聊天、标题、草稿、置顶、归档、执行轨迹、子代理记录和工具输出集中在数据根目录的 `history/<工作目录标识>/`；会话记忆和计划也保存到数据根目录中。项目中的 `.xuloom` 保留 Skill、Subagent、权限及其他配置，不再新增 `sessions`、`session-index.json` 或工具输出目录。
 
 顶部“新建会话”和 Ctrl+N 每次创建一个独立工作区，默认位于 `workspaces/default/chat-<随机标识>/`，不会复用空白会话或其他独立会话的文件。设置里的默认目录作为这些工作区的根目录。项目中的加号继续使用对应项目目录。
 
@@ -119,7 +124,7 @@ CLI 和桌面端使用同一套用户级集中存储。工作目录只放项目�
 缩小窗口时会临时收缩侧栏，为聊天区保留空间，重新放大窗口后恢复偏好宽度。
 聊天回复在底部时自动跟随输出；滚轮向上或拖动滚动条查看历史时停止跟随，回到底部或发送新消息后继续跟随。
 
-首次打开会迁移旧版 `.codeclaw/sessions`、索引和工具输出，校验后清理已迁移的旧文件；迁移冲突保留双方记录并显示错误，不覆盖历史。旧独立会话会分配各自的工作目录，并复制聊天记录中能确认由该会话写入的现存文件，原文件保留在旧目录。未记录来源的文件仍留在旧目录，不按归属猜测迁移。标题、草稿、归档和当前选择随迁移保留。
+首次打开会迁移旧版 `.xuloom/sessions`、索引和工具输出，校验后清理已迁移的旧文件；迁移冲突保留双方记录并显示错误，不覆盖历史。旧独立会话会分配各自的工作目录，并复制聊天记录中能确认由该会话写入的现存文件，原文件保留在旧目录。未记录来源的文件仍留在旧目录，不按归属猜测迁移。标题、草稿、归档和当前选择随迁移保留。
 
 拖动会话到项目会更新工作目录和集中存储中的关联，后续命令、Skill、MCP、Subagent 从目标项目加载。删除聊天保留工作文件；从侧边栏移除项目也不删除集中保存的历史。
 
@@ -135,7 +140,7 @@ CLI 和桌面端使用同一套用户级集中存储。工作目录只放项目�
 
 HTML 的“预览”运行在独立来源的沙箱页面，支持 CSS/SVG 动画、JavaScript 交互，以及工作区内的相对路径图片、
 样式、脚本模块和 JSON 数据。点击回复或文件树中的 HTML 文件默认预览；从变更卡片打开时先显示差异，可切换“预览”。
-刷新会重载网页和本地资源，页面交互状态随之重置。网页不能访问 CodeClaw 的 IPC、Node 或主界面，也不能通过预览协议读取工作区外资源、隐藏配置目录或执行写入请求。
+刷新会重载网页和本地资源，页面交互状态随之重置。网页不能访问 Xuloom 的 IPC、Node 或主界面，也不能通过预览协议读取工作区外资源、隐藏配置目录或执行写入请求。
 每项预览资源最大 30 MB。预览提供静态网页资源，不会启动项目后端或编译 JSX/TypeScript；需要开发服务器的项目仍需先运行对应服务。
 
 右侧“文件”页和审阅面板旁的工作区文件树均支持逐层展开文件夹、点击查看文件、刷新目录。

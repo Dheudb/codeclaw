@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, protocol, nativeImage } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, protocol, nativeImage, clipboard } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { SessionCatalog, projectKey, sessionKey } = require("./catalog.cjs");
@@ -10,11 +10,12 @@ const { prepareMove, moveSpec } = require("./session-move.cjs");
 const { HtmlPreviews, SCHEME: PREVIEW_SCHEME } = require("./html-preview.cjs");
 protocol.registerSchemesAsPrivileged([{ scheme: PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 const htmlPreviews = new HtmlPreviews();
-if (process.env.CODECLAW_USER_DATA)
-  app.setPath("userData", process.env.CODECLAW_USER_DATA);
-const requestedDataRoot = process.env.CODECLAW_DATA_DIR || process.env.CODECLAW_USER_DATA;
+app.setName("Xuloom");
+if (process.env.XULOOM_USER_DATA)
+  app.setPath("userData", process.env.XULOOM_USER_DATA);
+const requestedDataRoot = process.env.XULOOM_DATA_DIR || process.env.XULOOM_USER_DATA;
 const dataRoot = requestedDataRoot && path.isAbsolute(requestedDataRoot) ? path.resolve(requestedDataRoot) : dataDirectory({ home: app.getPath("home") });
-process.env.CODECLAW_DATA_DIR = dataRoot;
+process.env.XULOOM_DATA_DIR = dataRoot;
 const sessions = new Map();
 let window;
 let quitting = false;
@@ -27,6 +28,7 @@ const attachments = new Attachments(catalog, nativeImage);
 let workspaceQueue = Promise.resolve();
 let catalogRevision = 0;
 const engineMethods = new Set([
+  "collaboration.get", "collaboration.set",
   "goal.get", "goal.create", "goal.run", "goal.control",
   "schedule.list", "schedule.add", "schedule.control",
   "prompt",
@@ -297,6 +299,11 @@ async function fallback(project, excluded = [], scope = "project") {
   return { activeId: "", catalog: broadcastCatalog() };
 }
 async function invoke(method, params) {
+  if (method === "clipboard.writeText") {
+    if (typeof params.text !== "string") throw new Error("复制内容无效");
+    clipboard.writeText(params.text);
+    return true;
+  }
   if (method === "external.open") {
     const url = new URL(params.url);
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password)
@@ -408,6 +415,10 @@ async function invoke(method, params) {
     if (sessions.has(row.id) && running(sessions.get(row.id))) throw new Error("先停止当前任务，再复制会话");
     await disposeSession(row.id);
     const spec = catalog.forkSpec(row);
+    if (params.through !== undefined) {
+      spec.through = params.through;
+      spec.title = row.title + "（分支）";
+    }
     await mutateSessions(spec);
     return selectRow(catalog.find(sessionKey(spec.target, spec.new_id)));
   }
@@ -521,6 +532,10 @@ async function invoke(method, params) {
     const file = await source.transport.request("files.read", { path: params.path });
     return htmlPreviews.create(params.session, source.project, file.path);
   }
+  if (method === "collaboration.set") {
+    if (source.busy) throw new Error("请先停止或等待当前任务，再切换协作档位");
+    return source.transport.request(method, { mode: params.mode });
+  }
   if (method === "permissions.set") {
     if (!["ask", "full"].includes(params.mode)) throw new Error("请选择请求批准或完全访问");
     const row = catalog.find(params.session), previous = row.permissionMode;
@@ -584,13 +599,13 @@ app.whenReady().then(() => {
   scheduleTimer.unref();
   protocol.handle(PREVIEW_SCHEME, (request) => htmlPreviews.respond(request));
   window = new BrowserWindow({
-    show: process.env.CODECLAW_TEST_HEADLESS !== "1",
+    show: process.env.XULOOM_TEST_HEADLESS !== "1",
     width: 1440,
     height: 940,
     minWidth: 1050,
     minHeight: 700,
-    backgroundColor: "#fafaf9",
-    title: "CodeClaw",
+    backgroundColor: "#eaf3f7",
+    title: "Xuloom · 序织",
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -624,7 +639,7 @@ app.whenReady().then(() => {
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
     if (quitting) throw new Error("正在保存并退出，请稍候");
-    if (/^(app\.initialize|layout\.save|attachments\.import|permissions\.set|config\.(save|select|delete)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|layout\.save|attachments\.import|collaboration\.set|permissions\.set|config\.(save|select|delete)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;
@@ -651,7 +666,7 @@ app.whenReady().then(() => {
     try { if (restoration) broadcastCatalog(); }
     catch (error) { settingsFailure(error); }
   });
-  const url = !app.isPackaged && process.env.CODECLAW_DEV_URL;
+  const url = !app.isPackaged && process.env.XULOOM_DEV_URL;
   if (url && url !== "http://127.0.0.1:5178")
     throw new Error("Invalid development server URL");
   if (url) window.loadURL(url);
@@ -663,7 +678,7 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   quitting = true;
   const flush = workspaceQueue.then(() => window && !window.isDestroyed()
-    ? window.webContents.executeJavaScript("window.dispatchEvent(new Event('codeclaw-before-quit', { cancelable: true }))").catch(() => false) : true);
+    ? window.webContents.executeJavaScript("window.dispatchEvent(new Event('xuloom-before-quit', { cancelable: true }))").catch(() => false) : true);
   flush.then(async (saved) => {
     if (!saved) { quitting = false; return; }
     const results = await Promise.allSettled(

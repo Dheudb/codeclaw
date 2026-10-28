@@ -7,10 +7,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from codeclaw.core import session_mutation as actor
-from codeclaw.core.session import SessionManager
-from codeclaw.core.session_lock import SessionBusyError, SessionConflictError
-from codeclaw.core.storage import atomic_json, history_root
+from xuloom.core import session_mutation as actor
+from xuloom.core.session import SessionManager
+from xuloom.core.session_lock import SessionBusyError, SessionConflictError
+from xuloom.core.storage import atomic_json, history_root
 
 
 class SessionMutationTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class SessionMutationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
-        self.env = {**os.environ, "CODECLAW_DATA_DIR": str(self.base / "data"),
+        self.env = {**os.environ, "XULOOM_DATA_DIR": str(self.base / "data"),
             "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
         environment = patch.dict(os.environ, self.env)
         environment.start(); self.addCleanup(environment.stop)
@@ -47,6 +47,48 @@ class SessionMutationTests(unittest.TestCase):
         manager = SessionManager(cwd=project)
         self.managers.append(manager)
         return manager
+
+    def test_reply_branch_keeps_complete_tool_turn_and_prior_traces_without_runtime(self):
+        raw = {"messages": [
+            {"role": "user", "_uuid": "u1", "content": "first"},
+            {"role": "assistant", "content": [{"type": "text", "text": "checking"}, {"type": "tool_use", "id": "call1", "name": "file_read_tool", "input": {"file_path": str(self.artifact)}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call1", "content": str(self.artifact)}]},
+            {"role": "assistant", "content": "ANSWER_ONE"},
+            {"role": "user", "_uuid": "u2", "content": "FUTURE_PROMPT"},
+            {"role": "assistant", "content": "FUTURE_REPLY"}],
+            "metadata": {"collaboration_mode": "ultra", "goal": {"status": "active"}, "subagents": [{"agent_id": "owned"}], "permissions": {"full": True},
+                "turn_traces": [{"id": "t1", "userMessageId": "u1", "status": "completed", "steps": [], "answer": "ANSWER_ONE", "files": [{"path": "kept.md", "added": 1}]},
+                                {"id": "t2", "userMessageId": "u2", "status": "completed", "steps": [], "answer": "FUTURE_REPLY", "files": [{"path": "future.md", "added": 9}]}]}}
+        atomic_json(self.checkpoint, raw)
+        original = self.checkpoint.read_bytes()
+        # A stale renderer ordinal must not override the stable reply identity.
+        actor.mutate({**self.spec, "action": "fork", "new_id": "branch", "through": {"turn": 9, "text": "ANSWER_ONE", "userId": "u1", "traceId": "t1"}})
+        branch = json.loads((self.destination / "sessions/branch.json").read_bytes())
+        self.assertEqual(self.checkpoint.read_bytes(), original)
+        self.assertEqual(len(branch["messages"]), 4)
+        self.assertNotIn("FUTURE", json.dumps(branch))
+        self.assertIn("branch", branch["messages"][2]["content"][0]["content"])
+        self.assertEqual(branch["metadata"]["collaboration_mode"], "ultra")
+        self.assertEqual(len(branch["metadata"]["turn_traces"]), 1)
+        self.assertEqual(branch["metadata"]["forked_from"]["through_turn"], 1)
+        self.assertEqual(branch["metadata"]["file_changes"][0]["path"], "kept.md")
+        self.assertFalse({"goal", "subagents", "permissions", "collaboration_run", "pending_execution"} & branch["metadata"].keys())
+
+    def test_reply_branch_rejects_stale_or_invalid_anchor_without_changing_source(self):
+        atomic_json(self.checkpoint, {"messages": [{"role": "user", "_uuid": "u1", "content": "first"}, {"role": "assistant", "content": "actual"}], "metadata": {}})
+        original = self.checkpoint.read_bytes()
+        for point in ({"turn": 0, "text": "actual"}, {"turn": True, "text": "actual"}, {"turn": 1, "text": "stale"}, {"turn": 1, "text": "actual", "userId": "wrong"}):
+            with self.assertRaises(ValueError):
+                actor.mutate({**self.spec, "action": "fork", "new_id": "branch", "through": point})
+            self.assertEqual(self.checkpoint.read_bytes(), original)
+            self.assertFalse((self.destination / "sessions/branch.json").exists())
+
+    def test_reply_branch_supports_legacy_list_histories(self):
+        atomic_json(self.checkpoint, [{"role": "user", "content": "one"}, {"role": "assistant", "content": "first"},
+                                     {"role": "user", "content": "two"}, {"role": "assistant", "content": "second"}])
+        actor.mutate({**self.spec, "action": "fork", "new_id": "branch", "through": {"turn": 1, "text": "first"}})
+        branch = json.loads((self.destination / "sessions/branch.json").read_bytes())
+        self.assertEqual([m["content"] for m in branch["messages"]], ["one", "first"])
 
     def assert_moved(self):
         self.assertFalse(self.checkpoint.exists())
@@ -112,9 +154,9 @@ class SessionMutationTests(unittest.TestCase):
             for _ in range(16): stream.write(bytes(range(256)) * 4096)
         (self.source / ".hidden").write_bytes(b"private")
         (self.base / "external.txt").write_bytes(b"outside")
-        skill = self.source / ".codeclaw/skills/private/SKILL.md"
+        skill = self.source / ".xuloom/skills/private/SKILL.md"
         skill.parent.mkdir(parents=True, exist_ok=True); skill.write_text("private skill", encoding="utf-8")
-        atomic_json(self.source / "mcp_servers.json", {"mcpServers": {"fixture": {"command": "fixture"}}})
+        atomic_json(self.source / ".xuloom/mcp_servers.json", {"mcpServers": {"fixture": {"command": "fixture"}}})
         return target, {**self.spec, "target": str(target), "scope": "standalone", "legacy_workspace": {"base": str(base), "id": "legacy"}}, binary
 
     def test_legacy_upgrade_preflights_writer_then_streams_binary_without_copying_private_skills(self):
@@ -131,10 +173,10 @@ class SessionMutationTests(unittest.TestCase):
         self.assertEqual(actor.file_hash(binary), actor.file_hash(target / "nested/result.bin"))
         self.assertTrue(binary.exists()); self.assertEqual((self.source / "user.txt").read_text(), "never move")
         self.assertFalse((target / ".hidden").exists()); self.assertFalse((target / "external.txt").exists())
-        self.assertFalse((target / ".codeclaw/skills").exists())
-        config = json.loads((target / ".codeclaw/capabilities.json").read_bytes())
-        self.assertIn(os.path.normcase(str(self.source / ".codeclaw/skills")), [os.path.normcase(item) for item in config["skill_roots"]])
-        self.assertEqual((target / "mcp_servers.json").read_bytes(), (self.source / "mcp_servers.json").read_bytes())
+        self.assertFalse((target / ".xuloom/skills").exists())
+        config = json.loads((target / ".xuloom/capabilities.json").read_bytes())
+        self.assertIn(os.path.normcase(str(self.source / ".xuloom/skills")), [os.path.normcase(item) for item in config["skill_roots"]])
+        self.assertEqual((target / ".xuloom/mcp_servers.json").read_bytes(), (self.source / ".xuloom/mcp_servers.json").read_bytes())
 
     def test_legacy_upgrade_conflict_preserves_user_edit_and_missing_source_is_not_success(self):
         target, spec, binary = self.legacy_workspace()
@@ -154,7 +196,7 @@ class SessionMutationTests(unittest.TestCase):
 
     def test_legacy_upgrade_process_crashes_recover_at_startup_without_repeating_user_operations(self):
         import shutil
-        from codeclaw.core.session_lock import SessionLock
+        from xuloom.core.session_lock import SessionLock
         target, spec, binary = self.legacy_workspace()
         digest = actor.file_hash(binary)
         fixture = Path(__file__).with_name("fixtures") / "crash_session_mutation.py"
@@ -384,7 +426,7 @@ class SessionMutationTests(unittest.TestCase):
     def test_real_bridge_exit_before_reply_can_recover_the_same_move_without_replaying_it(self):
         fixture = Path(__file__).with_name("fixtures") / "crash_storage_bridge.py"
         request = json.dumps({"id": 1, "method": "storage.mutate", "params": self.spec}) + "\n"
-        env = {**self.env, "CODECLAW_CONFIG_DIR": str(self.base / "config"), "HOME": str(self.base / "home"), "USERPROFILE": str(self.base / "home")}
+        env = {**self.env, "XULOOM_CONFIG_DIR": str(self.base / "config"), "HOME": str(self.base / "home"), "USERPROFILE": str(self.base / "home")}
         target = self.destination / "sessions/shared.json"
         process = subprocess.run([sys.executable, str(fixture), str(target)], input=request,
             capture_output=True, text=True, env=env, cwd=self.source, timeout=30)
@@ -392,7 +434,7 @@ class SessionMutationTests(unittest.TestCase):
         self.assertNotIn('"result"', process.stdout)
         self.assertTrue(self.checkpoint.exists()); self.assertTrue(target.exists())
         # Retry through a fresh production bridge. Its reply describes the recovered commit.
-        retry = subprocess.run([sys.executable, "-m", "codeclaw.desktop.bridge"], input=request,
+        retry = subprocess.run([sys.executable, "-m", "xuloom.desktop.bridge"], input=request,
             capture_output=True, text=True, env=env, cwd=self.source, timeout=30)
         self.assertEqual(retry.returncode, 0, retry.stderr)
         replies = [json.loads(line) for line in retry.stdout.splitlines() if line.startswith("{")]
@@ -404,9 +446,9 @@ class SessionMutationTests(unittest.TestCase):
         import shutil
         fixture = Path(__file__).with_name("fixtures") / "crash_session_mutation.py"
         base = self.base / "workspaces"; base.mkdir()
-        skill = base / ".codeclaw/skills/example/SKILL.md"
+        skill = base / ".xuloom/skills/example/SKILL.md"
         skill.parent.mkdir(parents=True); skill.write_text("private fixture skill", encoding="utf-8")
-        atomic_json(base / "mcp_servers.json", {"mcpServers": {"fixture": {"command": "fixture"}}})
+        atomic_json(base / ".xuloom/mcp_servers.json", {"mcpServers": {"fixture": {"command": "fixture"}}})
         target = base / "chat-private"
         spec = {"action": "create", "project": str(target), "session_id": "private", "scope": "standalone", "workspace_base": str(base), "created": 123}
         request = self.base / "independent.json"; atomic_json(request, spec)
@@ -423,10 +465,10 @@ class SessionMutationTests(unittest.TestCase):
                     self.assertFalse(target.exists()); self.assertFalse((root / "sessions/private.json").exists())
                 else:
                     self.assertEqual((target / "user.txt").read_text(), "preserve during recovery")
-                    self.assertEqual((target / "mcp_servers.json").read_bytes(), (base / "mcp_servers.json").read_bytes())
-                    config = json.loads((target / ".codeclaw/capabilities.json").read_bytes())
+                    self.assertEqual((target / ".xuloom/mcp_servers.json").read_bytes(), (base / ".xuloom/mcp_servers.json").read_bytes())
+                    config = json.loads((target / ".xuloom/capabilities.json").read_bytes())
                     self.assertIn(os.path.normcase(str(skill.parent.parent)), [os.path.normcase(item) for item in config["skill_roots"]])
-                    self.assertFalse((target / ".codeclaw/skills").exists())
+                    self.assertFalse((target / ".xuloom/skills").exists())
                     self.assertEqual(json.loads((root / "sessions/private.json").read_bytes())["revision"], 1)
                 manager.release_writer()
                 if (root / "sessions/private.json").exists():
@@ -439,7 +481,7 @@ class SessionMutationTests(unittest.TestCase):
         project = self.base / "中文目录 😀"; project.mkdir()
         spec = {"action": "create", "project": str(project), "session_id": "unicode", "scope": "project", "created": 123,
             "messages": [{"role": "user", "content": "你好，α 😀"}]}
-        process = subprocess.run([sys.executable, "-m", "codeclaw.core.session_mutation"],
+        process = subprocess.run([sys.executable, "-m", "xuloom.core.session_mutation"],
             input=json.dumps(spec, ensure_ascii=False).encode("utf-8"), capture_output=True,
             env={**self.env, "PYTHONIOENCODING": "gbk"}, timeout=30)
         self.assertEqual(process.returncode, 0, process.stdout.decode("utf-8") + process.stderr.decode("utf-8"))

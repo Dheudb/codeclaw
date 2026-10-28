@@ -4,8 +4,8 @@ const { Attachments } = require("../electron/attachments.cjs");
 const { moveSession } = require("../electron/session-move.cjs");
 
 test("attachments own immutable copies, survive drafts/moves/forks and clean up with their session", async (t) => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-attachment-unit-"));
-  assert(path.isAbsolute(base) && base.startsWith(path.join(os.tmpdir(), "codeclaw-attachment-unit-")));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-attachment-unit-"));
+  assert(path.isAbsolute(base) && base.startsWith(path.join(os.tmpdir(), "xuloom-attachment-unit-")));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const project = path.join(base, "project"); fs.mkdirSync(project);
   fs.mkdirSync(path.join(base, "workspaces"));

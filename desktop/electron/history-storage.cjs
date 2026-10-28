@@ -13,7 +13,7 @@ function rebase(value, from, to) {
   return value;
 }
 function migrateProject(project, data, atomicJSON) {
-  const target = historyRoot(project, data), legacy = path.join(project, ".codeclaw");
+  const target = historyRoot(project, data), legacy = path.join(project, ".xuloom");
   const kinds = ["sessions", "session-index.json", "tool-results", "browser", "shell-tasks", "vcr", "notebooks"];
   if (kinds.some((name) => fs.existsSync(path.join(legacy, name))))
     require("./storage-helper.cjs").mutateSync({ dataRoot: data }, { action: "migrate", project });

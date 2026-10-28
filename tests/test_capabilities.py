@@ -1,4 +1,4 @@
-from codeclaw.core.run_result import RunResult
+from xuloom.core.run_result import RunResult
 import asyncio
 import os
 import tempfile
@@ -6,14 +6,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch, AsyncMock
 
-from codeclaw.skills.registry import SkillRegistry
-from codeclaw.agents.registry import AgentRegistry
-from codeclaw.agents.tasks import SubagentTasks
+from xuloom.skills.registry import SkillRegistry
+from xuloom.agents.registry import AgentRegistry
+from xuloom.agents.tasks import SubagentTasks
+from xuloom.agents.collaboration import policy as collaboration_policy
 
 
 class RegistryTests(unittest.TestCase):
     def setUp(self):
-        environment = patch.dict(os.environ, {"CODECLAW_SKILLS_PATHS": ""})
+        environment = patch.dict(os.environ, {"XULOOM_SKILLS_PATHS": ""})
         environment.start()
         self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
@@ -32,15 +33,15 @@ class RegistryTests(unittest.TestCase):
         return directory
 
     def test_project_precedence_ignores_legacy_disabled_flags(self):
-        project = self.skill(self.project / ".codeclaw" / "skills")
-        self.skill(self.home / ".codeclaw" / "skills")
+        project = self.skill(self.project / ".xuloom" / "skills")
+        self.skill(self.home / ".xuloom" / "skills")
         self.assertEqual(self.registry.resolve("review")["root"], str(project.resolve()))
         self.assertEqual(sum(s["shadowed"] for s in self.registry.discover()), 1)
         self.registry.update(disabled_skills=[self.registry.resolve("review")["id"]])
         self.assertEqual(self.registry.resolve("review")["scope"], "project")
 
     def test_invalid_frontmatter_is_visible_and_not_active(self):
-        root = self.skill(self.project / ".codeclaw" / "skills")
+        root = self.skill(self.project / ".xuloom" / "skills")
         (root / "SKILL.md").write_text("---\nname: wrong-name\ndescription: test\n---\nInstructions", encoding="utf-8")
         self.assertFalse(self.registry.discover()[0]["valid"])
         self.assertFalse(any(s["scope"] == "project" for s in self.registry.active()))
@@ -58,8 +59,8 @@ class RegistryTests(unittest.TestCase):
             self.registry.read_resource("review", "../../secret.txt")
 
     def test_custom_agent_and_required_skills(self):
-        skill = self.skill(self.project / ".codeclaw" / "skills")
-        agents = self.project / ".codeclaw" / "agents"
+        skill = self.skill(self.project / ".xuloom" / "skills")
+        agents = self.project / ".xuloom" / "agents"
         agents.mkdir()
         (agents / "reviewer.md").write_text("---\nname: reviewer\ndescription: Review implementation\ntools: Read, Grep, Glob, Skill\nmodel: local-review-model\nskills: [review]\n---\nOnly review, never edit.", encoding="utf-8")
         registry = AgentRegistry(self.project, self.home)
@@ -87,7 +88,7 @@ class RegistryTests(unittest.TestCase):
                 self.assertTrue((root.parent / "SKILL.md").is_file())
 
     def test_custom_skill_overrides_builtin_and_removal_restores_fallback(self):
-        directory = self.skill(self.project / ".codeclaw" / "skills", name="code-review", body="CUSTOM_REVIEW_INSTRUCTIONS")
+        directory = self.skill(self.project / ".xuloom" / "skills", name="code-review", body="CUSTOM_REVIEW_INSTRUCTIONS")
         custom = self.registry.resolve("code-review")
         self.assertEqual(custom["scope"], "project")
         self.assertIn("CUSTOM_REVIEW_INSTRUCTIONS", self.registry.read("code-review"))
@@ -130,7 +131,7 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
         await manager.close()
 
     async def test_wait_collects_real_results_and_does_not_deliver_twice(self):
-        from codeclaw.agents.agent_tool import AgentTool
+        from xuloom.agents.agent_tool import AgentTool
         manager = SubagentTasks()
         gate = asyncio.Event()
         async def child():
@@ -149,12 +150,12 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
 
 class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
     async def test_one_call_starts_ten_before_any_reply(self):
-        from codeclaw.agents.agent_tool import AgentTool
+        from xuloom.agents.agent_tool import AgentTool
         tool = AgentTool()
         records, entered = {}, []
         def register(record):
             records.setdefault(record["agent_id"], {}).update(record)
-        tool.context = {"register_subagent_record": register}
+        tool.context = {"collaboration": collaboration_policy("auto", {"agent_concurrency": 10}), "register_subagent_record": register}
         gate = asyncio.Event()
         async def child(**kwargs):
             self.assertEqual(len(records), 10, "All cards must be registered before the first request")
@@ -171,12 +172,12 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"问候 {index}/10", report)
 
     async def test_background_batch_wait_and_capacity_are_atomic(self):
-        from codeclaw.agents.agent_tool import AgentTool
+        from xuloom.agents.agent_tool import AgentTool
         tool = AgentTool()
         records, entered = {}, []
         def register(record):
             records.setdefault(record["agent_id"], {}).update(record)
-        tool.context = {"register_subagent_record": register}
+        tool.context = {"collaboration": collaboration_policy("auto", {"agent_concurrency": 10}), "register_subagent_record": register}
         gate = asyncio.Event()
         async def child(**kwargs):
             entered.append(kwargs["child_agent_id"])
@@ -198,12 +199,12 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
         await tool.context["subagent_tasks"].close()
 
     async def test_parallel_batches_share_ten_slots_and_early_cancel_settles_cards(self):
-        from codeclaw.agents.agent_tool import AgentTool
+        from xuloom.agents.agent_tool import AgentTool
         tool = AgentTool()
         rows, entered = {}, []
         def register(record):
             rows.setdefault(record["agent_id"], {}).update(record)
-        tool.context = {"register_subagent_record": register}
+        tool.context = {"collaboration": collaboration_policy("auto", {"agent_concurrency": 10}), "register_subagent_record": register}
         gate = asyncio.Event()
         async def child(**kwargs):
             entered.append(kwargs["child_agent_id"])
@@ -229,12 +230,12 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(rows[identity]["status"] == "cancelled" for identity, result in manager.results.items() if result["status"] == "cancelled"))
 
     async def test_batch_initialization_failure_and_invalid_count(self):
-        from codeclaw.agents.agent_tool import AgentTool, AgentToolInput
+        from xuloom.agents.agent_tool import AgentTool, AgentToolInput
         tool = AgentTool()
         records = {}
         def register(record):
             records.setdefault(record["agent_id"], {}).update(record)
-        tool.context = {"register_subagent_record": register}
+        tool.context = {"collaboration": collaboration_policy("auto", {"agent_concurrency": 10}), "register_subagent_record": register}
         for count in [0, 11, True, 1.5, "10"]:
             with self.assertRaises(ValueError):
                 AgentToolInput(count=count)
@@ -247,9 +248,9 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(record["status"] == "crashed" and record["finished_at"] for record in records.values()))
 
     async def test_model_override_tools_team_registration_and_background(self):
-        from codeclaw.core.engine import QueryEngine
-        from codeclaw.memory.memory import MemoryCompactor
-        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"OPENAI_API_KEY": "test", "CODECLAW_MODEL_PROVIDER": "openai", "CODECLAW_DATA_DIR": str(Path(temp) / "data")}), patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None):
+        from xuloom.core.engine import QueryEngine
+        from xuloom.memory.memory import MemoryCompactor
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"OPENAI_API_KEY": "test", "XULOOM_MODEL_PROVIDER": "openai", "XULOOM_DATA_DIR": str(Path(temp) / "data")}), patch.object(MemoryCompactor, "_resolve_token_encoder", return_value=None):
             original_cwd = os.getcwd()
             os.chdir(temp)
             try:
@@ -262,7 +263,7 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(engine.load_session("empty-draft"))
                 self.assertEqual(engine.session_id, "empty-draft")
                 self.assertEqual(engine.messages, [])
-                from codeclaw.features.plans import get_plan_file_path
+                from xuloom.features.plans import get_plan_file_path
                 self.assertEqual(engine.plan_manager.plan_file_path, get_plan_file_path("empty-draft"))
                 await previous_client.close()
                 await previous_compactor.client.close()

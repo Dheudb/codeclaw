@@ -2,8 +2,8 @@
 from pathlib import Path
 import sys
 import time
-from codeclaw.core.session_lock import SessionLock, SessionBusyError
-from codeclaw.core.storage import data_directory, history_root
+from xuloom.core.session_lock import SessionLock, SessionBusyError
+from xuloom.core.storage import data_directory, history_root
 
 lock = SessionLock(data_directory() / "session-locks", "index_" + history_root(Path(sys.argv[1])).name)
 for attempt in range(201):

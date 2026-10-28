@@ -1,6 +1,6 @@
 # CLI
 
-正式非交互任务使用 `codeclaw exec "任务" --json`；目标续跑与定时唤醒见 [目标与调度](goals-and-schedules.md)。
+正式非交互任务使用 `xuloom exec "任务" --json`；目标续跑与定时唤醒见 [目标与调度](goals-and-schedules.md)。
 
 ## 安装与启动
 
@@ -10,16 +10,16 @@
 python -m venv .venv
 # 激活虚拟环境后
 python -m pip install -e ".[mcp]"
-codeclaw --help
+xuloom --help
 ```
 
-进入要处理的项目目录后运行 `codeclaw`。首次使用 `/model` 配置模型。
+进入要处理的项目目录后运行 `xuloom`。首次使用 `/model` 配置模型。
 从源码安装的 CLI 需要本机 Python；Windows 桌面便携包的用户不需要配置 Python。
 
 Windows 便携包也可以直接启动 CLI。在目标工作目录打开 PowerShell，使用解压目录的实际路径：
 
 ```powershell
-& "C:\path\to\CodeClaw-win32-x64\resources\python\python.exe" -I -m codeclaw.main
+& "C:\path\to\Xuloom-win32-x64\resources\python\python.exe" -I -m xuloom.main
 ```
 
 这个命令使用包内 Python，不依赖构建机器上的解释器路径。
@@ -27,10 +27,10 @@ Windows 便携包也可以直接启动 CLI。在目标工作目录打开 PowerSh
 ## 常用入口
 
 ```text
-codeclaw                         交互式会话
-codeclaw -p "解释这个项目"         带初始任务启动
-codeclaw --continue               恢复当前项目最近一次会话
-codeclaw --resume SESSION_ID      恢复指定会话
+xuloom                         交互式会话
+xuloom -p "解释这个项目"         带初始任务启动
+xuloom --continue               恢复当前项目最近一次会话
+xuloom --resume SESSION_ID      恢复指定会话
 ```
 
 `-p` 是交互式会话的初始消息，不代表执行完自动退出的批处理模式。

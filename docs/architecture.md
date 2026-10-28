@@ -1,7 +1,7 @@
 # 项目结构
 
 ```text
-codeclaw/
+xuloom/
   main.py             CLI 与终端交互入口
   core/               引擎循环、配置、消息、会话与生命周期钩子
   desktop/            桌面 JSON-lines RPC、审批和任务生命周期
@@ -37,12 +37,12 @@ CLI 直接使用 QueryEngine。Windows 便携包通过内置 Python 的隔离模
 
 | 位置 | 数据 |
 |---|---|
-| `~/.codeclaw/config.json` | 模型连接和用户配置 |
-| `<用户数据>/CodeClaw/history/<工作目录标识>/` | CLI/桌面共用的会话、索引、子代理和工具输出；Linux 目录名为 `codeclaw` |
-| `<用户数据>/CodeClaw/session-locks/` | 跨进程写者锁；标记文件长期保留，占用随操作系统文件句柄释放 |
-| `<项目>/.codeclaw/capabilities.json` | 导入的 Skill/Subagent 配置目录 |
+| `~/.xuloom/config.json` | 模型连接和用户配置 |
+| `<用户数据>/Xuloom/history/<工作目录标识>/` | CLI/桌面共用的会话、索引、子代理和工具输出；Linux 目录名为 `xuloom` |
+| `<用户数据>/Xuloom/session-locks/` | 跨进程写者锁；标记文件长期保留，占用随操作系统文件句柄释放 |
+| `<项目>/.xuloom/capabilities.json` | 导入的 Skill/Subagent 配置目录 |
 | `<项目>/mcp_servers.json` | 项目 MCP 服务与凭据 |
-| `<用户数据>/CodeClaw/workbench.json` | 桌面项目列表、会话关联与界面设置 |
+| `<用户数据>/Xuloom/workbench.json` | 桌面项目列表、会话关联与界面设置 |
 | `desktop/dist/` | 前端编译结果 |
 | `desktop/build/python/` | 打包用的内置 Python 与依赖 |
 | `desktop/release/` | Windows 便携应用 |

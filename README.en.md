@@ -1,23 +1,23 @@
-# CodeClaw
+# Xuloom
 
 A local general-purpose Agent framework with **Desktop + CLI on one Python agent engine**.
 
 [中文](README.md) · [Documentation](docs/README.md) · [Development](docs/development.md)
 
-CodeClaw supports independent conversations and projects, with model conversations, file and shell
+Xuloom supports independent conversations and projects, with model conversations, file and shell
 tools, Skills, custom subagents, MCP connections, permissions and session history.
 The desktop uses Electron and React. It is currently a preview.
 
 ## Desktop
 
-[**Download Windows x64 portable**](https://github.com/Dheudb/codeclaw/releases/tag/v0.1.0-beta.2) · [All releases](https://github.com/Dheudb/codeclaw/releases)
+[**Download Windows x64 portable**](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.10) · [All releases](https://github.com/Dheudb/xuloom/releases)
 
-Download `CodeClaw-v0.1.0-beta.2-windows-x64.zip` from Assets, extract the entire
-folder, and run `CodeClaw.exe`. The automatic Source code downloads contain source,
+Download `Xuloom-v0.1.0-beta.2-windows-x64.zip` from Assets, extract the entire
+folder, and run `Xuloom.exe`. The automatic Source code downloads contain source,
 not a runnable application. Keep the `resources` directory beside the executable.
 
 The Windows portable package includes Python and the MCP dependencies. Extract the
-entire package and run `CodeClaw.exe`; users do not install Python or select an
+entire package and run `Xuloom.exe`; users do not install Python or select an
 interpreter. Open a project and configure the model endpoint in Settings.
 Some third-party local MCP servers still require their own Node.js, uv or other runtime.
 
@@ -31,8 +31,8 @@ Use Python 3.12+, Node.js 24+, Git and ripgrep for development. The base CLI sup
 Python 3.9+; the MCP extra needs Python 3.10+.
 
 ```bash
-git clone https://github.com/Dheudb/codeclaw.git
-cd codeclaw
+git clone https://github.com/Dheudb/xuloom.git xuloom
+cd xuloom
 python -m venv .venv
 # Activate .venv using your shell's command
 python -m pip install -e ".[mcp]"
@@ -42,8 +42,8 @@ npm run dev
 ```
 
 Source builds discover the repository's `.venv`; developers can override it with
-`CODECLAW_PYTHON`. Portable packages always use their bundled runtime.
-Run `codeclaw` from the project you want to work on to use the CLI.
+`XULOOM_PYTHON`. Portable packages always use their bundled runtime.
+Run `xuloom` from the project you want to work on to use the CLI.
 
 ## Capabilities
 
@@ -66,7 +66,7 @@ The Feishu integration has been removed.
 
 | Path | Purpose |
 |---|---|
-| `codeclaw/` | Python engine, CLI, desktop bridge, Skills, subagents and protocols |
+| `xuloom/` | Python engine, CLI, desktop bridge, Skills, subagents and protocols |
 | `desktop/` | Electron, React, build scripts and UI tests |
 | `tests/` | Python tests and offline MCP protocol fixtures |
 | `examples/` | Importable Skills and agent definitions |

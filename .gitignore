@@ -13,7 +13,7 @@ mcp_servers.json
 venv/
 env/
 *.log
-.codeclaw/
+.xuloom/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/

@@ -6,13 +6,13 @@ const http = require("node:http");
 const assert = require("node:assert/strict");
 const { spawn, execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
-const python = process.env.CODECLAW_TEST_EXECUTABLE
+const python = process.env.XULOOM_TEST_EXECUTABLE
   ? path.join(
-      path.dirname(process.env.CODECLAW_TEST_EXECUTABLE),
+      path.dirname(process.env.XULOOM_TEST_EXECUTABLE),
       "resources/python/python.exe",
     )
-  : process.env.CODECLAW_PYTHON || "python";
-const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "codeclaw-mcp-e2e-"));
+  : process.env.XULOOM_PYTHON || "python";
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-mcp-e2e-"));
 const project = path.join(fixture, "mcp-project");
 const data = path.join(fixture, "app-data");
 const config = path.join(fixture, "config");
@@ -113,29 +113,29 @@ async function main() {
   await new Promise((resolve) => api.listen(0, "127.0.0.1", resolve));
   const env = {
     ...process.env,
-    CODECLAW_TEST_HEADLESS: "1",
-    CODECLAW_USER_DATA: data,
-    CODECLAW_DATA_DIR: data,
-    CODECLAW_CONFIG_DIR: config,
-    CODECLAW_SKILLS_PATHS: "",
+    XULOOM_TEST_HEADLESS: "1",
+    XULOOM_USER_DATA: data,
+    XULOOM_DATA_DIR: data,
+    XULOOM_CONFIG_DIR: config,
+    XULOOM_SKILLS_PATHS: "",
     USERPROFILE: home,
     HOME: home,
-    CODECLAW_MODEL_PROVIDER: "openai",
+    XULOOM_MODEL_PROVIDER: "openai",
     OPENAI_MODEL: "mcp-test",
     OPENAI_API_KEY: "local-fixture-only",
     OPENAI_BASE_URL: `http://127.0.0.1:${api.address().port}/v1`,
     NO_PROXY: "127.0.0.1,localhost",
   };
-  if (process.env.CODECLAW_TEST_EXECUTABLE) {
-    env.CODECLAW_PYTHON = "Z:\\missing-system-python\\python.exe";
+  if (process.env.XULOOM_TEST_EXECUTABLE) {
+    env.XULOOM_PYTHON = "Z:\\missing-system-python\\python.exe";
     env.PYTHONHOME = "Z:\\missing-system-python";
     env.PYTHONPATH = "Z:\\missing-site-packages";
   }
   delete env.ELECTRON_RUN_AS_NODE;
-  delete env.CODECLAW_DEV_URL;
+  delete env.XULOOM_DEV_URL;
   const app = await electron.launch({
-    executablePath: process.env.CODECLAW_TEST_EXECUTABLE,
-    args: process.env.CODECLAW_TEST_EXECUTABLE ? [] : [root],
+    executablePath: process.env.XULOOM_TEST_EXECUTABLE,
+    args: process.env.XULOOM_TEST_EXECUTABLE ? [] : [root],
     env,
     timeout: 30000,
   });
@@ -194,7 +194,7 @@ async function main() {
         .then((text) => text.includes("credential-redaction-proof"))),
     );
     const stored = JSON.parse(
-      fs.readFileSync(path.join(project, "mcp_servers.json"), "utf8"),
+      fs.readFileSync(path.join(project, ".xuloom", "mcp_servers.json"), "utf8"),
     );
     assert.equal(stored.mcpServers["brave-search"].enabled, false);
     await dialog.getByRole("button", { name: "移除", exact: true }).click();
@@ -226,10 +226,10 @@ async function main() {
     const shared = execFileSync(
       python,
       [
-        ...(process.env.CODECLAW_TEST_EXECUTABLE ? ["-I"] : []),
+        ...(process.env.XULOOM_TEST_EXECUTABLE ? ["-I"] : []),
         "-c",
-        "import sys,json; from codeclaw.protocols.mcp_config import MCPConfigStore; print(json.dumps(MCPConfigStore(sys.argv[1]).snapshot()))",
-        path.join(project, "mcp_servers.json"),
+        "import sys,json; from xuloom.protocols.mcp_config import MCPConfigStore; print(json.dumps(MCPConfigStore(sys.argv[1]).snapshot()))",
+        path.join(project, ".xuloom", "mcp_servers.json"),
       ],
       { cwd: path.resolve(root, ".."), env, windowsHide: true, encoding: "utf8" },
     );
@@ -237,7 +237,7 @@ async function main() {
     assert(shared.includes("offline_search"));
     assert.equal(
       JSON.parse(
-        fs.readFileSync(path.join(project, "mcp_servers.json"), "utf8"),
+        fs.readFileSync(path.join(project, ".xuloom", "mcp_servers.json"), "utf8"),
       ).mcpServers.offline_search.headers.Authorization,
       "Bearer fixture-secret",
     );

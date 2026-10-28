@@ -10,16 +10,16 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from codeclaw.core.session_mutation import mutate
-from codeclaw.core.session_lock import SessionLock, SessionConflictError
-from codeclaw.core.storage import atomic_json
+from xuloom.core.session_mutation import mutate
+from xuloom.core.session_lock import SessionLock, SessionConflictError
+from xuloom.core.storage import atomic_json
 
 
 class DesktopSettingsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name); self.path = self.root / "workbench.json"
-        self.env = {**os.environ, "CODECLAW_DATA_DIR": str(self.root), "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+        self.env = {**os.environ, "XULOOM_DATA_DIR": str(self.root), "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
         environment = patch.dict(os.environ, self.env); environment.start(); self.addCleanup(environment.stop)
 
     def save(self, before, after):
@@ -67,7 +67,7 @@ class DesktopSettingsTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.save({}, {"projects": ["new"]})
         self.assertEqual(self.path.read_bytes(), b"{broken")
         atomic_json(self.path, {"projects": ["old"]}); original = self.path.read_bytes()
-        with patch("codeclaw.desktop.settings.atomic_json", side_effect=OSError("disk failure")):
+        with patch("xuloom.desktop.settings.atomic_json", side_effect=OSError("disk failure")):
             with self.assertRaises(OSError): self.save({"projects": ["old"]}, {"projects": ["new", "old"]})
         self.assertEqual(self.path.read_bytes(), original)
 

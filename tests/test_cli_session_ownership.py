@@ -10,7 +10,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from codeclaw.core.session import SessionManager
+from xuloom.core.session import SessionManager
 
 
 class CliSessionOwnershipTests(unittest.TestCase):
@@ -37,10 +37,10 @@ class CliSessionOwnershipTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 env = {**os.environ, "HOME": str(root / "home"), "USERPROFILE": str(root / "home"),
-                    "CODECLAW_DATA_DIR": str(root / "data"), "CODECLAW_CONFIG_DIR": str(root / "config"),
-                    "CODECLAW_MODEL_PROVIDER": "openai", "OPENAI_API_KEY": "fixture", "OPENAI_MODEL": "fixture",
+                    "XULOOM_DATA_DIR": str(root / "data"), "XULOOM_CONFIG_DIR": str(root / "config"),
+                    "XULOOM_MODEL_PROVIDER": "openai", "OPENAI_API_KEY": "fixture", "OPENAI_MODEL": "fixture",
                     "OPENAI_BASE_URL": "http://127.0.0.1:{}/v1".format(server.server_port), "PYTHONIOENCODING": "utf-8",
-                    "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "CODECLAW_SKILLS_PATHS": ""}
+                    "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "XULOOM_SKILLS_PATHS": ""}
                 with patch.dict(os.environ, env):
                     with SessionManager(cwd=root) as manager:
                         self.assertTrue(manager.save_session_state("deleted-session", [{"role": "user", "content": "OLD_PRIVATE_CONVERSATION"}]))
