@@ -1,4 +1,4 @@
-import asyncio
+import subprocess
 import os
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -105,12 +105,19 @@ class GrepTool(BaseAgenticTool):
         cmd.extend([pattern, search_path])
 
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=40)
+            if self.context.get("confined_sync_worker"):
+                process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                stdout, stderr = process.stdout, process.stderr
+            else:
+                import asyncio
+                process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                try:
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=40)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+                    raise TimeoutError("Grep timed out") from None
 
             if process.returncode == 0:
                 output = stdout.decode("utf-8", errors="replace")
@@ -173,8 +180,7 @@ class GrepTool(BaseAgenticTool):
             else:
                 return f"Ripgrep error (exit {process.returncode}): {stderr.decode('utf-8', errors='replace')}"
 
-        except asyncio.TimeoutError:
-            process.kill()
+        except (TimeoutError, subprocess.TimeoutExpired):
             return "Error: Grep search timed out after 40 seconds. Try a more specific pattern or narrower path."
         except FileNotFoundError:
             return "Error: 'ripgrep' (rg) is not installed. Please install ripgrep for fast codebase search."

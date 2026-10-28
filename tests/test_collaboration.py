@@ -48,8 +48,9 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
                 await self.tool.execute(prompt="hello", count=limit, run_in_background=True)
                 await asyncio.sleep(0)
                 self.assertEqual(len(entered), limit)
-                with self.assertRaisesRegex(ValueError, "at once"):
-                    await self.tool.execute(prompt="overflow")
+                await self.tool.execute(prompt="overflow", run_in_background=True)
+                capacity = json.loads(await self.tool.execute(action="capacity"))
+                self.assertEqual((capacity["active"], capacity["queued"]), (limit, 1))
                 with self.assertRaisesRegex(ValueError, "停止"):
                     self.engine.set_collaboration_mode("solo")
                 gate.set()

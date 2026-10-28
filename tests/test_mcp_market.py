@@ -196,7 +196,8 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tested["status"], "connected")
         self.assertIsNone(desktop.engine)
         from xuloom.core.engine import QueryEngine
-        engine = SimpleNamespace(available_tools={}, latent_tools={}, tool_context={})
+        from xuloom.security.execution import ExecutionSandbox
+        engine = SimpleNamespace(available_tools={}, latent_tools={}, tool_context={}, execution_sandbox=ExecutionSandbox(self.root))
         engine.register_mcp_tools = lambda tools: QueryEngine.register_mcp_tools(engine, tools)
         engine.activate_tools = lambda names: QueryEngine.activate_tools(engine, names)
         desktop.engine = engine
@@ -209,6 +210,12 @@ class MCPConnectionTests(unittest.IsolatedAsyncioTestCase):
             await desktop.reload_mcp()
             self.assertIn("remote_search", engine.latent_tools)
             self.assertNotIn("remote_search", engine.available_tools)
+            engine.execution_sandbox.mode = "workspace"
+            await desktop.reload_mcp()
+            self.assertNotIn("remote_search", engine.latent_tools)
+            engine.execution_sandbox.mode = "host"
+            await desktop.reload_mcp()
+            self.assertIn("remote_search", engine.latent_tools)
             self.store.toggle("remote", False)
             await desktop.reload_mcp()
             self.assertNotIn("remote_search", engine.available_tools)

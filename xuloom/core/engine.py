@@ -141,7 +141,10 @@ class QueryEngine:
         approval_policy=None,
         reasoning_effort=None,
         collaboration_mode=None,
+        execution_mode=None,
     ):
+        from xuloom.security.execution import ExecutionSandbox
+        self.execution_sandbox = ExecutionSandbox(cwd or os.getcwd(), execution_mode or os.environ.get("XULOOM_EXECUTION_MODE", "host"))
         self.collaboration_mode = collaboration_mode or os.environ.get("XULOOM_COLLABORATION_MODE", "auto")
         self.session_cwd = cwd or os.getcwd()
         if reasoning_effort not in {None, "low", "medium", "high", "xhigh"}:
@@ -179,6 +182,7 @@ class QueryEngine:
         self.agent_role = agent_role
         self.context_builder = ContextBuilder()
         self.hook_manager = HookManager()
+        self.hook_manager.execution_sandbox = self.execution_sandbox
         self.session_id = str(uuid.uuid4())
         self.compactor = MemoryCompactor(
             model=self.fallback_model or self.primary_model,
@@ -305,6 +309,7 @@ class QueryEngine:
         
         # Share state across instances for locks and cross-tool persistence
         self.tool_context = {
+            "execution_sandbox": self.execution_sandbox,
             "workflow_completion": WorkflowCompletion(),
             "skill_registry": SkillRegistry(self.session_cwd),
             "agent_registry": AgentRegistry(self.session_cwd),
@@ -859,6 +864,10 @@ class QueryEngine:
     def activate_tools(self, tool_names):
         activated = []
         for name in tool_names or []:
+            if self.execution_sandbox.enabled:
+                from xuloom.security.execution import FILE_TOOLS, CONTROL_TOOLS, PROCESS_TOOLS
+                if name not in FILE_TOOLS | CONTROL_TOOLS | PROCESS_TOOLS:
+                    continue
             tool = self.latent_tools.pop(name, None)
             if not tool:
                 continue
@@ -1098,6 +1107,10 @@ class QueryEngine:
             "Do not use the question tool to duplicate tool approval requests.")]
         from xuloom.agents.collaboration import instructions
         sections.append(instructions(self.tool_context["collaboration"]))
+        if self.execution_sandbox.enabled:
+            sections.append("System workspace isolation: file tools, command_tool and repl_tool run in restricted OS processes. "
+                "Network access and unconfined MCP/browser/LSP/legacy shell tools are blocked. Do not attempt host fallbacks. "
+                "Only the authorized working directory is writable; runtime libraries are read-only. Approval cannot bypass isolation.")
         if self.tool_context.get("agent_system_prompt"):
             sections.append("# Assigned agent role\n" + self.tool_context["agent_system_prompt"])
         if self.tool_context.get("workspace_moves"):
@@ -1151,17 +1164,21 @@ class QueryEngine:
 
     def _get_effective_tools(self) -> dict:
         """Return tool set filtered by current mode (plan / coordinator)."""
+        tools = self.available_tools
+        if self.execution_sandbox.enabled:
+            from xuloom.security.execution import FILE_TOOLS, CONTROL_TOOLS, PROCESS_TOOLS
+            tools = {name: tool for name, tool in tools.items() if name in FILE_TOOLS | CONTROL_TOOLS | PROCESS_TOOLS}
         if self.coordinator_mode:
             return {
-                name: tool for name, tool in self.available_tools.items()
+                name: tool for name, tool in tools.items()
                 if name in self.COORDINATOR_ALLOWED_TOOLS
             }
         if self.plan_manager.get_mode() == "plan":
             return {
-                name: tool for name, tool in self.available_tools.items()
+                name: tool for name, tool in tools.items()
                 if name not in self.PLAN_MODE_BLOCKED_TOOLS
             }
-        return self.available_tools
+        return tools
 
     def _get_coordinator_system_prompt_addon(self) -> str:
         if not self.coordinator_mode:
@@ -1703,7 +1720,7 @@ class QueryEngine:
 
         callback = self.tool_context.get("capability_event")
         if callback and saved:
-            callback({"type": "subagent_status", "agent": {k: v for k, v in record.items() if k not in {"role_definition", "pending_messages"}}})
+            callback({"type": "subagent_status", "agent": {k: v for k, v in record.items() if k not in {"role_definition", "pending_messages", "dispatch", "api_base_url"}}})
         return saved
 
     def _build_message_statistics(self) -> dict:
@@ -2075,6 +2092,9 @@ class QueryEngine:
             
     async def start_protocols(self, sys_print=print):
         self._assert_open()
+        if self.execution_sandbox.enabled:
+            sys_print("System workspace isolation: external MCP and LSP processes are disabled")
+            return
         # 1. Start LSP Daemon Support
         self.lsp_manager = LSPManager()
         self.tool_context["lsp_manager"] = self.lsp_manager
@@ -2505,7 +2525,9 @@ class QueryEngine:
             callback = self.tool_context.get("capability_event")
             if callback:
                 callback({"type": "command_status", "command": row})
-        return CommandSessions(artifact_directory(self.session_cwd) / sid / "commands", notify)
+        manager = CommandSessions(artifact_directory(self.session_cwd) / sid / "commands", notify)
+        manager.execution_sandbox = self.execution_sandbox
+        return manager
 
     def load_session(self, sid: str) -> bool:
         if self.has_active_turn() or any(not task.done() for task in self.tool_context["subagent_tasks"].tasks.values()):
@@ -2523,6 +2545,10 @@ class QueryEngine:
             self.messages = msgs
             self._sync_message_context()
             metadata = state.get("metadata", {})
+            execution_mode = metadata.get("execution_mode", "host")
+            if execution_mode not in {"host", "workspace"}:
+                raise ValueError("Invalid saved execution isolation mode")
+            self.execution_sandbox.mode = execution_mode
             self.set_collaboration_mode(metadata.get("collaboration_mode", "auto"), persist=False)
             if metadata.get("collaboration_run"):
                 run = copy.deepcopy(metadata["collaboration_run"])
@@ -2601,6 +2627,8 @@ class QueryEngine:
             for worker in self.subagent_registry:
                 if worker.get("status") == "running":
                     worker["status"] = "interrupted"
+                elif worker.get("status") == "queued":
+                    worker["phase"] = "awaiting_resume"
             self.team_manager.load_state(metadata.get("team", {}))
             self.ultraplan_manager.load_state(metadata.get("ultraplan", {}))
             self.coordinator_mode = metadata.get("coordinator_mode", False)
@@ -2629,6 +2657,7 @@ class QueryEngine:
 
     def _build_session_metadata(self) -> dict:
         return {
+            "execution_mode": self.execution_sandbox.mode,
             "collaboration_mode": self.collaboration_mode,
             "collaboration_run": copy.deepcopy(self.tool_context.get("collaboration_run")),
             "goal": self.goal,

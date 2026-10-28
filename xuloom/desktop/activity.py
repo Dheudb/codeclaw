@@ -42,8 +42,12 @@ def restore_activity(raw, cwd):
         if not re.fullmatch(r"[a-zA-Z0-9_-]+", agent_id):
             continue
         worker = dict(record)
+        for key in ("dispatch", "api_base_url", "role_definition"):
+            worker.pop(key, None)
         if worker.get("status") == "running":
             worker["status"] = "interrupted"
+        elif worker.get("status") == "queued":
+            worker["phase"] = "awaiting_resume"
         workers.append(worker)
         activity.append({"id": "agent:" + agent_id, "name": "subagent", "agentId": agent_id,
                          "agentRole": worker.get("agent_role"), "status": worker.get("status", "interrupted"),

@@ -37,6 +37,13 @@ class ToolSearchTool(BaseAgenticTool):
         active_tools = self.context.get("engine_available_tools", {}) or {}
         latent_tools = self.context.get("latent_tools_registry", {}) or {}
         activate_tools = self.context.get("activate_tools")
+        isolation = self.context.get("execution_sandbox")
+        if isolation and isolation.enabled:
+            from xuloom.security.execution import FILE_TOOLS, CONTROL_TOOLS, PROCESS_TOOLS
+            permitted = FILE_TOOLS | CONTROL_TOOLS | PROCESS_TOOLS
+            active_tools = {name: tool for name, tool in active_tools.items() if name in permitted}
+            latent_tools = {name: tool for name, tool in latent_tools.items() if name in permitted}
+            activate = [name for name in activate if name in permitted]
 
         catalog = {}
         for name, tool in active_tools.items():

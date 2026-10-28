@@ -25,11 +25,13 @@ if launch["ok"]:
     ids = [row["agent_id"] for row in launch["data"]["agents"]]
     while True:
         state = await engine.agents("wait", agent_ids=ids, timeout_ms=30000)
-        if not state["ok"] or all(not row["executing"] for row in state["data"]["agents"]):
+        if not state["ok"] or all(row["status"] not in {"queued", "running"} for row in state["data"]["agents"]):
             break
 ```
 
 调用方需要配置审批处理器或明确选择审批策略；此示例不自动授予权限。检查 worker 的 `status` 和 `receipt` 判断真实执行结果。
+
+超出并发数的有效任务自动 FIFO 排队，不需要模型拆批。`capacity` 包含 `active`、`queued`、`available`、`auto_queue` 和 `queue_limit`。`executing=false` 也可能表示尚在排队，不能据此当作完成。重启后 `queued/awaiting_resume` 通过 `resume_queue(agent_ids=[...])` 明确恢复；曾经运行的 `interrupted` 任务不自动重放。详见 [排队与执行隔离](queue-and-isolation.md)。
 
 `spawn` 的可选 `request_id` 支持 1–128 个字母、数字、`_`、`-`。相同参数重复提交返回原记录与 `reused=true`，重启恢复后也不会再启动。相同 ID 修改参数会拒绝。注册中断只保存部分批次时明确报错，调用方应检查实际记录，不能盲目重新发起。省略 ID 的独立调用每次都是新任务。
 

@@ -95,6 +95,7 @@ export type SessionCatalog = {
   view: { sort: "recent" | "oldest" | "name" | "created" };
 };
 export type InitialSession = {
+  executionMode?: "host" | "workspace";
   collaborationMode?: "solo" | "auto" | "ultra";
   fileChanges?: FileChange[];
   scope?: "project" | "standalone";

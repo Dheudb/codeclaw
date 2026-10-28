@@ -120,7 +120,7 @@ class TaskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.completed(), [])
 
     async def test_cancel_and_limit(self):
-        manager = SubagentTasks(limit=1)
+        manager = SubagentTasks(limit=1, queue_limit=0)
         gate = asyncio.Event()
         manager.launch("one", gate.wait())
         with self.assertRaises(ValueError):
@@ -189,12 +189,12 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(records), 10)
             await asyncio.sleep(0)
             self.assertEqual(len(entered), 10)
-            with self.assertRaises(ValueError):
-                await tool.execute(prompt="extra", count=2, run_in_background=True)
-            self.assertEqual(len(records), 10, "Rejected batch must not allocate any workers")
+            await tool.execute(prompt="extra", count=2, run_in_background=True)
+            self.assertEqual(len(records), 12)
+            self.assertEqual(len(tool.context["subagent_tasks"].pending), 2)
             gate.set()
             report = await tool.execute(action="wait")
-            self.assertIn("Completed: 10", report)
+            self.assertIn("Completed: 12", report)
             self.assertEqual(tool.context["subagent_tasks"].completed(), [])
         await tool.context["subagent_tasks"].close()
 
@@ -217,11 +217,11 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(entered), 10)
             gate.set()
             outcomes = await asyncio.gather(*batches, return_exceptions=True)
-            self.assertEqual(sum(isinstance(outcome, ValueError) for outcome in outcomes), 1,
-                             "Foreground launches must also respect host capacity")
-            self.assertEqual(len(set(entered)), 10)
-            await tool.execute(prompt="你好", count=10)
+            self.assertEqual(sum(isinstance(outcome, ValueError) for outcome in outcomes), 0,
+                             "Excess foreground work must queue until slots free")
             self.assertEqual(len(set(entered)), 20)
+            await tool.execute(prompt="你好", count=10)
+            self.assertEqual(len(set(entered)), 30)
             await tool.execute(prompt="你好", count=10, run_in_background=True)
             manager = tool.context["subagent_tasks"]
             # Cancel without yielding after allocation: child code never starts.
@@ -285,7 +285,7 @@ class EngineSubagentTests(unittest.IsolatedAsyncioTestCase):
                     return RunResult("review complete", "completed", True)
                 with patch.object(QueryEngine, "run", child_run):
                     response = await tool.execute(prompt="Review", subagent_type="explore", model="override-model", run_in_background=True)
-                    self.assertIn("Background subagent started", response)
+                    self.assertIn("Background subagent accepted", response)
                     await asyncio.sleep(0)
                     self.assertEqual(child_models, ["override-model"])
                     self.assertNotIn("file_write_tool", child_tools[0])

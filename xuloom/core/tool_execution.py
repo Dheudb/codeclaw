@@ -146,6 +146,8 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
             if tool_name not in effective_tools:
                 raise KeyError(f"Tool '{tool_name}' is not available in current mode.")
             handler = effective_tools[tool_name]
+            confinement = self.execution_sandbox
+            confinement.check_tool(tool_name)
             if hasattr(handler, "input_schema"):
                 handler.input_schema(**tool_inputs)
             permission = await self.permission_manager.authorize(
@@ -198,7 +200,11 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
                         if row.get("tool_use_id") != tool_id:
                             self.in_progress_tools.pop(row.get("tool_use_id"), None)
                 handler_invoked = True
-                raw_result = await handler(**tool_inputs)
+                from xuloom.security.execution import FILE_TOOLS
+                if confinement.enabled and tool_name in FILE_TOOLS:
+                    raw_result = await confinement.tool(tool_name, tool_inputs, self.tool_context)
+                else:
+                    raw_result = await handler(**tool_inputs)
                 res_text = serialize_tool_result(
                     raw_result,
                     spill_threshold_chars=tool_inputs.get("max_chars", 100000) if tool_name == "skill_tool" else 5000,

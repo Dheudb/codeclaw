@@ -313,6 +313,8 @@ class HookManager:
         command = str(hook.get("command", "")).strip()
         if not command:
             return CommandHookResult(stderr="No command specified in hook.", exit_code=1)
+        if getattr(getattr(self, "execution_sandbox", None), "enabled", False):
+            return CommandHookResult(stderr="Command hooks are disabled in system workspace isolation; no host execution occurred.", exit_code=2)
 
         timeout = timeout or hook.get("timeout") or HOOK_EXECUTION_TIMEOUT_S
         json_input = json.dumps(payload, ensure_ascii=False, default=str)

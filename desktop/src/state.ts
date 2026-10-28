@@ -141,11 +141,11 @@ export function applyEvent(
         status: worker.status, agentId: worker.agent_id, agentRole: worker.agent_role || worker.agent_type,
         input: { description: worker.description, prompt: worker.task }, result: worker.result,
         startedAt: worker.started_at || session.tools.find((tool) => tool.id === "agent:" + worker.agent_id)?.startedAt || Date.now(),
-        ...(worker.status !== "running" ? { finishedAt: worker.finished_at || Date.now() } : {}) });
+        ...(!["running", "queued"].includes(worker.status) ? { finishedAt: worker.finished_at || Date.now() } : { finishedAt: undefined }) });
       return {
         ...session,
         workers: previous ? session.workers.map((item) => item.agent_id === worker.agent_id ? worker : item) : [...session.workers, worker],
-        tools: tools.map((tool) => tool.agentId === worker.agent_id && worker.status !== "running" && ["running", "waiting", "queued"].includes(tool.status)
+        tools: tools.map((tool) => tool.agentId === worker.agent_id && !["running", "queued"].includes(worker.status) && ["running", "waiting", "queued"].includes(tool.status)
           ? { ...tool, status: worker.status === "cancelled" ? "cancelled" : "interrupted", finishedAt: Date.now() } : tool),
       };
     }

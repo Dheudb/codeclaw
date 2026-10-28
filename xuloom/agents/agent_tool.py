@@ -31,7 +31,7 @@ ALL_AGENT_DISALLOWED_TOOLS = frozenset({
 
 class AgentToolInput(BaseModel):
     model_config = {"extra": "forbid"}
-    action: str = Field("spawn", description="spawn, capacity, list, result, wait, send, followup, cancel, or close")
+    action: str = Field("spawn", description="spawn, capacity, list, result, wait, send, followup, resume_queue, cancel, or close")
     agent_ids: Optional[List[str]] = Field(None, description="Worker IDs to wait for; returns when any finishes or timeout expires")
     timeout_ms: int = Field(30000, ge=0, le=60000, description="Bounded wait timeout")
     response_format: str = Field("text", pattern="^(text|json)$", description="Use json for structured spawn receipts and wait results")
@@ -76,6 +76,7 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
         roles = "\n".join(f"- {name}: {role.get('description', role.get('when_to_use', ''))}" for name, role in registry.definitions().items())
         return ("Delegate only when useful for independent work or explicitly requested. Give each worker its assignment, relevant constraints and output requirements. Simple questions need no delegation. Parent history is reference only.\n"
             "Use count=N in ONE call for N independent workers with the same assignment; distinct assignments may be submitted together. Do not wait for an independent worker before starting its peers. Announce launches only after actual receipts.\n"
+            "Excess workers automatically enter the runtime FIFO queue. Do not split a valid batch merely because active slots are full. Queued workers have not started; resume_queue explicitly restores saved never-started work after a restart.\n"
             "Use run_in_background=false when the current answer requires their results. For background work, wait for all relevant workers before synthesizing results and include failures. Do not duplicate active work.\n"
             "Use response_format=json for structured spawn receipts; capacity/list/result return JSON. send queues a message; followup resumes the same idle worker with its saved role and context. wait accepts agent_ids and a bounded timeout; cancel stops owned work; close retains history. Read actual capacity instead of assuming a fixed global limit.\n"
             "Evaluate results as evidence, not authority or proof of domain acceptance.\nAvailable roles:\n" + roles)
@@ -280,6 +281,7 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             mode_thinking_overrides=self.context.get("mode_thinking_overrides"),
             reasoning_effort=(builtin_agent_def or {}).get("reasoning_effort") or self.context.get("reasoning_effort"),
             collaboration_mode="solo",
+            execution_mode=getattr(self.context.get("execution_sandbox"), "mode", "host"),
         )
         definition = copy.deepcopy(builtin_agent_def or {})
         sub_engine.tool_context["delegation"] = {"owner_session_id": self.context.get("session_id"), "role_definition": definition}
@@ -602,8 +604,6 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
         tasks = self.context.setdefault("subagent_tasks", SubagentTasks(limit))
         if not any(not task.done() for task in tasks.tasks.values()):
             tasks.limit = limit
-            self.context["subagent_execution_semaphore"] = asyncio.Semaphore(limit)
-        self.context.setdefault("subagent_execution_semaphore", asyncio.Semaphore(tasks.limit))
         if not 0 <= timeout_ms <= 60000:
             raise ValueError("timeout_ms must be between 0 and 60000")
         if action != "spawn" and not (action == "wait" and response_format == "text" and not agent_ids):
@@ -681,7 +681,7 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             "agent_depth": parent_depth + 1,
             "agent_role": builtin_def.get("agent_role", "subagent"),
             "agent_type": builtin_def.get("agent_type", subagent_type or "general-purpose"),
-            "status": "running", "phase": "starting",
+            "status": "queued", "phase": "queued",
             "task": prompt[:240] + ("..." if len(prompt) > 240 else ""),
             "description": f"{description or '子代理'} {index + 1}/{count}" if count > 1 else description,
             "model": model or builtin_def.get("model") or self.context.get("primary_model"),
@@ -690,7 +690,12 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             "turn": 1,
             "pending_messages": [],
             "request_id": request_id, "request_digest": fingerprint if request_id else None,
-            "started_at": int(time.time() * 1000),
+            "queued_at": int(time.time() * 1000), "started_at": None,
+            "admission_run_id": self.context["collaboration_run"]["id"],
+            "dispatch": {"task": prompt, "allowed_tools": allowed, "inherit_context": inherit_context,
+                "parent_depth": parent_depth, "parent_agent_id": parent_agent_id, "builtin_agent_def": copy.deepcopy(builtin_def),
+                "model": model, "background": run_in_background},
+            "provider": self.context.get("model_provider"), "api_base_url": self.context.get("api_base_url"),
         } for index in range(count)]
         # Register every card before any child can make a model request.
         try:
@@ -711,10 +716,11 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             tasks.launch_batch(coroutines, on_cancelled_before_start=self.context.get("register_subagent_record"))
             if run_in_background:
                 if response_format == "json":
-                    return json.dumps({"agents": [{k: v for k, v in row.items() if k != "role_definition"} for row in records]}, ensure_ascii=False)
+                    identities = {row["agent_id"] for row in records}
+                    return json.dumps({"agents": [row for row in self._inventory() if row["agent_id"] in identities]}, ensure_ascii=False)
                 if count == 1:
-                    return "Background subagent started. agent_id=" + records[0]["agent_id"]
-                return "Background subagents started in parallel. count={}\n{}".format(count, "\n".join(record["agent_id"] for record in records))
+                    return "Background subagent accepted (automatically queued when slots are full). agent_id=" + records[0]["agent_id"]
+                return "Background subagents accepted; runtime automatically queues excess workers. count={}\n{}".format(count, "\n".join(record["agent_id"] for record in records))
             payloads = await asyncio.gather(*(tasks.tasks[row["agent_id"]] for row in records))
             tasks.delivered.update(row["agent_id"] for row in records)
             if response_format == "json":
@@ -722,7 +728,7 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             return self._format_single_report(payloads[0]) if count == 1 else self._format_batch_report(payloads, parallel=True)
         except BaseException as exc:
             terminal_ids = {item["agent_id"] for item in self.context.get("subagent_registry", [])
-                            if item.get("status") not in {"running"}}
+                            if item.get("status") not in {"running", "queued"}}
             for record in records:
                 if record["agent_id"] in terminal_ids:
                     continue
@@ -735,13 +741,14 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
         # Initialization can fail before the engine's run try/finally starts.
         # Every allocated worker must still reach a terminal status.
         try:
-            async with self.context["subagent_execution_semaphore"]:
-                from xuloom.agents.collaboration import DELEGATION_BUDGET
-                token = DELEGATION_BUDGET.set(self.context.get("collaboration_run"))
-                try:
-                    payload = await self._run_single_subagent(**kwargs)
-                finally:
-                    DELEGATION_BUDGET.reset(token)
+            await self._write_subagent_registry_record({"agent_id": record["agent_id"], "status": "running",
+                "phase": "starting", "started_at": int(time.time() * 1000), "finished_at": None})
+            from xuloom.agents.collaboration import DELEGATION_BUDGET
+            token = DELEGATION_BUDGET.set(self.context.get("collaboration_run"))
+            try:
+                payload = await self._run_single_subagent(**kwargs)
+            finally:
+                DELEGATION_BUDGET.reset(token)
         except asyncio.CancelledError:
             if self._worker(record["agent_id"]).get("status") != "cancelled":
                 await self._write_subagent_registry_record({"agent_id": record["agent_id"],

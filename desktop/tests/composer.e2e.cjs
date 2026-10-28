@@ -28,7 +28,7 @@ const add = () => page.getByRole("button", {name:"添加工具与模式",exact:t
   page = await app.firstWindow(); page.setDefaultTimeout(30000); page.on("pageerror",e=>errors.push(e.message));
   await page.waitForFunction(()=>document.querySelector(".new-task")?.disabled===false);
   await add().click(); const menu = page.getByRole("menu", {name:"添加工具与模式",exact:true});
-  assert.equal(await menu.getByRole("menuitem").count(),7);
+  assert.equal(await menu.getByRole("menuitem").count(),8);
   await page.keyboard.press("ArrowDown"); await page.keyboard.press("Escape"); assert.equal(await menu.count(),0);
   assert.equal(await add().evaluate(el=>el===document.activeElement),true);
   await add().click(); await menu.getByRole("menuitem",{name:/计划模式/}).click();

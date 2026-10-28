@@ -28,7 +28,7 @@ const attachments = new Attachments(catalog, nativeImage);
 let workspaceQueue = Promise.resolve();
 let catalogRevision = 0;
 const engineMethods = new Set([
-  "collaboration.get", "collaboration.set",
+  "collaboration.get", "collaboration.set", "agents.resume_queue", "execution.get", "execution.set",
   "goal.get", "goal.create", "goal.run", "goal.control",
   "schedule.list", "schedule.add", "schedule.control",
   "prompt",
@@ -265,7 +265,7 @@ async function updateRow(row, patch) {
   return mutateSessions(catalog.updateSpec(row, patch));
 }
 function running(source) {
-  return source.busy || !!source.attachmentImport || [...source.workers.values()].includes("running") || [...(source.commands?.values() || [])].includes("running");
+  return source.busy || !!source.attachmentImport || [...source.workers.values()].some(status => ["running", "queued"].includes(status)) || [...(source.commands?.values() || [])].includes("running");
 }
 async function disposeSession(id) {
   const source = sessions.get(id);
@@ -639,7 +639,7 @@ app.whenReady().then(() => {
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
     if (quitting) throw new Error("正在保存并退出，请稍候");
-    if (/^(app\.initialize|layout\.save|attachments\.import|collaboration\.set|permissions\.set|config\.(save|select|delete)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|layout\.save|attachments\.import|execution\.set|collaboration\.set|permissions\.set|config\.(save|select|delete)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;

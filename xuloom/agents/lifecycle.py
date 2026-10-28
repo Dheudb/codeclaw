@@ -33,13 +33,18 @@ class AgentLifecycle:
         for saved in self.context.get("subagent_registry", []):
             row = copy.deepcopy(saved)
             task = tasks.tasks.get(row["agent_id"])
-            row["executing"] = bool(task and not task.done())
-            if row.get("status") == "running" and not row["executing"]:
+            row["pending"] = bool(task and not task.done())
+            row["executing"] = row["agent_id"] in tasks.running
+            if row.get("status") == "running" and not row["pending"]:
                 row["status"] = "interrupted"
+            if row.get("status") == "queued" and not row["pending"]:
+                row["phase"] = "awaiting_resume"
             row["pending_message_count"] = len(row.pop("pending_messages", []))
             commands = self.context.get("command_sessions")
             row["running_commands"] = sum(r["owner"] == row["agent_id"] and r["status"] == "running" for r in commands.records.values()) if commands else 0
             row.pop("role_definition", None)
+            row.pop("dispatch", None)
+            row.pop("api_base_url", None)
             rows.append(row)
         return rows
 
@@ -65,12 +70,15 @@ class AgentLifecycle:
         tasks = self.context["subagent_tasks"]
         encode = lambda data: json.dumps(data, ensure_ascii=False)
         if action == "capacity":
-            active = sum(not t.done() for t in tasks.tasks.values())
+            active = len(tasks.running)
             return encode({"limit": tasks.limit, "active": active, "available": max(0, tasks.limit - active),
+                           "queued": len(tasks.pending), "auto_queue": True, "queue_limit": tasks.queue_limit,
                            "max_batch_size": 10, "resume": True, "messages": True, "wait_timeout_ms": 60000, "collaboration": self.context.get("collaboration"),
                            "delegation_usage": self.context.get("collaboration_run")})
         if action == "list":
             return encode({"agents": self._inventory()})
+        if action == "resume_queue":
+            return await self._resume_queue(agent_ids)
         if action == "wait":
             ids = agent_ids or ([agent_id] if agent_id else list(tasks.tasks))
             for identity in ids:
@@ -79,7 +87,7 @@ class AgentLifecycle:
             if live:
                 await asyncio.wait(live, timeout=timeout_ms / 1000, return_when=asyncio.FIRST_COMPLETED)
             rows = [r for r in self._inventory() if r["agent_id"] in ids]
-            tasks.delivered.update(r["agent_id"] for r in rows if not r["executing"])
+            tasks.delivered.update(r["agent_id"] for r in rows if r["status"] not in {"queued", "running"})
             return encode({"agents": rows, "timed_out": bool(live) and all(not t.done() for t in live)})
         row = self._worker(agent_id)
         active = tasks.tasks.get(agent_id)
@@ -113,7 +121,7 @@ class AgentLifecycle:
             message = {"id": str(uuid.uuid4()), "text": prompt, "at": int(time.time() * 1000)}
             await self._write_subagent_registry_record({"agent_id": agent_id, "pending_messages": pending + [message]})
             return encode({"agent_id": agent_id, "message_id": message["id"], "queued": True,
-                           "executing": running, "requires_followup": not running})
+                           "executing": agent_id in tasks.running, "requires_followup": not running})
         if action != "followup":
             raise ValueError("Unknown subagent action")
         if running:
@@ -133,6 +141,12 @@ class AgentLifecycle:
         admit(self.context, 1)
         record = {**row, "status": "running", "phase": "starting", "finished_at": None,
                   "turn": row.get("turn", 1) + 1, "background": run_in_background}
+        record.update(status="queued", phase="queued", queued_at=int(time.time() * 1000), started_at=None,
+            admission_run_id=self.context["collaboration_run"]["id"],
+            provider=self.context.get("model_provider"), api_base_url=self.context.get("api_base_url"),
+            dispatch={"task": prompt, "allowed_tools": definition.get("allowed_tools"), "inherit_context": False,
+                "parent_depth": row.get("agent_depth", 1) - 1, "parent_agent_id": row.get("parent_agent_id"),
+                "builtin_agent_def": definition, "model": row.get("model"), "background": run_in_background, "resume": True})
         await self._write_subagent_registry_record(record)
         work = self._run_registered_subagent(record, task=prompt, allowed_tools=definition.get("allowed_tools"),
             inherit_context=False, parent_depth=row.get("agent_depth", 1) - 1,
@@ -144,6 +158,46 @@ class AgentLifecycle:
             await tasks.tasks[agent_id]
             tasks.delivered.add(agent_id)
         return encode(next(r for r in self._inventory() if r["agent_id"] == agent_id))
+
+    async def _resume_queue(self, identities=None):
+        from xuloom.agents.collaboration import require_delegation, admit
+        require_delegation(self.context)
+        tasks = self.context["subagent_tasks"]
+        if identities and len(identities) != len(set(identities)):
+            raise ValueError("Queue identities must be unique")
+        rows = [self._worker(identity) for identity in identities] if identities else [r for r in self.context.get("subagent_registry", []) if r.get("status") == "queued"]
+        pending = []
+        for row in rows:
+            live = tasks.tasks.get(row["agent_id"])
+            if live and not live.done():
+                continue
+            if row.get("status") != "queued" or not row.get("dispatch"):
+                raise ValueError("Only saved, never-started queued workers can be resumed; running/interrupted work is not replayed")
+            if row.get("provider") != self.context.get("model_provider") or (row.get("api_base_url") or "") != (self.context.get("api_base_url") or ""):
+                raise ValueError("Restore the queue's original provider and API address before resuming")
+            arguments = copy.deepcopy(row["dispatch"])
+            if arguments.pop("resume", False):
+                arguments["resume_state"] = self._resume_state(row)
+            pending.append((row, arguments))
+        tasks.check_capacity(len(pending))
+        current = self.context.get("collaboration_run", {}).get("id")
+        charge = sum(row.get("admission_run_id") != current for row, _ in pending)
+        if charge:
+            admit(self.context, charge)
+        coroutines = {}
+        try:
+            for row, arguments in pending:
+                await self._write_subagent_registry_record({"agent_id": row["agent_id"], "status": "queued", "phase": "queued",
+                    "admission_run_id": self.context["collaboration_run"]["id"]})
+                coroutines[row["agent_id"]] = self._run_registered_subagent(row, **arguments,
+                    child_agent_id=row["agent_id"], description=row.get("description", ""))
+            tasks.launch_batch(coroutines, on_cancelled_before_start=self.context.get("register_subagent_record"))
+        except BaseException:
+            for coroutine in coroutines.values():
+                coroutine.close()
+            raise
+        ids = {r["agent_id"] for r in rows}
+        return json.dumps({"agents": [r for r in self._inventory() if r["agent_id"] in ids], "resumed": len(pending)}, ensure_ascii=False)
 
     def _mailbox(self, identity):
         return copy.deepcopy(self._worker(identity).get("pending_messages", []))

@@ -29,6 +29,8 @@ def parser():
         item.add_argument("--json", action="store_true", help="JSON events and one final receipt on stdout; diagnostics on stderr")
         item.add_argument("--permission", choices=("ask", "full"), default="ask", help="ask never waits on stdin; required approvals are rejected explicitly")
         item.add_argument("--skill", action="append", default=[])
+        item.add_argument("--sandbox", choices=("host", "workspace"), default=None,
+                          help="OS execution isolation, separate from approvals; workspace fails closed if unavailable")
         item.add_argument("--collaboration", choices=("solo", "auto", "ultra"), default=None,
                           help="Delegation policy, independent of reasoning and permissions; resume keeps the saved mode unless supplied")
         if name == "exec": item.add_argument("prompt", nargs="?", help="Task text, or - to read UTF-8 stdin")
@@ -87,6 +89,9 @@ async def open_engine(args, emit):
                 if client: await client.close()
             engine.permission_manager.approval_policy.set_mode(args.permission)
         engine.require_writer()
+        if getattr(args, "sandbox", None) is not None:
+            engine.execution_sandbox.mode = args.sandbox
+            engine.persist_session_state()
         if getattr(args, "collaboration", None) is not None:
             engine.set_collaboration_mode(args.collaboration)
         await engine.start_protocols(lambda _: None)

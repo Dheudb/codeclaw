@@ -64,6 +64,7 @@ class DesktopBridge:
         self.pending_kinds = {}
         self.approval_policy = ApprovalPolicy()
         self.collaboration_mode = "auto"
+        self.execution_mode = "host"
         self.resume_id = None
         self.loaded_skills = []
         self.protocol_task = None
@@ -107,6 +108,8 @@ class DesktopBridge:
         servers = []
         for server in self.mcp_store.snapshot():
             state = statuses.get(server["name"], {}) if not changed else {}
+            if self.execution_mode == "workspace":
+                state = {"status": "blocked", "error": "系统隔离模式不启动未受限的 MCP 服务"}
             servers.append({**server, "connection": state, "status": "disabled" if server.get("enabled") is False else state.get("status", "pending")})
         return {"servers": servers, "runtime": runtime_info(), "needsReload": changed, "builtinSearch": "DDGS 多搜索源", "project": str(self.cwd)}
 
@@ -213,7 +216,7 @@ class DesktopBridge:
         from xuloom.tools.lsp_tool import LspTool
         from xuloom.protocols.lsp_manager import LSPManager
         engine = QueryEngine(cwd=str(self.cwd), permission_handler=self.permission, approval_policy=self.approval_policy,
-                             collaboration_mode=self.collaboration_mode)
+                             collaboration_mode=self.collaboration_mode, execution_mode=self.execution_mode)
         if self.resume_id and not engine.load_session(self.resume_id):
             await engine.aclose()
             raise ValueError("Session could not be resumed")
@@ -260,7 +263,7 @@ class DesktopBridge:
                         await engine.mcp_bridge.cleanup()
                     engine.mcp_bridge = MCPBridge(str(self.mcp_store.path))
                     self.mcp_stamp = self.config_stamp()
-                    tools = await engine.mcp_bridge.load_and_connect()
+                    tools = {} if engine.execution_sandbox.enabled else await engine.mcp_bridge.load_and_connect()
                     self.mcp_names = engine.register_mcp_tools(tools)
                     engine.activate_tools(active_mcp.intersection(self.mcp_names))
                     self.emit({"type": "mcp_changed", "snapshot": self.mcp_snapshot()})
@@ -389,6 +392,39 @@ class DesktopBridge:
             return self.config()
         if method == "collaboration.get":
             return {"collaborationMode": self.collaboration_mode}
+        if method in {"execution.get", "execution.set"}:
+            from xuloom.security.execution import ExecutionSandbox
+            if method == "execution.set":
+                self.require_idle()
+                mode = params.get("mode")
+                candidate = ExecutionSandbox(str(self.cwd), mode)
+                if candidate.enabled and not candidate.status()["available"]:
+                    raise ValueError(candidate.status()["message"])
+                if self.engine:
+                    self.engine.require_writer()
+                    if self.engine.sandbox_manager.active_sandbox:
+                        raise ValueError("请先退出工作区副本隔离，再切换系统执行隔离")
+                    previous = self.engine.execution_sandbox.mode
+                    self.engine.execution_sandbox.mode = mode
+                    if not self.engine.persist_session_state():
+                        self.engine.execution_sandbox.mode = previous
+                        raise OSError("执行隔离设置保存失败")
+                    if candidate.enabled:
+                        await asyncio.gather(*(server.stop() for server in getattr(getattr(self.engine, "lsp_manager", None), "servers", {}).values()))
+                    await self.reload_mcp()
+                elif self.resume_id:
+                    from xuloom.core.session import SessionManager
+                    with SessionManager(cwd=str(self.cwd)) as manager:
+                        manager.acquire_writer(self.resume_id)
+                        raw = manager.load_session_state(self.resume_id)
+                        if not raw.get("_valid"):
+                            raise ValueError("Session could not be resumed")
+                        raw["metadata"]["execution_mode"] = mode
+                        if not manager.save_session_state(self.resume_id, raw["messages"], raw["metadata"]):
+                            raise OSError("执行隔离设置保存失败")
+                self.execution_mode = mode
+            result = ExecutionSandbox(str(self.cwd), self.execution_mode).status()
+            return {"executionMode": self.execution_mode, **result}
         if method == "collaboration.set":
             self.require_idle()
             from xuloom.agents.collaboration import policy
@@ -433,6 +469,8 @@ class DesktopBridge:
         if method == "mcp.market":
             return await self.mcp_market.search(params.get("query", ""), params.get("source", "builtin"), params.get("cursor", ""))
         if method in {"mcp.install", "mcp.save", "mcp.toggle", "mcp.remove", "mcp.reload", "mcp.test"}:
+            if self.execution_mode == "workspace" and method == "mcp.test":
+                raise ValueError("系统隔离模式不启动未受限的 MCP 服务；未在宿主执行。")
             self.require_idle()
             if self.mcp_testing:
                 raise ValueError("Wait for the MCP connection test to finish")
@@ -479,7 +517,8 @@ class DesktopBridge:
             self.file_changes = saved_changes + [item for item in legacy_changes(activity, self.cwd) if os.path.normcase(item["path"]) not in saved_paths]
             traces = raw.get("metadata", {}).get("turn_traces", []) if isinstance(raw, dict) else []
             self.collaboration_mode = raw.get("metadata", {}).get("collaboration_mode", "auto") if isinstance(raw, dict) else "auto"
-            return {"project": str(self.cwd), "persistedId": sid, "collaborationMode": self.collaboration_mode, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages, traces), "activity": activity, "workers": workers, "fileChanges": self.file_changes}
+            self.execution_mode = raw.get("metadata", {}).get("execution_mode", "host") if isinstance(raw, dict) else "host"
+            return {"project": str(self.cwd), "persistedId": sid, "executionMode": self.execution_mode, "collaborationMode": self.collaboration_mode, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages, traces), "activity": activity, "workers": workers, "fileChanges": self.file_changes}
         if method == "files.read":
             return preview_file(self.cwd, params.get("path"), self.file_changes)
         if method == "files.list":
@@ -582,9 +621,12 @@ class DesktopBridge:
                 for result in results:
                     if isinstance(result, BaseException): raise result
             return True
-        if method == "agents.cancel":
+        if method in {"agents.cancel", "agents.resume_queue"}:
             if not self.engine:
-                raise ValueError("No active engine")
+                await self.ensure_engine(write=True)
+            self.engine.require_writer()
+            if method == "agents.resume_queue":
+                return json.loads(await self.engine.available_tools["agent_tool"].execute(action="resume_queue", agent_ids=params.get("agentIds")))
             return json.loads(await self.engine.available_tools["agent_tool"].execute(action="cancel", agent_id=params["agentId"]))
         if method in {"agents.list", "agents.capacity"}:
             await self.ensure_engine()

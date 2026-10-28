@@ -69,7 +69,7 @@ class ReplTool(BaseAgenticTool):
         timeout_seconds: int = 20,
     ) -> dict:
         normalized = str(language or "").strip().lower()
-        run_cwd = os.path.abspath(cwd) if cwd else os.getcwd()
+        run_cwd = os.path.abspath(cwd or self.context.get("session_cwd") or os.getcwd())
         process = None
         if normalized == "python":
             interpreter = sys.executable
@@ -87,6 +87,14 @@ class ReplTool(BaseAgenticTool):
 
         temp_path = ""
         try:
+            isolation = self.context.get("execution_sandbox")
+            if isolation and isolation.enabled:
+                argv = [interpreter, "-I", "-X", "utf8", "-c", code] if normalized == "python" else [interpreter, "-e", code]
+                exit_code, stdout_bytes, stderr_bytes = await isolation.communicate(argv=argv, cwd=run_cwd, timeout=float(timeout_seconds))
+                return build_tool_result(ok=exit_code == 0,
+                    content=stdout_bytes.decode("utf-8", "replace") + stderr_bytes.decode("utf-8", "replace"),
+                    metadata={"language": normalized, "cwd": run_cwd, "exit_code": exit_code, "execution_isolation": isolation.mode},
+                    is_error=exit_code != 0)
             with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=suffix, delete=False) as f:
                 f.write(code)
                 temp_path = f.name

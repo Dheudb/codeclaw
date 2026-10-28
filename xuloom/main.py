@@ -415,7 +415,7 @@ async def _interactive_model_switch(engine, tui):
     console.print(f"[dim]Configuration saved to {CONFIG_FILE}[/dim]")
 
 
-async def interactive_loop(resume_session_id: str = None, initial_prompt: str = None, auto_approve: bool = False, collaboration_mode=None):
+async def interactive_loop(resume_session_id: str = None, initial_prompt: str = None, auto_approve: bool = False, collaboration_mode=None, execution_mode=None):
     load_config_into_env()
     print_welcome_screen()
 
@@ -490,7 +490,7 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
         tui.pending_auto_commit = False
 
     from xuloom.security.permissions import ApprovalPolicy
-    engine = QueryEngine(permission_handler=permission_prompt, approval_policy=ApprovalPolicy("full" if auto_approve else "ask"))
+    engine = QueryEngine(permission_handler=permission_prompt, approval_policy=ApprovalPolicy("full" if auto_approve else "ask"), execution_mode=execution_mode)
 
     def require_idle_session():
         if (any(not task.done() for task in engine.tool_context["subagent_tasks"].tasks.values())
@@ -500,9 +500,9 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
 
     async def fresh_session():
         nonlocal engine
-        policy, cwd, collaboration = engine.permission_manager.approval_policy, engine.session_cwd, engine.collaboration_mode
+        policy, cwd, collaboration, isolation = engine.permission_manager.approval_policy, engine.session_cwd, engine.collaboration_mode, engine.execution_sandbox.mode
         await engine.aclose()
-        engine = QueryEngine(permission_handler=permission_prompt, approval_policy=policy, cwd=cwd, collaboration_mode=collaboration)
+        engine = QueryEngine(permission_handler=permission_prompt, approval_policy=policy, cwd=cwd, collaboration_mode=collaboration, execution_mode=isolation)
         await engine.start_protocols(sys_print=agent_events_callback)
 
     if not engine.is_configured:
@@ -519,9 +519,6 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
 
     def agent_events_callback(text: str):
         console.print(text)
-
-    with console.status("[bold cyan]Bootstrapping Advanced Protocols...", spinner="dots"):
-        await engine.start_protocols(sys_print=agent_events_callback)
 
     # Auto-resume if requested via CLI flag
     if resume_session_id:
@@ -547,6 +544,11 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
 
     if collaboration_mode is not None:
         engine.set_collaboration_mode(collaboration_mode)
+    if execution_mode is not None:
+        engine.execution_sandbox.mode = execution_mode
+        engine.persist_session_state()
+    with console.status("[bold cyan]Bootstrapping Advanced Protocols...", spinner="dots"):
+        await engine.start_protocols(sys_print=agent_events_callback)
 
     last_interrupt_time = 0
     _pending_initial_prompt = initial_prompt
@@ -881,6 +883,7 @@ def main():
     parser.add_argument("prompt", nargs="*", help="Optional initial prompt (positional)")
     parser.add_argument("--collaboration", choices=("solo", "auto", "ultra"), default=None,
                         help="Subagent collaboration policy; independent of reasoning effort")
+    parser.add_argument("--sandbox", choices=("host", "workspace"), default=None, help="OS execution isolation; workspace fails closed if unavailable")
     args = parser.parse_args()
 
     resume_id = None
@@ -910,6 +913,7 @@ def main():
             initial_prompt=initial_prompt,
             auto_approve=args.auto_approve,
             collaboration_mode=args.collaboration,
+            execution_mode=args.sandbox,
         ))
     except KeyboardInterrupt:
         pass

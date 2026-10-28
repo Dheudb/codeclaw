@@ -70,7 +70,7 @@ def instructions(profile):
     return (f"# Collaboration: {mode}\n{principle}\n"
             "Never launch workers to fill a quota. Do not duplicate the same assignment unless the user explicitly asks for repeated independent trials. "
             "Give workers self-contained assignments instead of serially relaying every step. Wait for relevant results before final synthesis. "
-            "There is no automatic queue: an over-capacity batch is rejected; split it and wait for capacity. "
+            "The runtime automatically queues accepted workers beyond the concurrency limit and starts them FIFO as slots free. Do not manually split a batch solely for concurrency. Queued workers consume admission quota but reserve no output tokens until they execute. "
             "Collaboration does not change tool permissions, reasoning effort or recursion limits. "
             f"Runtime limits per user turn: {profile['concurrency']} simultaneous workers, {profile['max_delegations']} admitted child executions, "
             f"{profile['output_tokens']} shared child output tokens, up to {profile['request_output_tokens']} per model response "

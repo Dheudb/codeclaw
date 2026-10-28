@@ -23,9 +23,9 @@ Xuloom 提供普通对话、文件与命令工具、Skills、自定义子代理�
 
 ## 桌面版
 
-[**下载 Windows x64 便携版**](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.10) · [所有版本](https://github.com/Dheudb/xuloom/releases)
+[**下载 Windows x64 便携版**](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.11) · [所有版本](https://github.com/Dheudb/xuloom/releases)
 
-在 Release 的 Assets 中下载 `Xuloom-v0.1.0-beta.10-windows-x64.zip`，完整解压后运行 `Xuloom.exe`。
+在 Release 的 Assets 中下载 `Xuloom-v0.1.0-beta.11-windows-x64.zip`，完整解压后运行 `Xuloom.exe`。
 请下载成品 ZIP；GitHub 自动提供的 Source code 是源码。程序依赖同目录的 `resources`，不能只复制 EXE。
 Windows 便携包内置 Python 运行时和 MCP 依赖。
 **使用便携包不需要安装 Python、Node.js，也不需要选择解释器。**
@@ -68,7 +68,7 @@ C:\path\to\xuloom\.venv\Scripts\xuloom.exe
 |---|---|
 | 桌面与 CLI | 共用引擎、模型配置和同一项目的会话格式 |
 | Skills | 项目/用户/导入目录发现，校验、输入 `$` 选择和按需加载资源 |
-| 子代理 | 内置/自定义角色、并行批次、容量查询、消息投递、按 ID 续接及取消 |
+| 子代理 | 内置/自定义角色、超额自动排队、容量查询、消息投递、按 ID 续接及取消 |
 | MCP | 精选目录、官方注册表浏览、自定义 stdio / Streamable HTTP、连接测试和启停 |
 | 联网 | 内置 DuckDuckGo 搜索、静态网页读取，以及外部搜索 MCP |
 | 工具与审批 | 文件读写、命令执行、规划、权限卡片和 Git 变更查看 |
@@ -76,7 +76,7 @@ C:\path\to\xuloom\.venv\Scripts\xuloom.exe
 - 模型接入支持 Anthropic Messages 和 OpenAI 兼容 Chat Completions；不同模型的工具调用、推理和多模态能力需要单独验证。
 - 当前源码为会话增加跨进程单写者锁与检查点版本校验：另一个入口可以查看历史，执行或修改历史前需要原写者释放。没有实时同步，也不能通过删除锁文件接管。此项属于尚未发布的通用化改造，不能据此认定 beta.2 下载包已具备。
 - 默认提示词和内置子代理保持领域中立；编程流程通过可选的 `code-development` Skill 加载，普通文件修改不再自动触发编程检查。
-- 工作区隔离使用 worktree 或目录副本，不限制进程、网络或宿主文件访问，不是操作系统安全沙箱。
+- worktree／目录副本仍只隔离文件改动。当前开发源码另提供可选的 Windows x64 LPAC 系统执行隔离：桌面输入框“＋ → 执行隔离”，CLI 使用 `--sandbox workspace`。工具进程只能写工作目录与私有临时目录，运行时只读、不授予网络能力；MCP、浏览器、LSP、命令 Hook 和旧版 Shell 入口禁用，不退回宿主执行。Linux/macOS 后端尚未提供。详见 [排队与执行隔离](docs/queue-and-isolation.md)。
 - MCP OAuth 登录、旧版 SSE 连接、插件市场、自动更新和签名安装器尚未实现。
 - Windows 便携包已经内置运行时；macOS/Linux 桌面分发尚未提供。
 - 飞书集成已经移除，项目以本地桌面和 CLI 使用为主。

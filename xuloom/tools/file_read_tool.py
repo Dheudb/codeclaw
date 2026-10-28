@@ -25,7 +25,7 @@ class FileReadToolInput(BaseModel):
 
 class FileReadTool(BaseAgenticTool):
     name = "file_read_tool"
-    description = "Reads a file from the local filesystem. You can access any file directly by using this tool. Assume this tool is able to read all files on the machine."
+    description = "Read an authorized local file. Access remains subject to tool permissions and the current system execution isolation policy."
     input_schema = FileReadToolInput
     is_read_only = True
     risk_level = "low"

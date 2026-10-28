@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Paperclip, Target, Lightbulb, Puzzle, Store, Settings2, Clock3, Check } from "lucide-react";
+import { Plus, Paperclip, Target, Lightbulb, Puzzle, Store, Settings2, Clock3, Check, ShieldCheck } from "lucide-react";
 
 export default function ComposerMenu({ sessionId, disabled, plan, action }: {
   sessionId: string; disabled: boolean; plan: boolean;
-  action: (name: "files" | "goal" | "plan" | "skills" | "mcp" | "settings" | "schedule") => void;
+  action: (name: "files" | "goal" | "plan" | "skills" | "mcp" | "settings" | "schedule" | "isolation") => void;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null);
@@ -20,6 +20,7 @@ export default function ComposerMenu({ sessionId, disabled, plan, action }: {
     { name: "goal", label: "目标", description: "设置持续执行的目标、验收条件与预算", icon: Target },
     { name: "plan", label: "计划模式", description: plan ? "退出计划模式" : "先制定计划，再决定如何执行", icon: Lightbulb },
     { name: "schedule", label: "定时唤醒", description: "稍后向此会话投递任务", icon: Clock3 },
+    { name: "isolation", label: "执行隔离", description: "限制工具进程的文件、网络和进程访问", icon: ShieldCheck },
     { name: "skills", label: "Skills", description: "选择挂载的技能，也可输入 $", icon: Puzzle },
     { name: "mcp", label: "MCP 市场", description: "连接和管理外部工具", icon: Store },
     { name: "settings", label: "模型设置", description: "管理 API 供应商与模型", icon: Settings2 },
@@ -38,7 +39,7 @@ export default function ComposerMenu({ sessionId, disabled, plan, action }: {
     {open && <div className="composer-add-menu" role="menu" aria-label="添加工具与模式">
       <div className="composer-menu-heading">添加</div>
       {options.map(({ name, label, description, icon: Icon }, index) => <button type="button" role="menuitem" key={name}
-        className={index === 4 ? "composer-menu-divider" : ""} onClick={() => { setOpen(false); trigger.current?.focus(); action(name); }}>
+        className={name === "skills" ? "composer-menu-divider" : ""} onClick={() => { setOpen(false); trigger.current?.focus(); action(name); }}>
         <Icon size={17} /><span>{label}</span><small>{description}</small>{name === "plan" && plan && <Check size={14} />}
       </button>)}
     </div>}

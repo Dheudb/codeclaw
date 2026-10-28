@@ -34,6 +34,7 @@ import { InteractionCard, SettingsDialog } from "./Dialogs";
 import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
 import ComposerMenu from "./ComposerMenu";
+import ExecutionDialog from "./ExecutionDialog";
 import GoalPanel from "./GoalPanel";
 import McpDialog from "./McpDialog";
 import SessionSidebar from "./SessionSidebar";
@@ -62,6 +63,7 @@ export default function App() {
   const [permissionChanging, setPermissionChanging] = useState(false);
   const [goalDialog, setGoalDialog] = useState<"goal" | "all" | null>(null);
   const [collaborationChanging, setCollaborationChanging] = useState(false);
+  const [executionDialog, setExecutionDialog] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelTab, setPanelTab] = useState("skills");
@@ -154,6 +156,7 @@ export default function App() {
   useEffect(() => {
     if (activeId) window.xuloom.invoke("session.activate", { session: activeId }).catch(onError);
     setGoalDialog(null);
+    setExecutionDialog(false);
     if (activeId) window.xuloom.invoke("goal.get", { session: activeId }).then((goal) => update({ goal }, activeId)).catch(onError);
   }, [activeId]);
   useEffect(() => {
@@ -264,6 +267,7 @@ export default function App() {
     } });
   }
   function composerAction(name: string) {
+    if (name === "isolation") { setExecutionDialog(true); return; }
     if (name === "files") fileInput.current?.click();
     else if (name === "goal" || name === "schedule") {
       if (active?.attachments.length) { onError("请先发送附件，或移除附件后设置目标与唤醒。"); return; }
@@ -390,7 +394,7 @@ export default function App() {
       (skill) => skill.valid && skill.enabled && !skill.shadowed,
     ) || [];
   const runningWorkers =
-    active?.workers.filter((worker) => worker.status === "running").length || 0;
+    active?.workers.filter((worker) => worker.status === "running" || worker.status === "queued" && worker.phase !== "awaiting_resume").length || 0;
   const runningCommands = Object.values(active?.commands || {}).filter((command) => command.status === "running").length;
 
   return (
@@ -683,7 +687,7 @@ export default function App() {
               }}
             >
               <LoaderCircle size={13} className="spin" />
-              {runningWorkers} 个子代理正在执行任务
+              {runningWorkers} 个子代理执行或排队中
               <ChevronRight size={13} />
             </button>
           )}
@@ -784,7 +788,7 @@ export default function App() {
           <div className="composer-caption">
             <span>
               <ShieldCheck size={12} />
-              {active?.permissionMode === "full" ? "完全访问：默认自动执行，遵守显式权限规则" : "请求批准：需要审批的工具会先确认"}
+              {active?.executionMode === "workspace" ? "系统隔离 · 工具进程仅可写工作目录，禁止网络" : active?.permissionMode === "full" ? "宿主执行 · 完全访问：遵守显式权限规则" : "宿主执行 · 请求批准：需要审批的工具会先确认"}
             </span>
             <span>
               <span className="capability-count">{enabledSkills.length} Skills 可用 ·{" "}
@@ -799,6 +803,7 @@ export default function App() {
           </div>
         </div>
       </main>
+      {executionDialog && active && <ExecutionDialog key={active.id} invoke={invoke} close={() => setExecutionDialog(false)} saved={(mode) => update({ executionMode: mode })} onError={onError} />}
       {goalDialog && active && <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setGoalDialog(null); }}>
         <section className="dialog composer-goal-dialog" role="dialog" aria-modal="true" aria-label={goalDialog === "goal" ? "目标模式设置" : "目标与定时唤醒"}
           onKeyDown={(event) => {

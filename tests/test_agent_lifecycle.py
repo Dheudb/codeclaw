@@ -33,6 +33,41 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.engines.append(engine)
         return engine
 
+    async def test_saved_queue_resumes_only_never_started_ids(self):
+        import copy
+        started = []
+        gate = asyncio.Event()
+        async def hold(child, user_input, sys_print_callback):
+            started.append(child.agent_id)
+            await gate.wait()
+            return RunResult("done", "completed", True)
+        with patch.object(QueryEngine, "run", hold):
+            await self.tool.execute(prompt="hello", count=10, run_in_background=True, response_format="json")
+            while len(started) < 3:
+                await asyncio.sleep(0.01)
+            original = self.engine.session_manager.load_session_state(self.engine.session_id)
+            queued = [row["agent_id"] for row in original["metadata"]["subagents"] if row["status"] == "queued"]
+            running = list(started)
+            self.assertEqual(len(queued), 7)
+            await self.engine.tool_context["subagent_tasks"].close()
+            self.engine.session_manager.save_session_state(self.engine.session_id, original["messages"], copy.deepcopy(original["metadata"]))
+            self.engine.session_manager.release_writer()
+            restored = self.make_engine()
+            self.assertTrue(restored.load_session(self.engine.session_id))
+            recovered = restored.available_tools["agent_tool"]
+            self.assertTrue(all(row["phase"] == "awaiting_resume" for row in restored.subagent_registry if row["agent_id"] in queued))
+            with self.assertRaisesRegex(ValueError, "never-started"):
+                await recovered.execute(action="resume_queue", agent_ids=running)
+            gate.set()
+            result = json.loads(await recovered.execute(action="resume_queue", agent_ids=queued))
+            self.assertEqual(result["resumed"], 7)
+            again = json.loads(await recovered.execute(action="resume_queue", agent_ids=queued))
+            self.assertEqual(again["resumed"], 0)
+            await asyncio.gather(*restored.tool_context["subagent_tasks"].tasks.values())
+            self.assertEqual(set(started[3:]), set(queued))
+            self.assertFalse(set(started[3:]) & set(running))
+            self.assertTrue(all("dispatch" not in row for row in json.loads(await recovered.execute(action="list"))["agents"]))
+
     async def asyncTearDown(self):
         for engine in self.engines:
             await engine.tool_context["subagent_tasks"].close()
@@ -185,9 +220,11 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await self.tool.execute(prompt="hold", count=10, run_in_background=True)
             await asyncio.sleep(0)
             self.assertEqual(len(entered), 20)
-            with self.assertRaises(ValueError):
-                await self.tool.execute(prompt="overflow", count=5, run_in_background=True)
-            self.assertEqual(len(self.engine.subagent_registry), 20)
+            await self.tool.execute(prompt="overflow", count=5, run_in_background=True)
+            await asyncio.sleep(0)
+            capacity = json.loads(await self.tool.execute(action="capacity"))
+            self.assertEqual((capacity["active"], capacity["queued"]), (24, 1))
+            self.assertEqual(len(self.engine.subagent_registry), 25)
             gate.set()
             await self.tool.execute(action="wait")
 

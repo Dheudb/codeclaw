@@ -17,6 +17,7 @@ class CommandSessions:
         self.root = Path(root).resolve()
         self.records = {}
         self.on_status = on_status
+        self.execution_sandbox = None
 
     def _get(self, identity, owner):
         row = self.records.get(identity)
@@ -37,10 +38,20 @@ class CommandSessions:
             options["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             options["start_new_session"] = True
-        process = await (asyncio.create_subprocess_exec(*argv, **options) if argv else asyncio.create_subprocess_shell(command, **options))
+        launch = None
+        try:
+            if self.execution_sandbox and self.execution_sandbox.enabled:
+                launch = self.execution_sandbox.prepare(argv=argv, command=command, cwd=cwd, timeout_ms=timeout_ms)
+                process = await asyncio.create_subprocess_exec(*launch.argv, **options)
+            else:
+                process = await (asyncio.create_subprocess_exec(*argv, **options) if argv else asyncio.create_subprocess_shell(command, **options))
+        except BaseException:
+            if launch:
+                launch.close()
+            raise
         row = {"id": identity, "owner": owner, "cwd": str(Path(cwd).resolve()), "argv": argv,
                "command": command, "status": "running", "exit_code": None, "started_at": int(time.time() * 1000),
-               "stdin_open": True, "process": process, "input_lock": asyncio.Lock()}
+               "stdin_open": True, "process": process, "input_lock": asyncio.Lock(), "sandbox_launch": launch}
         self.records[identity] = row
         async def pump(stream, name):
             size = 0
@@ -74,6 +85,8 @@ class CommandSessions:
                 if row["status"] == "running":
                     row["status"] = "completed" if process.returncode == 0 else "failed"
                 row["finished_at"] = int(time.time() * 1000)
+                if launch:
+                    launch.close()
                 self._save(row)
         row["monitor"] = asyncio.create_task(monitor())
         try:
@@ -88,6 +101,13 @@ class CommandSessions:
         process = row["process"]
         if process.returncode is not None:
             return
+        if row.get("sandbox_launch"):
+            row["sandbox_launch"].cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(process.wait()), 25)
+                return
+            except asyncio.TimeoutError:
+                pass
         if os.name == "nt":
             killer = await asyncio.create_subprocess_exec("taskkill", "/PID", str(process.pid), "/T", "/F",
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
@@ -160,7 +180,7 @@ class CommandSessions:
 
     @staticmethod
     def snapshot(row):
-        return {k: v for k, v in row.items() if k not in {"process", "monitor", "input_lock"}}
+        return {k: v for k, v in row.items() if k not in {"process", "monitor", "input_lock", "sandbox_launch"}}
 
     def _save(self, row):
         from xuloom.core.storage import atomic_json

@@ -250,7 +250,7 @@ export default function CapabilityPanel({
                         <div className="card-meta">
                           <span>{worker.agent_type || "子代理"} · {worker.model || "继承主模型"}</span>
                           <span>
-                            {worker.status === "running"
+                            {worker.status === "queued" ? worker.phase === "awaiting_resume" ? "等待恢复队列" : "排队中" : worker.status === "running"
                               ? worker.phase === "starting" ? "启动中" : "执行中"
                               : worker.status === "completed"
                                 ? "已完成"
@@ -260,7 +260,9 @@ export default function CapabilityPanel({
                           </span>
                         </div>
                         {worker.started_at && <div className="card-meta"><span>启动 {new Date(worker.started_at).toLocaleTimeString("zh-CN", { hour12: false })}</span></div>}
-                        {worker.status === "running" && worker.background && (
+                        {worker.status === "queued" && worker.phase === "awaiting_resume" && <button className="text-button" disabled={session.busy}
+                          onClick={() => invoke("agents.resume_queue", { agentIds: [worker.agent_id] }).then(refresh).catch(onError)}>恢复排队</button>}
+                        {["queued", "running"].includes(worker.status) && (
                           <button
                             className="text-button"
                             onClick={() =>
