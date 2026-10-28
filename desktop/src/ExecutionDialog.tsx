@@ -12,7 +12,7 @@ export default function ExecutionDialog({ invoke, close, saved, onError }: {
     try { const value = await invoke("execution.set", { mode }); setStatus(value); saved(mode); close(); }
     catch (error) { onError(error); } finally { setPending(false); }
   }
-  return <div className="dialog-backdrop" onMouseDown={(event) => { if (!pending && event.target === event.currentTarget) close(); }}>
+  return <div className="overlay" onMouseDown={(event) => { if (!pending && event.target === event.currentTarget) close(); }}>
     <section className="dialog" role="dialog" aria-modal="true" aria-label="执行隔离设置" onKeyDown={(e) => { if (e.key === "Escape" && !pending) close(); }}>
       <header><h2>执行隔离</h2><button aria-label="关闭执行隔离设置" disabled={pending} onClick={close}><X size={17} /></button></header>
       <p>与工具审批独立。完全访问也不会绕过系统隔离。</p>

@@ -17,7 +17,7 @@ export default function ComposerMenu({ sessionId, disabled, plan, action }: {
   }, [open]);
   const options = [
     { name: "files", label: "文件和图片", description: "添加附件，也支持拖入或粘贴", icon: Paperclip },
-    { name: "goal", label: "目标", description: "设置持续执行的目标、验收条件与预算", icon: Target },
+    { name: "goal", label: "目标", description: "将下一条消息设为持续执行的目标", icon: Target },
     { name: "plan", label: "计划模式", description: plan ? "退出计划模式" : "先制定计划，再决定如何执行", icon: Lightbulb },
     { name: "schedule", label: "定时唤醒", description: "稍后向此会话投递任务", icon: Clock3 },
     { name: "isolation", label: "执行隔离", description: "限制工具进程的文件、网络和进程访问", icon: ShieldCheck },

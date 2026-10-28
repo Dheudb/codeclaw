@@ -669,7 +669,10 @@ class DesktopBridge:
             goal = await goals.run(engine, emit)
             result = goal.get("last_result") or {}
             self.emit({"type": "final", "text": result.get("text", ""), "result": result})
-            if goal["status"] != "completed": self.emit({"type": "turn_error", "message": goal["reason"]})
+            if goal["status"] in {"paused", "cancelled", "interrupted"}:
+                self.emit({"type": "turn_cancelled"})
+            elif goal["status"] not in {"completed", "awaiting_review"}:
+                self.emit({"type": "turn_error", "message": goal["reason"]})
         except asyncio.CancelledError:
             self.emit({"type": "turn_cancelled"})
         except Exception as error:

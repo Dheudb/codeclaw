@@ -23,9 +23,9 @@ Xuloom 提供普通对话、文件与命令工具、Skills、自定义子代理�
 
 ## 桌面版
 
-[**下载 Windows x64 便携版**](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.11) · [所有版本](https://github.com/Dheudb/xuloom/releases)
+[**下载 Windows x64 便携版**](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.12) · [所有版本](https://github.com/Dheudb/xuloom/releases)
 
-在 Release 的 Assets 中下载 `Xuloom-v0.1.0-beta.11-windows-x64.zip`，完整解压后运行 `Xuloom.exe`。
+在 Release 的 Assets 中下载 `Xuloom-v0.1.0-beta.12-windows-x64.zip`，完整解压后运行 `Xuloom.exe`。
 请下载成品 ZIP；GitHub 自动提供的 Source code 是源码。程序依赖同目录的 `resources`，不能只复制 EXE。
 Windows 便携包内置 Python 运行时和 MCP 依赖。
 **使用便携包不需要安装 Python、Node.js，也不需要选择解释器。**

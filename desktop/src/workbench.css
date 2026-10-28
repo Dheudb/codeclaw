@@ -116,13 +116,26 @@ a, .markdown-link, .inline-file-link { color: var(--link); text-decoration-color
 .composer-toolbar .send-options { gap: 5px; min-width: 0; }
 .send-options select { border: 0; background: transparent; color: var(--text-secondary); font-size: 12px; padding: 6px 3px; }
 .send-options .collaboration-picker { width: 93px; }
-.send-options .model-picker { width: auto; max-width: 190px; min-width: 80px; text-overflow: ellipsis; }
+.send-options .model-picker { field-sizing: content; width: auto; max-width: 190px; min-width: 0; text-overflow: ellipsis; }
 .composer .permission-picker.full-access { color: #d36b35; background: transparent; }
 .composer .send-button.stop { background: var(--action); color: white; }
 .composer-goal-dialog { padding: 0; max-width: 620px; width: calc(100vw - 40px); max-height: 86vh; display: flex; flex-direction: column; }
 .composer-goal-dialog > header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid var(--line); }
 .composer-goal-dialog > header button { border: 0; background: transparent; padding: 5px; }
 .composer-goal-dialog .goal-panel { padding: 20px 24px; }
+.composer-goal-dialog > header { margin-bottom: 0; flex-shrink: 0; }
+.composer-goal-dialog .goal-panel { min-height: 0; overflow-y: auto; }
+.composer-goal-mode { display: inline-flex; align-items: center; gap: 5px; border: 0; padding: 5px 7px; background: transparent; color: var(--text-secondary); font-size: 12px; }
+.composer-goal-mode .goal-mode-remove { display: none; }
+.composer-goal-mode:hover .goal-mode-icon, .composer-goal-mode:focus-visible .goal-mode-icon { display: none; }
+.composer-goal-mode:hover .goal-mode-remove, .composer-goal-mode:focus-visible .goal-mode-remove { display: block; }
+.goal-strip { display: flex; align-items: center; gap: 8px; max-width: calc(var(--chat-width) - 28px); margin: 0 auto -1px; padding: 7px 12px 10px; border: 1px solid var(--line); border-radius: 17px 17px 0 0; color: var(--text-muted); background: var(--surface); font-size: 12px; min-width: 0; }
+.goal-strip-summary { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: 6px; padding: 0; border: 0; background: transparent; text-align: left; font-size: 12px; }
+.goal-strip-summary strong { flex-shrink: 0; color: var(--text-secondary); font-weight: 500; }
+.goal-strip-summary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.goal-strip-time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.goal-strip .icon-button { min-width: 23px; min-height: 23px; padding: 3px; }
+.composer-toolbar .send-options { margin-left: auto; }
 @container (max-width: 570px) {
   .composer-toolbar { flex-wrap: wrap; }
   .composer-toolbar .send-options { margin-left: auto; flex-wrap: wrap; }

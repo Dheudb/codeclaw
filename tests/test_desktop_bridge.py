@@ -13,6 +13,22 @@ from unittest.mock import patch, AsyncMock, Mock
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_goal_review_is_not_an_error_and_pause_is_cancelled(self):
+        from types import SimpleNamespace
+        for status, expected in (("awaiting_review", "completed"), ("paused", "cancelled"), ("blocked", "error")):
+            with self.subTest(status=status):
+                self.events.clear()
+                goal = {"objective": "fixture goal", "status": status, "reason": "fixture reason",
+                        "last_result": {"text": "saved result", "ok": True}}
+                engine = SimpleNamespace(goal=goal, turn_traces=[], persist_session_state=Mock(return_value=True))
+                self.bridge.engine = engine
+                with patch("xuloom.features.goals.run", AsyncMock(return_value=goal)):
+                    await self.bridge.goal_turn(engine)
+                self.assertEqual(engine.turn_traces[-1]["status"], expected)
+                self.assertEqual(any(event["type"] == "turn_error" for event in self.events), status == "blocked")
+                self.assertEqual(engine.turn_traces[-1]["answer"], "saved result")
+                engine.persist_session_state.assert_called_once()
+
     async def test_failed_scheduled_turn_cannot_reuse_a_previous_success_receipt(self):
         from types import SimpleNamespace
         self.bridge.engine = SimpleNamespace(last_run_result={"ok": True, "reason": "completed"}, session_id="fixture",

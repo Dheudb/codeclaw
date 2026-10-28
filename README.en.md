@@ -10,9 +10,9 @@ The desktop uses Electron and React. It is currently a preview.
 
 ## Desktop
 
-[**Download Windows x64 portable**](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.11) · [All releases](https://github.com/Dheudb/xuloom/releases)
+[**Download Windows x64 portable**](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.12) · [All releases](https://github.com/Dheudb/xuloom/releases)
 
-Download `Xuloom-v0.1.0-beta.11-windows-x64.zip` from Assets, extract the entire
+Download `Xuloom-v0.1.0-beta.12-windows-x64.zip` from Assets, extract the entire
 folder, and run `Xuloom.exe`. The automatic Source code downloads contain source,
 not a runnable application. Keep the `resources` directory beside the executable.
 

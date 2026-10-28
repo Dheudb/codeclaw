@@ -36,6 +36,7 @@ import MessageActions from "./MessageActions";
 import ComposerMenu from "./ComposerMenu";
 import ExecutionDialog from "./ExecutionDialog";
 import GoalPanel from "./GoalPanel";
+import GoalStrip from "./GoalStrip";
 import McpDialog from "./McpDialog";
 import SessionSidebar from "./SessionSidebar";
 import { CatalogPreferences } from "./catalog-preferences";
@@ -269,18 +270,39 @@ export default function App() {
   function composerAction(name: string) {
     if (name === "isolation") { setExecutionDialog(true); return; }
     if (name === "files") fileInput.current?.click();
-    else if (name === "goal" || name === "schedule") {
+    else if (name === "goal") {
+      if (active?.goal && !["completed", "cancelled", "budget_exhausted"].includes(active.goal.status)) { setGoalDialog("goal"); return; }
+      if (active?.attachments.length || active?.editingId) { onError("请先发送附件或结束提示词编辑，再选择目标模式。"); return; }
+      update({ goalMode: true, mode: "normal" });
+      requestAnimationFrame(() => input.current?.focus());
+    } else if (name === "schedule") {
       if (active?.attachments.length) { onError("请先发送附件，或移除附件后设置目标与唤醒。"); return; }
-      setGoalDialog(name === "goal" ? "goal" : "all");
+      setGoalDialog("all");
     } else if (name === "plan") {
       if (active?.goal && !["completed", "cancelled", "budget_exhausted"].includes(active.goal.status)) { onError("请先结束当前目标，再切换计划模式。"); return; }
-      update({ mode: active?.mode === "plan" ? "normal" : "plan" });
+      update({ mode: active?.mode === "plan" ? "normal" : "plan", goalMode: false });
     } else if (name === "skills") { setPanelOpen(true); setPanelTab("skills"); }
     else if (name === "mcp") setMcpOpen(true);
     else if (name === "settings") void openSettings();
   }
   async function send(continuation?: string) {
     if (opening || importing || modelChanging || permissionChanging || collaborationChanging || !active || active.busy || (!(continuation || active.draft).trim() && !active.attachments.length)) return;
+    if (active.goalMode && !continuation) {
+      if (active.attachments.length || active.editingId) { onError("目标模式请直接输入目标；附件或提示词编辑请先单独发送。"); return; }
+      const id = active.id, objective = active.draft.trim();
+      update({ busy: true, error: "" }, id);
+      let created = false;
+      try {
+        const goal = await window.xuloom.invoke("goal.create", { session: id, objective, criteria: [objective], skills: active.selected });
+        created = true;
+        update({ goal, goalMode: false, mode: "normal", draft: "" }, id);
+        conversationScroll.followLatest();
+        await window.xuloom.invoke("goal.run", { session: id });
+      } catch (error) {
+        update({ busy: false, error: String(error), ...(!created ? { draft: objective, goalMode: true } : {}) }, id);
+      }
+      return;
+    }
     conversationScroll.followLatest();
     const id = active.id,
       text = (continuation || active.draft).trim() || "请查看这些附件。",
@@ -696,6 +718,7 @@ export default function App() {
             <button disabled={opening || importing || modelChanging || permissionChanging || collaborationChanging || !!active?.draft.trim() || !!active?.attachments.length} title={active?.draft.trim() || active?.attachments.length ? "请先发送或清空当前草稿" : "保留上下文，继续未完成的任务"} onClick={() => void send("请从刚才停止的位置继续完成上一项任务。先核对已完成的操作与当前文件状态，避免重复执行；按原任务要求完成并汇报结果。")}><Play size={13} />继续执行</button>
             {lastUser?.id && <button disabled={opening || !!runningWorkers || !!runningCommands} onClick={editLastPrompt}><Pencil size={13} />编辑提示词</button>}
           </div>}
+          {active?.goal && <GoalStrip key={active.id} goal={active.goal} busy={active.busy} invoke={invoke} onError={onError} details={() => setGoalDialog("goal")} />}
           <div className={"composer " + (!active ? "disabled" : "")} onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); void importFiles(Array.from(event.clipboardData.files)); } }}>
             {active?.editingId && <div className="editing-prompt"><span>编辑上一条提示词 · 发送后重新执行，已修改的文件保留</span>
               <button aria-label="取消编辑提示词" disabled={active.busy} onClick={() => update({ editingId: undefined, draft: active.draftBeforeEdit || "", draftBeforeEdit: undefined, attachments: active.attachmentsBeforeEdit || [], attachmentsBeforeEdit: undefined })}><X size={13} /></button></div>}
@@ -735,7 +758,7 @@ export default function App() {
                   <option value="ask">请求批准</option><option value="full">完全访问</option>
                 </select>
                 {active?.mode === "plan" && <button className="composer-mode-chip" aria-label="退出计划模式" title="计划模式 · 点击退出" onClick={() => update({ mode: "normal" })} disabled={active.busy}><Lightbulb size={14} />计划<X size={11} /></button>}
-                {active?.goal && !["completed", "cancelled", "budget_exhausted"].includes(active.goal.status) && <button className="composer-mode-chip" aria-label="管理当前目标" title={active.goal.objective} onClick={() => setGoalDialog("goal")}><Target size={14} />目标</button>}
+                {active?.goalMode && <button className="composer-goal-mode" aria-label="取消目标模式" title="目标模式：输入目标并发送 · 点击取消" disabled={active.busy} onClick={() => update({ goalMode: false })}><Target size={15} className="goal-mode-icon" /><X size={15} className="goal-mode-remove" /><span>目标</span></button>}
               </div>
               <div className="send-options">
                 <select className="collaboration-picker" aria-label="协作档位"
@@ -804,7 +827,7 @@ export default function App() {
         </div>
       </main>
       {executionDialog && active && <ExecutionDialog key={active.id} invoke={invoke} close={() => setExecutionDialog(false)} saved={(mode) => update({ executionMode: mode })} onError={onError} />}
-      {goalDialog && active && <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setGoalDialog(null); }}>
+      {goalDialog && active && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setGoalDialog(null); }}>
         <section className="dialog composer-goal-dialog" role="dialog" aria-modal="true" aria-label={goalDialog === "goal" ? "目标模式设置" : "目标与定时唤醒"}
           onKeyDown={(event) => {
             if (event.key === "Escape") { event.stopPropagation(); setGoalDialog(null); }

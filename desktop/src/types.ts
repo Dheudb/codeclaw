@@ -141,7 +141,8 @@ export type ToolActivity = {
   waitingRequestId?: string;
 };
 export type SessionView = InitialSession & {
-  goal?: { objective: string; status: string } | null;
+  goal?: { objective: string; status: string; elapsed_seconds?: number; round_started_at?: number; phase?: string; budget?: { seconds: number } } | null;
+  goalMode?: boolean;
   collaborationMode: "solo" | "auto" | "ultra";
   permissionMode: PermissionMode;
   persistedId?: string;
