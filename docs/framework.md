@@ -31,11 +31,25 @@ if launch["ok"]:
 
 调用方需要配置审批处理器或明确选择审批策略；此示例不自动授予权限。检查 worker 的 `status` 和 `receipt` 判断真实执行结果。
 
-超出并发数的有效任务自动 FIFO 排队，不需要模型拆批。`capacity` 包含 `active`、`queued`、`available`、`auto_queue` 和 `queue_limit`。`executing=false` 也可能表示尚在排队，不能据此当作完成。重启后 `queued/awaiting_resume` 通过 `resume_queue(agent_ids=[...])` 明确恢复；曾经运行的 `interrupted` 任务不自动重放。详见 [排队与执行隔离](queue-and-isolation.md)。
+Auto / Ultra 默认不设并发上限；只有显式配置有限的宿主并发数时，超出空闲槽位的已接纳任务才自动 FIFO 排队，不需要模型为并发容量拆批。单次 `spawn` 仍最多提交 10 个任务，这是传输批次大小，不是会话容量或累计任务配额。
+
+`capacity` 返回的容量字段：
+
+| 字段 | 语义 |
+| --- | --- |
+| `limit` | 当前宿主并发上限；`null` 表示未设置，Solo 为 `0` |
+| `active` | 当前占用执行槽位的任务数 |
+| `available` | 有限并发下剩余槽位；`null` 表示未设置并发上限，不是零容量 |
+| `queued` | 当前等待执行槽位的任务数 |
+| `auto_queue` | 当前为 `true`，已接纳任务由 Runtime 自动排队 |
+| `queue_limit` | 宿主队列上限，默认 `null`；未设置时没有默认 1000 项限制 |
+| `max_batch_size` | 单次 `spawn` 的批次上限，当前为 `10` |
+
+`executing=false` 也可能表示尚在排队，不能据此当作完成。重启后 `status=queued`、`phase=awaiting_resume` 的任务通过 `resume_queue(agent_ids=[...])` 明确恢复；曾经运行的 `interrupted` 任务不自动重放。详见 [排队与执行隔离](queue-and-isolation.md)。
 
 `spawn` 的可选 `request_id` 支持 1–128 个字母、数字、`_`、`-`。相同参数重复提交返回原记录与 `reused=true`，重启恢复后也不会再启动。相同 ID 修改参数会拒绝。注册中断只保存部分批次时明确报错，调用方应检查实际记录，不能盲目重新发起。省略 ID 的独立调用每次都是新任务。
 
-`list/result/wait/capacity` 读取原生生命周期，`cancel` 停止所属工作，`followup` 明确继续同一 worker。重复读取结果不会重新执行。重启后的历史 `running` 记录显示为 `interrupted`；它不是当前存活证明，不会自动重跑。`wait` 等待任一目标结束即返回，要汇总全部结果需检查所有目标的 `executing`。
+`list/result/wait/capacity` 读取原生生命周期，`cancel` 停止所属工作，`followup` 明确继续同一 worker。重复读取结果不会重新执行。重启后的历史 `running` 记录显示为 `interrupted`；它不是当前存活证明，不会自动重跑。`wait` 的结构化模式等待任一目标结束即返回，要汇总全部结果需检查所有目标的 `status`，不能把 `queued` 或 `running` 当作结束。`pending` 表示当前进程是否仍有该任务的未结束执行或排队任务，`executing` 只表示当前是否占用执行槽位；两者都不能代替结果验收。遇到 `awaiting_resume` 或 `interrupted` 时应按恢复规则处理，不能盲目循环等待。
 
 事件复用 `engine.tool_context["capability_event"]` 回调：持久化注册后通知启动/状态，保存结果与完成记录后通知完成。回调应快速返回且不抛异常。断线可能丢通知，上层应通过 `list/result` 恢复实际记录，不能仅因缺少通知重新启动任务。
 
@@ -66,8 +80,8 @@ DSML 调用格式错误会反馈具体工具和参数问题，请模型修正后
 | action | 行为 |
 | --- | --- |
 | `spawn` | 新建独立代理；`count=1..10` 对同一任务批量并行；不同任务可同轮多次调用 |
-| `capacity` | 返回实际并发上限、使用中与剩余容量 |
-| `list` / `result` | 返回 JSON 状态；`executing` 表示当前是否真的有执行任务，不用历史状态推断存活 |
+| `capacity` | 返回宿主的实际并发上限、执行与排队数；`limit/available=null` 表示未设置并发上限 |
+| `list` / `result` | 返回 JSON 状态；区分 `pending`、`executing` 和已保存的 `status`，排队不等于完成 |
 | `send` | 将 `prompt` 排入指定代理的邮箱，在下一次模型调用前读取；不会自动唤醒空闲代理 |
 | `followup` | 按 `agent_id` 继续原代理，保留消息历史、角色指令和模型；运行中需先等待或使用 `send` |
 | `wait` | 等待指定 `agent_ids` 中任意一个结束，最长 60 秒；超时保留正在执行的任务 |
@@ -80,16 +94,28 @@ DSML 调用格式错误会反馈具体工具和参数问题，请模型修正后
 旧文本 `wait` 等待所选批次全部完成，同样有超时上限。
 状态中的 `running_commands` 与 `pending_message_count` 单独计数，不等同于模型正在执行。
 
-默认总容量 10，前台与后台共用容量。可在工作目录 `.xuloom/capabilities.json` 中设置：
+Auto / Ultra 默认不设并发数、累计子任务数或共享输出额度；两档只改变委派倾向。Solo 禁止委派，不会因“完全访问”而解除。前台与后台任务共用同一宿主容量。
+
+如需限制本机或接口负载，在工作目录 `.xuloom/capabilities.json` 中配置独立的宿主限制：
 
 ```json
-{"agent_concurrency": 24}
+{
+  "agent_limits": {
+    "concurrency": 24,
+    "max_delegations": null,
+    "output_tokens": null,
+    "request_output_tokens": 64000
+  }
+}
 ```
 
-范围为 1–80；单批仍最多 10 个。新上限在没有活跃代理时生效，容量不足时整批拒绝，不虚报启动。
-较高上限不会突破供应商的限流，实际请求仍可能因接口容量失败。
+前三项可为正整数或 `null`；省略时默认不限制，不存在固定的 80 上限。`request_output_tokens` 必须为正整数，默认 64,000；它是每次响应的输出上限，不是任务数量。旧字段 `agent_concurrency` 仍可设置并发数，但 `agent_limits.concurrency` 优先；旧 `collaboration_profiles` 不再参与数量限制计算。完整规则见 [协作档位](capabilities.md#协作档位)。
 
-历史位于用户级集中存储。重启后未完成任务显示 `interrupted`，不会自动重跑；可明确 `followup` 同一代理。
+例如并发数为 3 时，一批 10 个有效任务会被接纳，按最多 3 个执行、其余 FIFO 等待，结束一个补上一个；并发占满本身不会导致整批拒绝。显式累计配额或共享输出额度耗尽、底层宿主显式队列上限已满、Solo、参数或权限等错误仍可能拒绝请求；不能把“自动排队”理解为无条件接纳所有调用。`queue_limit` 不是 `agent_limits` 的配置字段，宿主需要时通过现有 `SubagentTasks` 设置。
+
+配置重新加载且没有运行或排队中的代理后，新并发数才会应用，不热改已有任务。未设置框架上限不代表机器或供应商提供无限资源；实际请求仍可能因供应商限流或资源不足失败。
+
+历史位于用户级集中存储。重启后曾经运行的未完成任务显示 `interrupted`，不会自动重跑；核查副作用后可明确 `followup` 同一代理。未启动的排队任务使用上文的 `resume_queue` 恢复。
 旧版代理缺少完整角色快照时会明确拒绝恢复，而非用默认角色替代。
 更换供应商或 API 地址后，需要恢复原连接才能继续原代理；API Key 不写入角色快照。
 
