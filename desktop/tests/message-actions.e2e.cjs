@@ -9,7 +9,9 @@ let settings = { projects: [project] };
 const catalog = new SessionCatalog(() => settings, (value) => { settings = value; }, data);
 const row = catalog.create(project); catalog.update(row, { title: "Branch origin" });
 const prompt = "USER_PROMPT_SELECTABLE_TEXT **literal**\nSecond line with `notes.md`.";
-const answer = "ANSWER_ONE **bold** and `code`.";
+const code = 'def bubble_sort(arr):\n    """冒泡排序 < & >"""\n    return sorted(arr)\n\nprint(bubble_sort([3, 1, 2]))\n';
+const plainCode = 'notes.md\n';
+const answer = "ANSWER_ONE **bold** and `code`.\n\n```python\n" + code + "```\n\n```\n" + plainCode + "```";
 const trace = (i, text) => ({ id: "t" + i, userMessageId: "u" + i, status: "completed", elapsedMs: 1000, steps: [], answer: text });
 const original = { messages: [
   { role: "user", _uuid: "u1", content: prompt },
@@ -35,7 +37,10 @@ async function launch() {
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
   // Exercise the real renderer -> IPC -> Electron clipboard boundary without
   // overwriting or reading the user's clipboard in an automated test.
-  await app.evaluate(({ clipboard }) => { globalThis.testCopiedText = []; clipboard.writeText = (text) => globalThis.testCopiedText.push(text); });
+  await app.evaluate(({ clipboard }) => { globalThis.testCopiedText = []; clipboard.writeText = (text) => {
+    if (globalThis.failTestCopy) throw new Error("Fixture clipboard unavailable");
+    globalThis.testCopiedText.push(text);
+  }; });
 }
 async function selectWithMouse(start, end) {
   const points = await page.locator(".message.user .user-prompt-text").first().evaluate((el, [start, end]) => {
@@ -58,6 +63,26 @@ async function selectWithMouse(start, end) {
     const reply = page.getByRole("article", { name: "Xuloom 回复", exact: true }).first();
     await reply.getByRole("button", { name: "复制回复", exact: true }).click();
     assert.deepEqual(await app.evaluate(() => globalThis.testCopiedText), [prompt, answer]);
+    const blocks = reply.locator(".markdown-code-block");
+    assert.equal(await blocks.count(), 2);
+    assert.equal(await blocks.first().locator(".code-block-language").innerText(), "python");
+    assert.equal(await blocks.first().locator("pre").textContent(), code);
+    assert.equal(await blocks.last().locator("pre button").count(), 0, "A filename inside a code block remains code, not a file link");
+    await blocks.first().getByRole("button", { name: "复制代码", exact: true }).click();
+    await blocks.first().getByRole("status").filter({ hasText: "已复制" }).waitFor();
+    await blocks.last().getByRole("button", { name: "复制代码", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelectorAll(".code-block-toolbar [role=status]").length === 2);
+    assert.deepEqual(await app.evaluate(() => globalThis.testCopiedText), [prompt, answer, code, plainCode], "Code copy preserves indentation, Unicode and line breaks, without Markdown fences or toolbar text");
+    await app.evaluate(() => { globalThis.failTestCopy = true; });
+    await blocks.first().getByRole("button", { name: "复制代码", exact: true }).click();
+    await blocks.first().getByRole("alert").filter({ hasText: "复制失败" }).waitFor();
+    await app.evaluate(() => { globalThis.failTestCopy = false; });
+    await blocks.first().getByRole("button", { name: "复制代码", exact: true }).click();
+    await blocks.first().getByRole("alert").waitFor({ state: "detached" });
+    assert.equal((await app.evaluate(() => globalThis.testCopiedText)).at(-1), code);
+    fs.mkdirSync(path.join(root, "test-results"), { recursive: true });
+    await page.screenshot({ path: path.join(root, "test-results/code-copy.png") });
     await user.scrollIntoViewIfNeeded();
     const firstSelection = await selectWithMouse(0, 10);
     assert(firstSelection.includes("USER"), firstSelection);
@@ -89,6 +114,6 @@ async function selectWithMouse(start, end) {
     await page.waitForFunction(() => document.querySelectorAll(".message.assistant").length === 3);
     assert.equal(await page.getByRole("textbox", { name: "任务输入" }).inputValue(), "ORIGINAL_DRAFT_KEEP");
     assert.deepEqual(errors, []);
-    console.log("Message actions E2E passed: exact reply/prompt copy through IPC, native mouse selection/reselection, no text dragging, retained sidebar dragging, reply-boundary fork, intact source/draft, tool pairs, no API and restart");
+    console.log("Message actions E2E passed: exact reply/prompt and fenced code copy through IPC, Unicode/indentation, plain code, keyboard, clipboard failure/retry, native mouse selection/reselection, no text dragging, retained sidebar dragging, reply-boundary fork, intact source/draft, tool pairs, no API and restart");
   } finally { if (app) await app.close().catch(() => {}); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

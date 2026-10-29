@@ -1,6 +1,34 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { Check, Copy } from "lucide-react";
+
+function CodeBlock({ text, language }: { text: string; language: string }) {
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => { setCopied(false); clearTimeout(timer.current); }, [text]);
+  async function copy() {
+    setError(""); setCopied(false); clearTimeout(timer.current);
+    try {
+      await window.xuloom.invoke("clipboard.writeText", { text });
+      setCopied(true); clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1800);
+    } catch { setError("复制失败，请重试或选中代码手动复制。"); }
+  }
+  return <div className="markdown-code-block">
+    <div className="code-block-toolbar">
+      <span className="code-block-language">{language || "代码"}</span>
+      <button type="button" aria-label="复制代码" title="复制整个代码块" onClick={() => void copy()}>
+        {copied ? <Check size={14} /> : <Copy size={14} />}
+        <span role={copied ? "status" : undefined}>{copied ? "已复制" : "复制代码"}</span>
+      </button>
+    </div>
+    {error && <div className="code-copy-error" role="alert">{error}</div>}
+    <pre><code className={language ? "language-" + language : undefined}>{text}</code></pre>
+  </div>;
+}
 
 function webpageURL(href?: string) {
   try {
@@ -31,6 +59,15 @@ export default function Markdown({ text, onOpenFile }: { text: string; onOpenFil
       remarkPlugins={[remarkGfm]}
       urlTransform={(url) => webpageURL(url) || (onOpenFile && fileReference(url) ? url : "")}
       components={{
+        pre: ({ children, node }) => {
+          const code = node?.children[0];
+          if (code?.type !== "element" || code.tagName !== "code") return <pre>{children}</pre>;
+          const text = code.children.map((child) => child.type === "text" ? child.value : "").join("");
+          const classes = code.properties.className;
+          const language = (Array.isArray(classes) ? classes.map(String) : String(classes || "").split(" "))
+            .find((name) => name.startsWith("language-"))?.slice(9) || "";
+          return <CodeBlock text={text} language={language} />;
+        },
         code: ({ children, className, node }) => {
           const path = String(children);
           return onOpenFile && !className && node?.position?.start.line === node?.position?.end.line && fileReference(path)

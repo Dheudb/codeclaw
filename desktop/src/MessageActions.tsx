@@ -19,6 +19,7 @@ export default function MessageActions({ role, text, fork, disabled, onError, ch
   return <div className="message-actions" role="group" aria-label={role === "user" ? "用户消息操作" : "回复操作"}>
     <button type="button" aria-label={label} title={copied ? "已复制" : label} disabled={!text} onClick={() => void copy()}>
       {copied ? <Check size={14} /> : <Copy size={14} />}
+      {role === "assistant" && <span className="message-copy-label">复制回复</span>}
     </button>
     {fork && <button type="button" aria-label="从这里分支" title="保留到这条回复为止的上下文，创建新会话"
       disabled={disabled} onClick={() => { void fork().catch(onError); }}><GitFork size={15} /></button>}
