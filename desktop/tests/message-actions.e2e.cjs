@@ -11,7 +11,9 @@ const row = catalog.create(project); catalog.update(row, { title: "Branch origin
 const prompt = "USER_PROMPT_SELECTABLE_TEXT **literal**\nSecond line with `notes.md`.";
 const code = 'def bubble_sort(arr):\n    """冒泡排序 < & >"""\n    return sorted(arr)\n\nprint(bubble_sort([3, 1, 2]))\n';
 const plainCode = 'notes.md\n';
-const answer = "ANSWER_ONE **bold** and `code`.\n\n```python\n" + code + "```\n\n```\n" + plainCode + "```";
+const formula = String.raw`\boxed{e^{i\pi} + 1 = 0}`;
+const inlineFormula = String.raw`\theta = \pi`;
+const answer = "ANSWER_ONE **bold** and `code`.\n\n```python\n" + code + "```\n\n```\n" + plainCode + "```\n\n$$" + formula + "$$\n\n当 $" + inlineFormula + "$ 时成立。\n\n$$\n" + String.raw`\begin{pmatrix}1 & 2\\3 & 4\end{pmatrix}` + "\n$$\n\n错误公式 $\\frac{$ 不应破坏回复。\n\n```text\n$do_not_render$\n```";
 const trace = (i, text) => ({ id: "t" + i, userMessageId: "u" + i, status: "completed", elapsedMs: 1000, steps: [], answer: text });
 const original = { messages: [
   { role: "user", _uuid: "u1", content: prompt },
@@ -64,13 +66,18 @@ async function selectWithMouse(start, end) {
     await reply.getByRole("button", { name: "复制回复", exact: true }).click();
     assert.deepEqual(await app.evaluate(() => globalThis.testCopiedText), [prompt, answer]);
     const blocks = reply.locator(".markdown-code-block");
-    assert.equal(await blocks.count(), 2);
+    assert.equal(await blocks.count(), 3);
     assert.equal(await blocks.first().locator(".code-block-language").innerText(), "python");
     assert.equal(await blocks.first().locator("pre").textContent(), code);
-    assert.equal(await blocks.last().locator("pre button").count(), 0, "A filename inside a code block remains code, not a file link");
+    assert.equal(await blocks.nth(1).locator("pre button").count(), 0, "A filename inside a code block remains code, not a file link");
+    assert.equal(await blocks.last().locator("pre").textContent(), "$do_not_render$\n");
+    assert.equal(await blocks.last().locator(".math-formula").count(), 0);
+    assert.equal(await reply.locator(".math-display .katex").count(), 2);
+    assert.equal(await reply.locator(".math-inline .katex").count(), 1);
+    assert.equal(await reply.locator(".math-fallback").textContent(), String.raw`\frac{`);
     await blocks.first().getByRole("button", { name: "复制代码", exact: true }).click();
     await blocks.first().getByRole("status").filter({ hasText: "已复制" }).waitFor();
-    await blocks.last().getByRole("button", { name: "复制代码", exact: true }).focus();
+    await blocks.nth(1).getByRole("button", { name: "复制代码", exact: true }).focus();
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => document.querySelectorAll(".code-block-toolbar [role=status]").length === 2);
     assert.deepEqual(await app.evaluate(() => globalThis.testCopiedText), [prompt, answer, code, plainCode], "Code copy preserves indentation, Unicode and line breaks, without Markdown fences or toolbar text");
@@ -81,6 +88,22 @@ async function selectWithMouse(start, end) {
     await blocks.first().getByRole("button", { name: "复制代码", exact: true }).click();
     await blocks.first().getByRole("alert").waitFor({ state: "detached" });
     assert.equal((await app.evaluate(() => globalThis.testCopiedText)).at(-1), code);
+    const formulas = reply.locator(".math-formula");
+    await formulas.first().getByRole("button", { name: "复制公式 LaTeX" }).click();
+    await formulas.first().getByRole("status").waitFor();
+    assert.equal((await app.evaluate(() => globalThis.testCopiedText)).at(-1), formula);
+    await formulas.nth(1).getByRole("button", { name: "复制公式 LaTeX" }).focus();
+    await page.keyboard.press("Enter");
+    await formulas.nth(1).getByRole("status").waitFor();
+    assert.equal((await app.evaluate(() => globalThis.testCopiedText)).at(-1), inlineFormula);
+    await app.evaluate(() => { globalThis.failTestCopy = true; });
+    await formulas.first().getByRole("button", { name: "复制公式 LaTeX" }).click();
+    await formulas.first().getByRole("alert").waitFor();
+    await app.evaluate(() => { globalThis.failTestCopy = false; });
+    await formulas.first().getByRole("button", { name: "复制公式 LaTeX" }).click();
+    await formulas.first().getByRole("alert").waitFor({ state: "detached" });
+    await page.evaluate(() => document.fonts.ready);
+    assert.equal(await page.evaluate(() => document.fonts.check('16px KaTeX_Main')), true);
     fs.mkdirSync(path.join(root, "test-results"), { recursive: true });
     await page.screenshot({ path: path.join(root, "test-results/code-copy.png") });
     await user.scrollIntoViewIfNeeded();

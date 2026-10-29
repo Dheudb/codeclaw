@@ -1,7 +1,25 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import type { Root, RootContent } from "mdast";
+import type { VFile } from "vfile";
+import MathFormula from "./MathFormula";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Check, Copy } from "lucide-react";
+
+// remark-math treats same-line $$...$$ as inline; retain the author's display intent.
+function remarkDisplayMath() {
+  return (tree: Root, file: VFile) => {
+    const source = String(file);
+    function visit(node: Root | RootContent) {
+      if (node.type === "inlineMath" && source.slice(node.position?.start.offset).startsWith("$$")) {
+        node.data = { ...node.data, hProperties: { className: ["language-math", "math-display"] } };
+      }
+      if ("children" in node) node.children.forEach(visit);
+    }
+    visit(tree);
+  };
+}
 
 function CodeBlock({ text, language }: { text: string; language: string }) {
   const [copied, setCopied] = useState(false);
@@ -56,7 +74,7 @@ export default function Markdown({ text, onOpenFile }: { text: string; onOpenFil
   return (
     <>
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkDisplayMath]}
       urlTransform={(url) => webpageURL(url) || (onOpenFile && fileReference(url) ? url : "")}
       components={{
         pre: ({ children, node }) => {
@@ -66,10 +84,14 @@ export default function Markdown({ text, onOpenFile }: { text: string; onOpenFil
           const classes = code.properties.className;
           const language = (Array.isArray(classes) ? classes.map(String) : String(classes || "").split(" "))
             .find((name) => name.startsWith("language-"))?.slice(9) || "";
+          if (Array.isArray(classes) && classes.includes("math-display")) return <MathFormula text={text.replace(/\n$/, "")} display />;
           return <CodeBlock text={text} language={language} />;
         },
         code: ({ children, className, node }) => {
           const path = String(children);
+          if (className?.split(" ").some((name) => name === "math-inline" || name === "math-display")) {
+            return <MathFormula text={path} display={className.split(" ").includes("math-display")} />;
+          }
           return onOpenFile && !className && node?.position?.start.line === node?.position?.end.line && fileReference(path)
             ? <button className="inline-file-link" title={"查看文件 " + path} onClick={() => onOpenFile(path)}><code>{children}</code></button>
             : <code className={className}>{children}</code>;
