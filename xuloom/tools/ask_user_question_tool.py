@@ -1,64 +1,129 @@
 """
 AskUserQuestionTool — structured user interaction via multiple-choice questions.
 
-Mirrors Claude Code's AskUserQuestionTool: presents 1–4 questions with options,
-collects user answers, and returns them to the agent. Supports multi-select.
+Presents structured questions with options and returns the user's actual answers.
 """
 
-from typing import List, Optional
-from pydantic import BaseModel, Field
+import copy
+import json
+from typing import List
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from xuloom.tools.base import BaseAgenticTool
 
 
 class QuestionOption(BaseModel):
-    label: str = Field(..., description="Display text for this option.")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    label: str = Field(..., min_length=1, description="Short user-facing answer label. This belongs inside a question's options array.")
     description: str = Field("", description="Optional longer description.")
 
 
 class Question(BaseModel):
-    question: str = Field(..., description="The question text to present to the user.")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    question: str = Field(..., min_length=1, description="Required: the full question to present. This object represents ONE question, not one answer option.")
     options: List[QuestionOption] = Field(
         ...,
         min_length=2,
         max_length=4,
-        description="2–4 answer options. Users can always provide custom text via 'Other'.",
+        description="Required: 2–4 answer objects, each with label and optional description. Put ALL answers for this question here, never directly in questions. The UI provides custom text input automatically; do not add an Other option.",
     )
     multiSelect: bool = Field(
         False,
         description="If true, allow the user to select multiple options.",
     )
 
+    @field_validator("options")
+    @classmethod
+    def unique_labels(cls, options):
+        if len({option.label for option in options}) != len(options):
+            raise ValueError("Option labels must be unique within a question.")
+        return options
+
 
 class AskUserQuestionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     questions: List[Question] = Field(
         ...,
         min_length=1,
         max_length=4,
-        description="1–4 questions to present to the user.",
+        description="1–4 QUESTION objects. Each must contain question (text) and options (2–4 answers). One question with four choices is ONE item here, with FOUR items inside its options.",
     )
+
+    @field_validator("questions")
+    @classmethod
+    def unique_questions(cls, questions):
+        if len({item.question for item in questions}) != len(questions):
+            raise ValueError("Question texts must be unique within a request.")
+        return questions
+
+
+QUESTION_EXAMPLE = {"questions": [{"question": "Which approach do you prefer?", "options": [
+    {"label": "Minimal change (Recommended)", "description": "Fix the immediate issue."},
+    {"label": "Broader change", "description": "Also revise related behavior."}], "multiSelect": False}]}
+QUESTION_SHAPE = (
+    'Each questions item must be {"question":"...","options":[{"label":"...","description":"..."},'
+    '{"label":"...","description":"..."}],"multiSelect":false}. '
+    'Do not place label/description directly in questions. '
+)
 
 
 class AskUserQuestionTool(BaseAgenticTool):
     name = "ask_user_question_tool"
     description = (
         "Asks the user multiple choice questions to gather information, "
-        "clarify ambiguity, understand preferences, make decisions or offer them choices."
+        "clarify ambiguity, understand preferences, make decisions or offer them choices. "
+        "Call this tool to display clickable choices; printing a list in chat does not display the picker. "
+        + QUESTION_SHAPE
     )
     input_schema = AskUserQuestionInput
     risk_level = "low"
     is_read_only = True
 
+    @classmethod
+    def get_tool_definition(cls):
+        definition = super().get_tool_definition()
+        schema = definition["input_schema"]
+        definitions = schema.pop("$defs", {})
+
+        def inline(value):
+            if isinstance(value, list):
+                return [inline(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            value = copy.deepcopy(value)
+            reference = value.pop("$ref", None)
+            if reference:
+                value = {**copy.deepcopy(definitions[reference.rsplit("/", 1)[-1]]), **value}
+            return {key: inline(item) for key, item in value.items()}
+
+        # These models are non-recursive. Keep their nested fields visible even
+        # to providers that handle local JSON Schema references poorly.
+        definition["input_schema"] = inline(schema)
+        definition["input_schema"]["examples"] = [copy.deepcopy(QUESTION_EXAMPLE)]
+        return definition
+
+    def is_concurrency_safe_call(self, **kwargs) -> bool:
+        # One picker at a time; read-only does not imply interactive concurrency.
+        return False
+
+    def input_error_hint(self) -> str:
+        return QUESTION_SHAPE + "\nValid example (replace with the user's actual question and choices):\n" + json.dumps(QUESTION_EXAMPLE)
+
     def prompt(self) -> str:
-        return """Use this tool when you need to ask the user questions during execution. This allows you to:
+        return """Use ask_user_question_tool when missing information or a user decision is needed. Ask only when the answer matters; do not turn routine tasks into questionnaires. If the user requests clickable choices, actually call this tool rather than printing choices or claiming a call occurred. This allows you to:
 1. Gather user preferences or requirements
 2. Clarify ambiguous instructions
 3. Get decisions on implementation choices as you work
 4. Offer choices to the user about what direction to take
 
 Usage notes:
-- Users will always be able to select "Other" to provide custom text input
+- Users can always provide a custom text answer
 - Use multiSelect: true to allow multiple answers to be selected for a question
 - If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
+- Ask one concise question when possible. Keep labels short and put explanations in description.
+- The UI provides custom text input; do not add a separate Other option.
+- Wait for the actual tool result. Never invent the user's answer.
+
+""" + self.input_error_hint() + """
 
 Plan mode note: In plan mode, use this tool to clarify requirements or choose between approaches BEFORE finalizing your plan. Do NOT use this tool to ask "Is my plan ready?" or "Should I proceed?" — use exit_plan_mode for plan approval. IMPORTANT: Do not reference "the plan" in your questions (e.g., "Do you have feedback about the plan?", "Does the plan look good?") because the user cannot see the plan in the UI until you call exit_plan_mode. If you need plan approval, use exit_plan_mode instead."""
 

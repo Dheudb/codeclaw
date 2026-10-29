@@ -57,6 +57,24 @@ test("streaming and final answer share one assistant message", async () => {
   assert.equal(session.messages[1].text, "complete");
   assert.equal(session.busy, false);
 });
+
+test("resumed output stays in the original response without a synthetic user prompt", async () => {
+  const { createSession, beginTurn, applyEvent } = await state;
+  let session = beginTurn(createSession(initial), "original");
+  session = applyEvent(session, { session: "one", type: "turn_trace", trace: {
+    id: "same", userMessageId: "human", status: "cancelled", steps: [], answer: "Partial " } });
+  session = applyEvent(session, { session: "one", type: "turn_cancelled" });
+  session = applyEvent(session, { session: "one", type: "turn_resumed", trace: {
+    id: "same", userMessageId: "human", status: "running", steps: [], pendingText: "Partial " } });
+  session = applyEvent(session, { session: "one", type: "text_delta", text: "continued" });
+  assert.equal(session.messages[1].text, "Partial continued");
+  session = applyEvent(session, { session: "one", type: "final", text: "Partial continued" });
+  session = applyEvent(session, { session: "one", type: "turn_finished" });
+  assert.equal(session.messages.length, 2);
+  assert.equal(session.messages[0].id, "human");
+  assert.equal(session.messages[1].trace.id, "same");
+  assert.equal(session.busy, false);
+});
 test("parallel approvals resolve individually", async () => {
   const { createSession, applyEvent } = await state;
   let session = createSession(initial);

@@ -70,6 +70,10 @@ class BaseAgenticTool(ABC):
     def validate_input(self, **kwargs):
         return None
 
+    def input_error_hint(self) -> str:
+        """Optional tool-specific repair guidance, used only before execution."""
+        return ""
+
     def check_permissions(self, permission_context: Dict[str, Any]):
         return None
         

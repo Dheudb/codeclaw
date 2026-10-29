@@ -16,6 +16,7 @@ setup(
         "anthropic>=0.40.0",
         "openai>=1.0.0",
         "rich>=13.0.0",
+        "prompt_toolkit>=3.0,<4",
         "pydantic>=2.0.0",
         "httpx",
         "beautifulsoup4",

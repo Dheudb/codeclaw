@@ -1,115 +1,155 @@
 # Xuloom
 
-本地通用 Agent 框架：**桌面 App + CLI，共用 Python 智能体引擎**。
+一个运行在你电脑上的通用智能体工作台。连接你自己的模型，通过桌面或 CLI 完成研究、写作、数据分析和开发任务；用 **Skills** 复用工作流程，用 **Subagents** 分工，用 **MCP** 连接外部工具。
 
-[English](README.en.md) · [使用文档](docs/README.md) · [开发说明](docs/development.md)
+[English](README.en.md) · [下载 Windows 版](https://github.com/Dheudb/xuloom/releases) · [完整文档](docs/README.md)
 
-Xuloom 提供普通对话、文件与命令工具、Skills、自定义子代理和 MCP 服务；领域工作流程通过扩展加载。
-桌面端采用 Electron + React，CLI 可以单独使用。当前桌面版处于预览阶段。
+## 先用起来
 
-## 从哪里开始
+1. 在 [Releases](https://github.com/Dheudb/xuloom/releases) 下载 `Xuloom-v版本号-windows-x64.zip`，完整解压，运行其中的 `Xuloom.exe`。不要只复制 EXE，也不要把 GitHub 的 Source code 当成安装包。
+2. 打开 **设置 → 模型连接**，填写 API 名称、协议、地址、Key 和模型 ID。一个 API 可以配置多个模型，也可以添加多个供应商。
+3. 点击 **新建会话**，直接输入任务。每个独立会话都有自己的工作目录；处理已有文件夹时再点 **打开项目**。
+4. 需要添加能力时，打开 **设置 → Skills / Subagents / MCP 服务**。不需要先调用模型，也不要求工作区是 Git 仓库。
 
-| 我想做什么 | 入口 |
-|---|---|
-| 直接使用桌面程序 | [桌面使用说明](docs/desktop.md) |
-| 在终端使用 Xuloom | [CLI 使用说明](docs/cli.md) |
-| 目标续跑、非交互批量执行与定时唤醒 | [目标与调度](docs/goals-and-schedules.md) |
-| 接入模型或本地推理服务 | [模型配置与兼容范围](docs/models.md) |
-| 添加 Skills 或子代理 | [Skills 与子代理](docs/capabilities.md) |
-| 子代理续接、容量查询和命令输入输出 | [通用执行接口](docs/framework.md) |
-| 通用化改造、会话占用与兼容迁移 | [通用框架进展与边界](docs/general-framework.md) |
-| 安装搜索等外部工具 | [MCP 市场与搜索](docs/mcp.md) |
-| 修改代码、运行测试或打包 | [开发说明](docs/development.md) · [项目结构](docs/architecture.md) |
+Windows 下载包自带 Python 和 MCP SDK，无需安装 Python、选择解释器或安装 Node.js。第三方 MCP 程序可能另需 Node.js、uv 等环境，按服务说明准备。
 
-## 桌面版
+桌面版目前是 **Beta**。现有可下载成品面向 Windows x64；Linux/macOS 可使用源码 CLI，尚无对应的桌面发行包。
 
-[**下载 Windows x64 便携版**](https://github.com/Dheudb/xuloom/releases/tag/v0.1.0-beta.12) · [所有版本](https://github.com/Dheudb/xuloom/releases)
+## 模型怎么配
 
-在 Release 的 Assets 中下载 `Xuloom-v0.1.0-beta.12-windows-x64.zip`，完整解压后运行 `Xuloom.exe`。
-请下载成品 ZIP；GitHub 自动提供的 Source code 是源码。程序依赖同目录的 `resources`，不能只复制 EXE。
-Windows 便携包内置 Python 运行时和 MCP 依赖。
-**使用便携包不需要安装 Python、Node.js，也不需要选择解释器。**
-在“设置与模型”填写协议、API 地址、模型 ID 和 Key，点击“新建会话”即可使用默认工作区。
-默认目录按当前系统和用户自动设置，可在设置中修改；处理已有代码时再选择“打开项目”。
-仅打开界面、管理 Skills 或配置 MCP 不需要调用模型。
+Xuloom 支持 **OpenAI 兼容 Chat Completions** 和 **Anthropic Messages**。本地推理服务可使用它提供的兼容接口。地址填写服务的 API 根地址，例如 `http://localhost:8000/v1`，模型 ID 使用服务实际提供的名称。
 
-本仓库保存源码；Windows 包由 `npm run pack` 构建，输出到 `desktop/release/`。
-公开下载包在 Releases 发布；GitHub Actions 目前仅手动触发。
-第三方本地 MCP 服务可能需要它自己的 Node.js、uv 或其他运行环境，服务安装卡片会说明。
+在“可选模型列表”中每行填写一个模型，或点击“从 API 获取模型”，保存后从输入框右下角切换。Key 只保存到本机配置，不随项目发布。无鉴权本地服务可填占位值；云服务必须使用自己的有效 Key。
 
-## 从源码启动
+文本问答成功不代表该模型完整支持工具调用、图片或推理字段。Xuloom 不提供模型额度，也不保证任意兼容接口都支持全部能力。详见 [模型配置](docs/models.md)。
 
-开发环境建议使用 Python 3.12+、Node.js 24+ 和 Git。CLI 基础功能兼容 Python 3.9+；
-MCP 需要 Python 3.10+。`rg` 用于本地代码搜索，需要在 PATH 中。
+## Skills：把方法变成可复用流程
+
+Skill 是一个包含 `SKILL.md` 的文件夹，可以附带脚本、参考文献和素材。它提供做事的方法，本身不等于新工具或额外系统权限。
+
+**用界面添加：** 在 **设置 → Skills** 点击 **新建 Skill**，填写名称、使用时机和执行指令，选择“全局”或“当前工作区”后保存。已有技能点击 **导入目录**，选择包含 `SKILL.md` 的目录或技能集合目录。导入挂载原文件，不会复制；不要随后移动或删除原目录。
+
+**使用：** 在输入框输入 `$`，搜索并选择技能，再填写任务发送；也可以在右侧 Skills 面板选择。有效技能默认可用，不需要逐个打开开关。
+
+**手动配置：** 以下内容保存为 `.xuloom/skills/literature-review/SKILL.md`：
+
+```markdown
+---
+name: literature-review
+description: 检索并比较某个主题的公开文献，给出可核对的引用。
+---
+先明确研究范围，再检索原始来源。区分论文结论、你的推断和待验证问题。
+输出比较表、关键分歧与可点击的来源链接。找不到证据时明确说明。
+```
+
+名称须与文件夹名一致，使用小写字母、数字和单个连字符，最多 64 字符。其他资源可放入同级的 `references/`、`scripts/`、`assets/`。
+
+- **当前工作区：** `<工作目录>/.xuloom/skills/`，仅该目录下的任务使用。
+- **全局：** `~/.xuloom/skills/`，所有工作区可发现。
+- **内置：** `code-development`、`code-review`、`debug-issue`、`web-research`、`skill-creator`、`data-analysis`、`document-writing`、`document-summary`、`experiment-design`，随公开程序分发。
+
+自己的技能放在用户或项目配置目录，**不用重新打包 EXE**。同名技能按发现顺序取第一个有效定义；无效或被覆盖的条目会显示原因。兼容目录及完整规则见 [Skills 与子代理](docs/capabilities.md)。
+
+## Subagents：定义角色，再把任务交给它
+
+Subagent 使用独立消息上下文执行分配的任务。角色可以指定职责、工具和 Skills；它仍受会话权限、协作额度和模型接口限制。
+
+**用界面添加：** 在 **设置 → Subagents → 新建 Subagent** 填写角色指令。模型默认 `inherit`，工具留空继承可用集合，Skills 填已存在的技能名称。已有定义可通过 **导入目录** 挂载。
+
+**手动配置：** 将下列内容保存为 `.xuloom/agents/source-checker.md`；放到 `~/.xuloom/agents/` 则所有工作区可用。
+
+```markdown
+---
+name: source-checker
+description: 独立核对给定材料的证据和引用。
+model: inherit
+tools: Read, Grep, Glob, Skill
+skills: [literature-review]
+---
+核对分配给你的材料，列出已证实、证据不足和相互矛盾的主张。
+报告来源与理由，不擅自修改文件。
+```
+
+先添加示例依赖的 `literature-review` Skill。`tools` 可使用 Read、Write、Edit、Exec、Grep、Glob、Skill 等别名或实际工具名；省略 `tools` 继承工具，手动填写 `tools: []` 表示禁用全部工具。`model` 可指定同一 API 连接里的模型 ID，不能据此跨供应商切换。
+
+在右侧“代理”中点角色的 **分配任务**，或在 prompt 中明确指定角色。创建定义不会自动启动代理。输入框中的 **Solo** 关闭委派，**Auto** 按需委派，**Ultra** 更积极地寻找并行机会。两档默认不设子代理数量限制；只有显式设置宿主并发限制时，超额已接受任务才排队。详见 [协作与配置](docs/capabilities.md)。
+
+## MCP：连接工具与外部服务
+
+打开 **设置 → MCP 服务 → 打开 MCP 管理**，也可从侧栏进入 MCP 市场：
+
+1. 从市场选择服务，或点击 **自定义服务**。
+2. 本地服务选择 **stdio**，填写命令、参数及环境变量；远程服务选择 **Streamable HTTP**，填写 URL 和请求头。
+3. 保存后先 **测试连接**，检查握手、工具发现及依赖是否正常。
+4. 服务默认停用，确认后启用；新任务会连接，也可以手动刷新连接。
+
+配置保存在 **当前工作区** `.xuloom/mcp_servers.json`，桌面和 CLI 共用。例如一个本地文件工具服务：
+
+```json
+{
+  "mcpServers": {
+    "local-files": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/allowed-folder"],
+      "env": {},
+      "enabled": false
+    }
+  }
+}
+```
+
+上例需要本机 Node.js/npm，并将允许目录改成真实路径。远程配置使用 `type: "http"`、`url`、`headers`。凭据使用环境变量或请求头，避免写入会显示在预览中的命令参数。连接测试会实际启动程序或访问服务，但不会调用聊天模型。
+
+仅启用可信服务。当前未实现 MCP OAuth 登录和旧版 SSE。Windows 系统隔离模式会禁用 MCP。详见 [MCP 配置与搜索](docs/mcp.md)。
+
+## 会话、文件和权限
+
+- 新建会话拥有独立工作目录；项目内的“＋”使用对应项目目录。拖动会话到其他项目只改变后续工作的目录，不搬运原文件。
+- 聊天记录集中保存，项目 `.xuloom` 用于扩展与配置。CLI 与桌面共用存储；同一会话只允许一个执行写者，没有实时双向编辑同步。
+- 输入框选择 **请求批准** 或 **完全访问**。完全访问仍遵守显式拒绝和模式约束，不等于操作系统沙箱。
+- 可选的 **＋ → 执行隔离** 使用 Windows x64 LPAC，限制已接入工具进程的写入、网络与进程能力。worktree/目录副本只隔离文件改动。具体限制见 [执行隔离](docs/queue-and-isolation.md)。
+- 输入框 **＋ → 目标** 将下一条 prompt 作为持续目标，运行后显示目标条；目标条支持调整目标、暂停、恢复和取消；桌面目标不设累计输出、轮数和时间预算。定时唤醒从“＋”单独进入。模型宣称完成不等于领域验收通过。
+
+| 内容 | 保存位置 |
+| --- | --- |
+| 模型连接与 Key | `~/.xuloom/config.json` |
+| 全局 Skills / Subagents | `~/.xuloom/skills/`、`~/.xuloom/agents/` |
+| 工作区扩展与 MCP | `<工作目录>/.xuloom/` |
+| Windows 历史与独立工作区 | `%LOCALAPPDATA%/Xuloom/` |
+| Linux 数据 | `$XDG_DATA_HOME/xuloom/`，未设置时为 `~/.local/share/xuloom/` |
+| macOS 数据 | `~/Library/Application Support/Xuloom/` |
+
+配置与凭据保存在本机，模型和外部工具仍会接收任务中提供给它们的内容。公开仓库及发行包不包含个人配置、私人技能或聊天记录。
+
+## CLI 与源码开发
+
+开发建议 Python 3.12+、Node.js 24+ 和 Git；CLI 基础功能兼容 Python 3.9+，MCP 需要 Python 3.10+。本地搜索使用 `rg`，请安装并加入 PATH。
 
 ```powershell
-git clone https://github.com/Dheudb/xuloom.git xuloom
+git clone https://github.com/Dheudb/xuloom.git
 cd xuloom
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[mcp]"
+# 交互 CLI
+.\.venv\Scripts\xuloom.exe
+# 桌面开发
 cd desktop
 npm ci
 npm run dev
 ```
 
-源码桌面端自动寻找仓库中的 `.venv`；开发者也可以用 `XULOOM_PYTHON` 指定运行环境。
-这只影响源码开发，正式便携包始终使用随应用附带的运行时。
+macOS/Linux 激活 `.venv/bin/activate` 后使用 `xuloom`。批处理使用 `xuloom exec "任务" --cwd /path/to/work --json`，执行后自动退出并返回明确回执和退出码。桌面包自带运行时的 CLI 启动方式见 [CLI 文档](docs/cli.md)。
 
-CLI 可以直接使用同一虚拟环境：
+| 进一步了解 | 文档 |
+| --- | --- |
+| 模型、代理网络和接口兼容 | [模型](docs/models.md) |
+| Skills、角色字段、作用域、协作额度 | [扩展](docs/capabilities.md) |
+| 原生子代理生命周期与程序接入 | [执行接口](docs/framework.md) |
+| 目标、非交互 CLI、定时唤醒 | [目标与调度](docs/goals-and-schedules.md) |
+| 测试、构建与项目结构 | [开发](docs/development.md) · [架构](docs/architecture.md) |
 
-```powershell
-# 仓库根目录安装后，进入你要处理的项目目录
-C:\path\to\xuloom\.venv\Scripts\xuloom.exe
-```
-
-## 当前能力与边界
-
-| 能力 | 当前实现 |
-|---|---|
-| 桌面与 CLI | 共用引擎、模型配置和同一项目的会话格式 |
-| Skills | 项目/用户/导入目录发现，校验、输入 `$` 选择和按需加载资源 |
-| 子代理 | 内置/自定义角色、超额自动排队、容量查询、消息投递、按 ID 续接及取消 |
-| MCP | 精选目录、官方注册表浏览、自定义 stdio / Streamable HTTP、连接测试和启停 |
-| 联网 | 内置 DuckDuckGo 搜索、静态网页读取，以及外部搜索 MCP |
-| 工具与审批 | 文件读写、命令执行、规划、权限卡片和 Git 变更查看 |
-
-- 模型接入支持 Anthropic Messages 和 OpenAI 兼容 Chat Completions；不同模型的工具调用、推理和多模态能力需要单独验证。
-- 当前源码为会话增加跨进程单写者锁与检查点版本校验：另一个入口可以查看历史，执行或修改历史前需要原写者释放。没有实时同步，也不能通过删除锁文件接管。此项属于尚未发布的通用化改造，不能据此认定 beta.2 下载包已具备。
-- 默认提示词和内置子代理保持领域中立；编程流程通过可选的 `code-development` Skill 加载，普通文件修改不再自动触发编程检查。
-- worktree／目录副本仍只隔离文件改动。当前开发源码另提供可选的 Windows x64 LPAC 系统执行隔离：桌面输入框“＋ → 执行隔离”，CLI 使用 `--sandbox workspace`。工具进程只能写工作目录与私有临时目录，运行时只读、不授予网络能力；MCP、浏览器、LSP、命令 Hook 和旧版 Shell 入口禁用，不退回宿主执行。Linux/macOS 后端尚未提供。详见 [排队与执行隔离](docs/queue-and-isolation.md)。
-- MCP OAuth 登录、旧版 SSE 连接、插件市场、自动更新和签名安装器尚未实现。
-- Windows 便携包已经内置运行时；macOS/Linux 桌面分发尚未提供。
-- 飞书集成已经移除，项目以本地桌面和 CLI 使用为主。
-
-## 项目目录
-
-```text
-xuloom/       Python 引擎、CLI、桌面桥接、Skills、代理和 MCP
-desktop/        Electron 主进程、React 界面、构建脚本和界面测试
-tests/          Python 测试及本地 MCP 协议测试服务
-examples/       可导入的 Skills 和自定义代理示例
-docs/           使用、配置、架构和开发文档
-.github/        自动测试与 Windows 便携包构建
-setup.py        Python 依赖与 CLI 入口的统一定义
-```
-
-会话、密钥、虚拟环境、依赖目录和构建产物不进入 Git。
-模型配置在 `~/.xuloom/config.json`，会话集中存储在当前用户数据目录的 `Xuloom/history/`（Linux 为 `xuloom/history/`），
-MCP 配置在项目 `.xuloom/mcp_servers.json`。
-
-## 开发验证
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-cd desktop
-npm test
-npm run build
-npm run test:e2e
-npm run test:mcp
-```
-
-端到端测试使用隐藏窗口、本机协议测试服务和模拟模型 API，不需要真实模型 Key。
-完整打包与便携性检查见[开发说明](docs/development.md)。
+自动更新、签名安装器与 Linux/macOS 桌面成品尚未提供；真实模型的小时级长任务与跨平台可靠性仍需持续验收。GitHub Actions 当前仅手动运行。本地测试方法见开发文档。
 
 ## 许可证
 

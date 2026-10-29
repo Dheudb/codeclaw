@@ -2545,6 +2545,7 @@ class QueryEngine:
             self.messages = msgs
             self._sync_message_context()
             metadata = state.get("metadata", {})
+            self.tool_context["workflow_completion"].restore(metadata.get("workflow_completion"))
             execution_mode = metadata.get("execution_mode", "host")
             if execution_mode not in {"host", "workspace"}:
                 raise ValueError("Invalid saved execution isolation mode")
@@ -2554,6 +2555,8 @@ class QueryEngine:
                 run = copy.deepcopy(metadata["collaboration_run"])
                 run["output_used"] += run.get("output_reserved", 0)
                 run["output_reserved"] = 0
+                run["budget"] = {"output_tokens": self.tool_context["collaboration"]["output_tokens"]}
+                run["request_cap"] = self.tool_context["collaboration"]["request_output_tokens"]
                 self.tool_context["collaboration_run"] = run
             from xuloom.features.goals import recover
             self.goal = recover(metadata.get("goal"))
@@ -2708,6 +2711,7 @@ class QueryEngine:
                 "agent_role": self.agent_role,
             },
             "last_run_result": getattr(self, "last_run_result", None),
+            "workflow_completion": self.tool_context["workflow_completion"].export_state(),
             "model_runtime": {
                 "provider": self.model_provider,
                 "primary_model": self.primary_model,
@@ -3787,7 +3791,7 @@ class QueryEngine:
         self.persist_session_state()
         return True
 
-    async def _run_loop(self, user_input: str, sys_print_callback=print, event_callback=None, input_blocks=None, attachments=None, display_text=None, selected_skills=None):
+    async def _run_loop(self, user_input: str, sys_print_callback=print, event_callback=None, input_blocks=None, attachments=None, display_text=None, selected_skills=None, resume=False):
         """
         The Core Action Loop:
         1. Contextualize System Prompt.
@@ -3799,14 +3803,17 @@ class QueryEngine:
             self.require_writer()
         except (SessionBusyError, SessionConflictError) as error:
             return RunResult(str(error), "session_busy" if isinstance(error, SessionBusyError) else "session_conflict", session_id=self.session_id, agent_id=self.agent_id)
-        if self.agent_depth == 0:
+        if resume and (user_input or input_blocks or attachments or selected_skills):
+            raise ValueError("Resume cannot replace the original prompt, attachments or skills")
+        if self.agent_depth == 0 and not resume:
             from xuloom.agents.collaboration import new_run, policy
             profile = policy(self.collaboration_mode, self.tool_context["skill_registry"].settings())
             self.tool_context["collaboration"] = profile
             self.tool_context["collaboration_run"] = new_run(profile)
         self.abort_event.clear()
         completion = self.tool_context["workflow_completion"]
-        completion.reset()
+        if not resume:
+            completion.reset()
         registry = self.tool_context["skill_registry"]
         names = list(dict.fromkeys(selected_skills or []))
         # CLI mentions and desktop selections use the same loader and stored input.
@@ -3838,14 +3845,32 @@ class QueryEngine:
             return finish_run(self, ("Model not configured. Use /model to set protocol, model name, "
                 "base URL, and API key before sending messages."), 'not_configured')
 
-        user_msg = create_user_message(input_blocks if input_blocks is not None else user_input, origin="human")
-        if attachments:
-            user_msg["_attachments"] = attachments
-        if display_text is not None:
-            user_msg["_display_text"] = display_text
+        if resume:
+            user_msg = next((message for message in reversed(self.messages) if message.get("role") == "user"
+                and message.get("_origin", "human") == "human" and not message.get("_is_meta")
+                and not message.get("_is_tool_result") and not any(block.get("type") == "tool_result"
+                    for block in message.get("content", []) if isinstance(block, dict))), None)
+            if user_msg is None:
+                raise ValueError("There is no original user task to resume")
+            # Use the existing recovery receipts, never replay uncertain tools.
+            restore_tool_activity(self, {"tool_activity": {"in_progress": self.in_progress_tools,
+                "recent": self.recent_tool_activity}})
+            self.messages.append(create_user_message(
+                "[Task resumed by user]\nContinue the original interrupted task using its existing instructions, "
+                "attachments, partial response and saved tool results. Continue the unfinished response without "
+                "repeating its existing text or adding a restart announcement. Do not repeat completed operations. "
+                "Interrupted tools may have uncertain effects: inspect saved results/current state before any new action. "
+                "Cancelled questions or approvals are not answers or authorization; ask again if still needed.",
+                is_meta=True, is_continuation=True, origin="resume_control"))
+        else:
+            user_msg = create_user_message(input_blocks if input_blocks is not None else user_input, origin="human")
+            if attachments:
+                user_msg["_attachments"] = attachments
+            if display_text is not None:
+                user_msg["_display_text"] = display_text
+            self.messages.append(user_msg)
         if self.active_turn_trace is not None:
             self.active_turn_trace["userMessageId"] = get_msg_uuid(user_msg)
-        self.messages.append(user_msg)
         self._sync_message_context()
 
         if not hasattr(self, "session_started"):
@@ -4480,7 +4505,7 @@ class QueryEngine:
         finally:
             self.active_run_task = None
 
-    async def submit_message(self, user_input: str, sys_print_callback=print, input_blocks=None, attachments=None, display_text=None, selected_skills=None):
+    async def submit_message(self, user_input: str, sys_print_callback=print, input_blocks=None, attachments=None, display_text=None, selected_skills=None, resume=False):
         if self.has_active_turn() or getattr(self, "_goal_task", None) is not None and asyncio.current_task() not in (self._goal_task, getattr(self, "_goal_turn_task", None)):
             result = RunResult("A turn is already running in this engine; wait or cancel it first.", "session_busy", session_id=self.session_id, agent_id=self.agent_id)
             yield {"type": "final", "text": result.text, "result": result.to_dict()}
@@ -4499,6 +4524,7 @@ class QueryEngine:
                 attachments=attachments,
                 display_text=display_text,
                 selected_skills=selected_skills,
+                resume=resume,
             )
         )
         self.active_run_task = task

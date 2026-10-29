@@ -552,6 +552,10 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
 
     last_interrupt_time = 0
     _pending_initial_prompt = initial_prompt
+    terminal_input = None
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        from xuloom.skills.terminal import input_session
+        terminal_input = input_session(lambda: engine.tool_context["skill_registry"])
     while True:
         try:
             if _pending_initial_prompt:
@@ -559,7 +563,7 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                 _pending_initial_prompt = None
                 console.print(f"\n[bold green]❯[/bold green] [dim]{user_input[:120]}{'...' if len(user_input) > 120 else ''}[/dim]")
             else:
-                user_input = console.input("\n[bold green]❯[/bold green] ")
+                user_input = await terminal_input.prompt_async("❯ ") if terminal_input else console.input("\n[bold green]❯[/bold green] ")
             last_interrupt_time = 0
             if not user_input.strip():
                 continue

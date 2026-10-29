@@ -11,9 +11,12 @@ from pydantic import BaseModel, Field
 from xuloom.tools.base import BaseAgenticTool
 from xuloom.context.tool_results import build_tool_result
 
+MAX_SEARCH_RESULTS = 50
+
 class WebSearchInput(BaseModel):
     query: str = Field(..., description="The search query to look up on the web.")
-    max_results: int = Field(5, ge=1, le=10, description="Number of results to return (1–10).")
+    max_results: int = Field(5, ge=1, le=MAX_SEARCH_RESULTS,
+        description="Maximum number of results to request (1–50, default 5). Use 15–30 for broader research when useful; the provider may return fewer results.")
 
 class WebSearchTool(BaseAgenticTool):
     name = "web_search_tool"
@@ -29,6 +32,7 @@ class WebSearchTool(BaseAgenticTool):
 
 Use this tool directly when the user asks to search the public web, research papers/models, or verify current information. It is already active and needs no tool discovery or model-provider API feature. Keep public research scoped to online sources; inspect project files only for project-specific requests.
 If the search service fails, report the service error and try a revised query or a configured search MCP. A provider failure does not mean the tool is unavailable.
+max_results accepts 1–50 (default 5). Request more results for broad research when needed, not automatically for every query. The search provider may return fewer; this is a maximum, not a guaranteed count.
 
 CRITICAL REQUIREMENT:
 - After answering the user's question, you MUST include a "Sources:" section at the end of your response
@@ -39,7 +43,7 @@ IMPORTANT - Use the correct year in search queries:
 
     async def execute(self, query: str, max_results: int = 5) -> dict:
         try:
-            limit = max(1, min(int(max_results), 10))
+            limit = max(1, min(int(max_results), MAX_SEARCH_RESULTS))
             # DDGS is synchronous; its network calls must not block streaming or Stop.
             results = await asyncio.wait_for(asyncio.to_thread(lambda: list(DDGS(timeout=8).text(query, max_results=limit))), timeout=35)
             results = [r for r in results if isinstance(r, dict) and str(r.get('href', '')).startswith(('https://', 'http://'))][:limit]
@@ -51,6 +55,9 @@ IMPORTANT - Use the correct year in search queries:
             return build_tool_result(ok=True, content=out, metadata={"backend": "ddgs", "query": query, "result_count": len(results)})
         except Exception as e:
             return build_tool_result(ok=False, is_error=True, content=f"Built-in web search service failed ({type(e).__name__}). Check network access, retry, or use a configured search MCP. This is a search-provider failure, not a missing tool.", metadata={"backend": "ddgs", "query": query, "reason": type(e).__name__})
+
+    def input_error_hint(self) -> str:
+        return 'Use {"query":"your search terms","max_results":15}. max_results must be between 1 and 50; omit it for the default of 5. The provider may return fewer results.'
 
 class WebFetchInput(BaseModel):
     url: str = Field(..., description="The URL to fetch content from.")

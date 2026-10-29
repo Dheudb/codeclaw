@@ -84,6 +84,8 @@ class DesktopBridge:
             # Deliver the settled trace before turn_finished clears the UI's
             # active response index. Snapshots never enter model messages.
             self.output({"type": "turn_trace", "trace": copy.deepcopy(self.recorder.record)})
+        if self.recorder and event.get("type") == "final":
+            event = {**event, "text": self.recorder.record["answer"]}
         if event.get("type") == "file_changed":
             change = event["change"]
             if self.recorder:
@@ -283,9 +285,11 @@ class DesktopBridge:
             if getattr(engine, "mcp_bridge", None):
                 await engine.mcp_bridge.cleanup()
 
-    async def turn(self, text, selected_skills, mode, attachment_ids=None, prepared=None):
+    async def turn(self, text, selected_skills, mode, attachment_ids=None, prepared=None, resume_trace=None):
         receipt = None
-        self.recorder = TurnRecorder()
+        self.recorder = TurnRecorder(resume_trace)
+        if resume_trace:
+            self.emit({"type": "turn_resumed", "trace": copy.deepcopy(self.recorder.record)})
         self.emit({"type": "turn_started"})
         try:
             # Validate all selections before creating a turn or emitting loaded events.
@@ -294,10 +298,15 @@ class DesktopBridge:
             from xuloom.desktop.attachments import prepare_attachments
             attachment_blocks, attachment_items = prepared[1] if prepared is not None else prepare_attachments(self.cwd, getattr(engine, "session_id", ""), attachment_ids or [])
             display_text = text
-            engine.turn_traces.append(self.recorder.record)
+            if resume_trace:
+                position = next(i for i, trace in enumerate(engine.turn_traces) if trace["id"] == resume_trace["id"])
+                engine.turn_traces[position] = self.recorder.record
+            else:
+                engine.turn_traces.append(self.recorder.record)
             engine.active_turn_trace = self.recorder.record
             engine.set_mode(mode)
             options = {"input_blocks": [{"type": "text", "text": text}] + attachment_blocks, "attachments": attachment_items, "display_text": display_text} if attachment_items else {}
+            if resume_trace: options["resume"] = True
             async for event in engine.submit_message(text, sys_print_callback=lambda text: self.emit({"type": "log", "text": str(text)}), selected_skills=selected_skills, **options):
                 if event.get("type") == "final": receipt = event.get("result")
                 if self.stop_requested and event.get("type") == "final":
@@ -317,8 +326,12 @@ class DesktopBridge:
                 if self.engine and self.recorder.record["pendingText"].strip():
                     from xuloom.core.messages import create_assistant_message
                     partial = self.recorder.record["pendingText"]
+                    # The prefix is already in the model transcript from the
+                    # earlier stop. Persist only newly received text this time.
+                    if self.recorder.answer_prefix and partial.startswith(self.recorder.answer_prefix):
+                        partial = partial[len(self.recorder.answer_prefix):]
                     from xuloom.desktop.turns import visible_text
-                    if not self.engine.messages or visible_text(self.engine.messages[-1]) != partial:
+                    if partial.strip() and (not self.engine.messages or visible_text(self.engine.messages[-1]) != partial):
                         self.engine.messages.append(create_assistant_message(partial, stop_reason="interrupted"))
                         self.engine._sync_message_context()
                 self.emit({"type": "turn_cancelled"})
@@ -346,18 +359,34 @@ class DesktopBridge:
                 result = await goals.control(engine, params["action"], params.get("reason", ""))
                 self.emit({"type": "goal_changed", "goal": result})
                 return result
+            if method == "goal.update":
+                if not isinstance(params.get("objective"), str) or not params["objective"].strip():
+                    raise ValueError("请填写目标")
+                if self.busy(): await self.dispatch("stop", {})
+                self.require_idle()
+                engine = await self.ensure_engine(write=True)
+                result = goals.update_objective(engine, params["objective"])
+                self.emit({"type": "goal_changed", "goal": result})
+                if params.get("resume"):
+                    self.stop_requested = False
+                    self.turn_task = asyncio.create_task(self.goal_turn(engine))
+                return result
             self.require_idle()
             engine = await self.ensure_engine(write=True)
             if method == "goal.create":
                 result = goals.create(engine, params["objective"], params["criteria"], checks=params.get("checks"),
                     rounds=params.get("rounds", 20), seconds=params.get("seconds", 1800),
-                    output_tokens=params.get("output_tokens", 50000), skills=params.get("skills"))
+                    output_tokens=params.get("output_tokens", 50000), skills=params.get("skills"), continuous=True)
                 engine.set_mode("normal")
                 if not engine.persist_session_state():
                     raise OSError("目标已创建，但执行模式保存失败；请重新打开会话检查目标状态")
                 self.emit({"type": "goal_changed", "goal": result})
                 return result
             if method == "goal.run":
+                if engine.goal and not engine.goal.get("continuous"):
+                    engine.goal.update(continuous=True, budget=dict(rounds=None, seconds=None, output_tokens=None))
+                    if engine.goal["status"] == "budget_exhausted": engine.goal["status"] = "paused"
+                    goals.save(engine)
                 self.stop_requested = False
                 self.turn_task = asyncio.create_task(self.goal_turn(engine))
                 return {"started": True}
@@ -527,6 +556,11 @@ class DesktopBridge:
             return await git_file_diff(self.cwd, params.get("path"))
         if method == "capabilities.list":
             return self.capabilities()
+        if method == "capabilities.create":
+            self.require_idle()
+            from xuloom.desktop.capability_config import create_definition
+            create_definition(self.skills, params)
+            return self.capabilities()
         if method == "capabilities.directory":
             kind = params.get("kind")
             if kind not in {"skills", "agents"}:
@@ -575,6 +609,21 @@ class DesktopBridge:
             if agent.get("path"):
                 return Path(agent["path"]).read_text(encoding="utf-8-sig")
             return str(agent.get("system_prompt", agent.get("description", "")))
+        if method == "prompt.resume":
+            self.require_idle()
+            engine = await self.ensure_engine(write=True)
+            if getattr(engine, "goal", None) and engine.goal["status"] not in {"completed", "cancelled", "budget_exhausted"}:
+                raise ValueError("请使用目标条的恢复操作继续当前目标")
+            human = next((message for message in reversed(engine.messages) if message.get("role") == "user"
+                and message.get("_origin", "human") == "human" and not message.get("_is_meta") and not message.get("_is_tool_result")
+                and not any(block.get("type") == "tool_result" for block in message.get("content", []) if isinstance(block, dict))), None)
+            previous = next((trace for trace in reversed(engine.turn_traces)
+                if trace.get("userMessageId") == (human or {}).get("_uuid")), None)
+            if not human or not previous or previous.get("status") not in {"cancelled", "interrupted", "running"}:
+                raise ValueError("当前没有可继续的已停止任务")
+            self.stop_requested = False
+            self.turn_task = asyncio.create_task(self.turn("", [], engine.get_mode(), resume_trace=copy.deepcopy(previous)))
+            return {"started": True}
         if method == "prompt":
             if self.busy() or self.mcp_testing:
                 raise ValueError("A turn or MCP connection operation is already running")

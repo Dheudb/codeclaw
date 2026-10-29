@@ -20,7 +20,6 @@ import Markdown from "./Markdown";
 import CapabilityGuide from "./CapabilityGuide";
 import ActivityPanel from "./ActivityPanel";
 import WorkspaceTree from "./WorkspaceTree";
-import GoalPanel from "./GoalPanel";
 
 export default function CapabilityPanel({
   session,
@@ -76,7 +75,6 @@ export default function CapabilityPanel({
           { id: "activity", label: "活动", icon: Activity },
           { id: "changes", label: "变更", icon: FileDiff },
           { id: "files", label: "文件", icon: FolderTree },
-          { id: "goals", label: "目标", icon: CircleCheck },
         ].map(({ id, label, icon: Icon }) => (
           <button
             key={id}
@@ -98,7 +96,6 @@ export default function CapabilityPanel({
         </div>
       ) : (
         <>
-          {tab === "goals" && <GoalPanel invoke={invoke} busy={session.busy} onError={onError} />}
           {tab === "skills" && (
             <>
               <div className="panel-title">

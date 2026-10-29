@@ -28,25 +28,23 @@ async function launch() {
   app = await electron.launch({ executablePath:process.env.XULOOM_TEST_EXECUTABLE,args:process.env.XULOOM_TEST_EXECUTABLE?[]:[root],env,timeout:30000 });
   page = await app.firstWindow(); page.setDefaultTimeout(30000); page.on("pageerror", e=>errors.push(e.message));
   await page.locator(".session-item.active").waitFor();
-  if (await page.getByRole("button", { name: "展开能力面板", exact: true }).count()) await page.getByRole("button", { name: "展开能力面板", exact: true }).click();
-  await page.getByRole("button",{name:"目标",exact:true}).click();
-  await page.getByRole("heading",{name:"目标与唤醒"}).waitFor();
+
 }
 async function main() {
   try {
     await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
     atomicJSON(path.join(config,"config.json"),{model_provider:"openai",openai_model:"fixture",openai_api_key:"fixture",openai_base_url:`http://127.0.0.1:${server.address().port}/v1`});
     await launch();
-    await page.getByLabel("目标",{exact:true}).fill("GOAL_OBJECTIVE_PROOF");
-    await page.getByLabel("验收条件（每行一项）").fill("Give an evidence based answer");
-    await page.getByRole("button",{name:"创建并开始"}).click();
-    await page.getByRole("button",{name:"确认验收通过"}).waitFor();
-    const png = await app.evaluate(async ({BrowserWindow}) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage(undefined,{stayHidden:true,stayAwake:true})).toPNG().toString("base64"));
-    fs.writeFileSync(path.join(root,"build/goals-ui.png"),Buffer.from(png,"base64"));
-    assert.equal(JSON.parse(fs.readFileSync(checkpoint)).metadata.goal.status,"awaiting_review");
-    await page.getByRole("button",{name:"确认验收通过"}).click();
-    await page.getByRole("heading",{name:"新目标"}).waitFor();
-    assert.equal(JSON.parse(fs.readFileSync(checkpoint)).metadata.goal.status,"completed");
+    await page.getByRole('textbox',{name:'任务输入'}).fill('GOAL_OBJECTIVE_PROOF');
+    await page.getByRole('button',{name:'添加工具与模式',exact:true}).click();
+    await page.getByRole('menuitem',{name:/^目标 /}).click();
+    await page.getByRole('button',{name:'发送任务',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('.send-button.stop'));
+    for(let i=0;i<100 && JSON.parse(fs.readFileSync(checkpoint)).metadata.goal?.status!=='completed';i++) await page.waitForTimeout(100);
+    assert.equal(JSON.parse(fs.readFileSync(checkpoint)).metadata.goal.status,'completed');
+    assert.equal(JSON.parse(fs.readFileSync(checkpoint)).metadata.goal.budget.output_tokens,null);
+    await page.getByRole('button',{name:'添加工具与模式',exact:true}).click();
+    await page.getByRole('menuitem',{name:/定时唤醒/}).click();
     await page.getByRole("textbox",{name:"定时消息",exact:true}).fill("WAKE_MESSAGE_PROOF");
     await page.getByLabel("多少分钟后").fill("0");
     await page.getByRole("button",{name:"保存唤醒"}).click();

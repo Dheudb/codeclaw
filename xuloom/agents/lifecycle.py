@@ -71,7 +71,7 @@ class AgentLifecycle:
         encode = lambda data: json.dumps(data, ensure_ascii=False)
         if action == "capacity":
             active = len(tasks.running)
-            return encode({"limit": tasks.limit, "active": active, "available": max(0, tasks.limit - active),
+            return encode({"limit": tasks.limit, "active": active, "available": None if tasks.limit is None else max(0, tasks.limit - active),
                            "queued": len(tasks.pending), "auto_queue": True, "queue_limit": tasks.queue_limit,
                            "max_batch_size": 10, "resume": True, "messages": True, "wait_timeout_ms": 60000, "collaboration": self.context.get("collaboration"),
                            "delegation_usage": self.context.get("collaboration_run")})

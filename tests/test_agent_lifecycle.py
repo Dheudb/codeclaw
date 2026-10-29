@@ -34,6 +34,8 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         return engine
 
     async def test_saved_queue_resumes_only_never_started_ids(self):
+        self.engine.tool_context["skill_registry"].update(agent_concurrency=3)
+        self.engine.set_collaboration_mode("auto")
         import copy
         started = []
         gate = asyncio.Event()
@@ -123,7 +125,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             ids = [r["agent_id"] for r in receipt["agents"]]
             await asyncio.sleep(0)
             capacity = json.loads(await self.tool.execute(action="capacity"))
-            self.assertEqual((capacity["active"], capacity["available"]), (2, 1))
+            self.assertEqual((capacity["active"], capacity["available"]), (2, None))
             rows = json.loads(await self.tool.execute(action="list"))["agents"]
             self.assertTrue(all(row["executing"] for row in rows))
             result = json.loads(await self.tool.execute(action="wait", agent_ids=ids, timeout_ms=5, response_format="json"))

@@ -4,6 +4,42 @@ from xuloom.desktop.turns import TurnRecorder, conversation_history
 
 
 class TurnTests(unittest.TestCase):
+    def test_resume_keeps_response_identity_partial_text_and_excludes_paused_time(self):
+        previous = {"id": "same", "userMessageId": "user", "startedAt": 1000, "status": "cancelled", "elapsedMs": 5000,
+            "answer": "First ", "pendingText": "", "steps": [], "files": [], "modelStreams": [{"turn": 1, "status": "cancelled"}]}
+        with patch("xuloom.desktop.turns.time.monotonic", side_effect=[100, 102, 102]):
+            recorder = TurnRecorder(previous)
+            recorder.accept({"type": "turn_started"})
+            recorder.accept({"type": "stream_status", "turn": 1, "metrics": {"status": "waiting"}})
+            recorder.accept({"type": "message_start"})
+            recorder.accept({"type": "text_delta", "text": "continued"})
+            self.assertEqual(recorder.record["pendingText"], "First continued")
+            recorder.accept({"type": "final", "text": "continued"})
+            recorder.accept({"type": "turn_finished"})
+        self.assertEqual(recorder.record["answer"], "First continued")
+        self.assertEqual(recorder.record["id"], "same")
+        self.assertEqual(recorder.record["elapsedMs"], 7000)
+        self.assertEqual([row["turn"] for row in recorder.record["modelStreams"]], [1, 2])
+        self.assertEqual(previous["status"], "cancelled")
+        history = conversation_history([{"role": "user", "_uuid": "user", "content": "task"},
+            {"role": "assistant", "content": "First "},
+            {"role": "user", "_is_meta": True, "_origin": "resume_control", "content": "internal resume"},
+            {"role": "assistant", "content": "continued"}], [recorder.record])
+        self.assertEqual([row["text"] for row in history], ["task", "First continued"])
+
+    def test_resume_with_tool_moves_partial_commentary_into_process(self):
+        previous = {"id": "same", "status": "cancelled", "elapsedMs": 1000, "answer": "Checking.", "steps": [], "files": []}
+        recorder = TurnRecorder(previous)
+        recorder.accept({"type": "turn_started"})
+        recorder.accept({"type": "message_start"})
+        recorder.accept({"type": "tool_started", "tool_use_id": "read", "tool_name": "file_read_tool"})
+        recorder.accept({"type": "tool_result", "tool_use_id": "read", "result": "saved evidence"})
+        recorder.accept({"type": "message_start"})
+        recorder.accept({"type": "text_delta", "text": "Final result"})
+        recorder.accept({"type": "final", "text": "Final result"})
+        self.assertEqual(recorder.record["answer"], "Final result")
+        self.assertEqual(recorder.record["steps"][0]["text"], "Checking.")
+
     def test_final_keeps_commentary_tools_and_measured_duration(self):
         with patch("xuloom.desktop.turns.time.monotonic", side_effect=[100, 108]):
             r = TurnRecorder()

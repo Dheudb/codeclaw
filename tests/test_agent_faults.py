@@ -48,7 +48,9 @@ class AgentFaultTests(unittest.IsolatedAsyncioTestCase):
                 if event.get("type") == "subagent_status" and event["agent"].get("status") in {"completed", "crashed", "cancelled"})
             self.assertEqual(notifications, Counter({identity: 1 for identity in ids}))
             capacity = json.loads(await self.tool.execute(action="capacity"))
-            self.assertEqual((capacity["active"], capacity["available"]), (0, 8))
+            self.assertEqual(capacity["active"], 0)
+            self.assertIsNone(capacity["limit"])
+            self.assertIsNone(capacity["available"])
             continued = json.loads(await self.tool.execute(action="followup", agent_id=entered[0], prompt="followup"))
             self.assertEqual(continued["agent_id"], entered[0])
             self.assertEqual(continued["status"], "completed")
@@ -58,7 +60,9 @@ class AgentFaultTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
             self.assertTrue(await self.engine.request_abort())
             self.assertFalse(any(not task.done() for task in self.engine.tool_context["subagent_tasks"].tasks.values()))
-            self.assertEqual(json.loads(await self.tool.execute(action="capacity"))["available"], 8)
+            capacity = json.loads(await self.tool.execute(action="capacity"))
+            self.assertEqual(capacity["active"], 0)
+            self.assertIsNone(capacity["available"])
 
     async def test_closing_owner_refuses_reentrant_launch_without_coroutine_leak(self):
         manager = self.engine.tool_context["subagent_tasks"]

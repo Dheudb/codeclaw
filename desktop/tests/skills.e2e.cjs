@@ -60,7 +60,7 @@ async function main() {
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "skill-fixture", openai_api_key: "fixture-key", openai_base_url: `http://127.0.0.1:${server.address().port}/v1` });
     await launch(); await page.locator(".new-task").click(); await page.locator(".session-item.active").waitFor();
     const input = await picker();
-    assert.equal(await page.locator("#skill-options").getByRole("option").count(), 8); // four public builtins, with code-review overridden by the project
+    assert.equal(await page.locator("#skill-options").getByRole("option").count(), 13); // nine public builtins, with code-review overridden by the project
     assert.equal(await page.getByRole("switch", { name: /启用技能/ }).count(), 0);
     assert.equal(await page.locator("#skill-options").getByRole("option", { name: /disabled-skill/ }).count(), 1);
     assert.equal(await page.locator("#skill-options").getByRole("option", { name: /code-review/ }).count(), 1);
@@ -79,12 +79,42 @@ async function main() {
     fs.writeFileSync(path.join(root, "test-results/skill-picker.png"), Buffer.from(shot, "base64"));
     await input.press("Escape"); assert.equal(await page.getByRole("listbox").count(), 0); assert.equal(await input.inputValue(), "$");
     await picker("$project-check"); await input.press("Enter");
-    assert.equal(await input.inputValue(), ""); assert.equal(await page.locator(".selected-skills button").count(), 1); assert.equal(requests.length, 0);
+    assert.equal(await input.inputValue(), ""); assert.equal(await page.locator(".selected-skills .selected-skill").count(), 1); assert.equal(requests.length, 0);
+    const selectedSkill = page.locator('.selected-skills .selected-skill').first();
+    const skillBox = await selectedSkill.boundingBox(), inputBox = await input.boundingBox();
+    assert(Math.abs(skillBox.y - inputBox.y - 18) < 3, 'Selected skill and task share one input row');
+    assert(inputBox.x > skillBox.x, 'Task input continues after the inline skill');
+    assert.equal(await input.getAttribute('placeholder'), '', 'No second placeholder line under the Skill');
+    assert.equal(await selectedSkill.evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)');
+    assert.equal(await page.locator('.selected-skill-remove').count(),0);
+    await selectedSkill.hover();
+    assert.equal(await page.locator('.selected-skill-remove').count(),0,'Hover does not reveal a delete button');
+    await input.focus();
+    const inlineShot = await app.evaluate(async ({BrowserWindow}) => {
+      const web=BrowserWindow.getAllWindows()[0].webContents;
+      await web.capturePage(undefined,{stayHidden:true,stayAwake:true});
+      await new Promise(resolve=>setTimeout(resolve,100));
+      return (await web.capturePage(undefined,{stayHidden:true,stayAwake:true})).toPNG().toString('base64');
+    });
+    fs.writeFileSync(path.join(root,'test-results/inline-skill.png'),Buffer.from(inlineShot,'base64'));
     await picker("$code-review"); await input.press("Tab");
-    assert.equal(await page.locator(".selected-skills button").count(), 2);
+    assert.equal(await page.locator(".selected-skills .selected-skill").count(), 2);
     await picker("$debug"); await page.locator("#skill-options").getByRole("option", { name: /debug-issue/ }).click();
-    assert.equal(await page.locator(".selected-skills button").count(), 3);
-    await picker("$project-check"); await input.press("Enter"); assert.equal(await page.locator(".selected-skills button").count(), 3, "Selecting twice must not duplicate a skill");
+    assert.equal(await page.locator(".selected-skills .selected-skill").count(), 3);
+    await picker("$project-check"); await input.press("Enter"); assert.equal(await page.locator(".selected-skills .selected-skill").count(), 3, "Selecting twice must not duplicate a skill");
+    await input.fill('abc'); await input.press('End'); await input.press('Backspace');
+    assert.equal(await input.inputValue(),'ab');
+    assert.equal(await page.locator('.selected-skills .selected-skill').count(),3,'Deleting task text must preserve Skills');
+    await input.press('Home'); await input.press('Backspace');
+    assert.equal(await input.inputValue(),'ab','Deleting the previous Skill preserves task text');
+    assert.equal(await page.locator('.selected-skills .selected-skill').count(),2);
+    await input.press('End'); await input.press('Shift+Home'); await input.press('Backspace');
+    assert.equal(await input.inputValue(),'');
+    assert.equal(await page.locator('.selected-skills .selected-skill').count(),2,'Deleting selected text must not remove Skills');
+    await input.press('Backspace'); await input.press('Backspace');
+    assert.equal(await page.locator('.selected-skills .selected-skill').count(),0);
+    assert((await input.getAttribute('placeholder')).length>0,'Placeholder returns after all Skills are removed');
+    for (const name of ['project-check','code-review','debug-issue']) { await picker('$'+name); await input.press('Enter'); }
     // Search descriptions, unknown queries and amounts; Enter in an empty menu never submits a bogus task.
     await picker("$挂载"); assert.equal(await page.locator("#skill-options").getByRole("option").count(), 1);
     await picker("$does-not-exist"); assert.equal(await page.locator("#skill-options").getByRole("option").count(), 0);
@@ -100,14 +130,14 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('[role="listbox"]')?.getAttribute("aria-busy") === "false");
     await page.locator("#skill-options").getByRole("option", { name: /imported-check/ }).click();
     assert.equal(await input.inputValue(), "保留后面的任务");
-    await page.locator(".selected-skills button").filter({ hasText: "imported-check" }).click();
+    await input.press("Home"); await input.press("Backspace");
     await input.fill("验证技能挂载"); await input.press("Enter");
     await page.getByText("SKILL_WIRING_VERIFIED", { exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector(".send-button.stop"));
     assert.equal(requests.length, 1);
     const prompt = requests[0].messages.find((message) => message.role === "user").content;
     for (const proof of ["PROJECT_BODY_PROOF", "CUSTOM_REVIEW_BODY_PROOF", "Skill: debug-issue"]) assert(prompt.includes(proof), "Missing full instructions: " + proof);
-    const builtinBody = fs.readFileSync(path.join(root, "../xuloom/skills/builtin/debug-issue/SKILL.md"), "utf8").split("---")[2].trim();
+    const builtinBody = fs.readFileSync(path.join(root, "../xuloom/skills/builtin/debug-issue/SKILL.md"), "utf8").replace(/\r\n/g,"\n").split("---")[2].trim();
     assert(prompt.includes(builtinBody), "Bundled skill must inject its actual body");
     assert(!prompt.includes("Skill: imported-check"));
     const displayed = await page.locator(".message.user").innerText();
@@ -116,7 +146,7 @@ async function main() {
     await picker("$project-check");
     await page.getByRole("button", { name: "在项目 project-b 中新建会话", exact: true }).click();
     await page.waitForFunction((other) => document.querySelector(".project-context span")?.getAttribute("title")?.toLowerCase() === other.toLowerCase(), fs.realpathSync(other));
-    assert.equal(await page.locator(".selected-skills button").count(), 0);
+    assert.equal(await page.locator(".selected-skills .selected-skill").count(), 0);
     await picker();
     assert.equal(await page.locator("#skill-options").getByRole("option", { name: /project-check/ }).count(), 0);
     assert.equal(await page.locator("#skill-options").getByRole("option", { name: /other-project/ }).count(), 1);

@@ -27,6 +27,8 @@ def main():
     build_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     stage = DESKTOP / "build" / ("pending-update-general-" + build_id + "-" + uuid.uuid4().hex[:6])
     stage.mkdir(parents=True)
+    dependencies = stage / "dependencies"
+    subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps", "--target", str(dependencies), "prompt_toolkit>=3.0,<4"], check=True)
     wheels = stage / "wheels"; wheels.mkdir()
     subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-index", "--no-deps", "--no-build-isolation",
         "--wheel-dir", str(wheels), str(ROOT)], cwd=ROOT, check=True)
@@ -50,7 +52,7 @@ def main():
         if expected != actual or any((source / path).read_bytes() != (stage / "xuloom" / path).read_bytes() for path in expected):
             raise SystemExit("Wheel resources do not match public source")
     skills = sorted(path.parent.name for path in (stage / "xuloom/skills/builtin").glob("*/SKILL.md"))
-    if skills != ["code-development", "code-review", "debug-issue", "web-research"]:
+    if skills != ['code-development', 'code-review', 'data-analysis', 'debug-issue', 'document-summary', 'document-writing', 'experiment-design', 'skill-creator', 'web-research']:
         raise SystemExit("Unexpected bundled skills")
     app = stage / "app"; app.mkdir()
     for directory in ("dist", "electron"):
@@ -59,9 +61,9 @@ def main():
     (app / "package.json").write_text(json.dumps({"name": "xuloom-desktop", "productName": "Xuloom",
         "version": version, "main": "electron/main.cjs", "buildId": build_id}, indent=2), encoding="utf-8")
     subprocess.run([str(package / "resources/python/python.exe"), "-I", "-B", "-c",
-        "import sys;sys.path[:0]=[sys.argv[1],sys.argv[1]+'/dependencies'];import xuloom,xuloom.core.session_mutation,xuloom.core.engine;from xuloom.protocols.mcp_bridge import MCP_AVAILABLE;assert MCP_AVAILABLE;print('Staged engine and bundled dependencies verified')",
+        "import sys;sys.path[:0]=[sys.argv[1],sys.argv[1]+'/dependencies'];import xuloom,xuloom.core.session_mutation,xuloom.core.engine,xuloom.skills.terminal;from xuloom.protocols.mcp_bridge import MCP_AVAILABLE;assert MCP_AVAILABLE;print('Staged engine and bundled dependencies verified')",
         str(stage)], cwd=stage, check=True)
-    manifest = {"metadataDirectory": metadata, "buildId": build_id, "pythonPackages": [],
+    manifest = {"metadataDirectory": metadata, "buildId": build_id, "pythonPackages": [p.name for p in dependencies.iterdir() if p.name != "__pycache__"],
         "originalExeSha256": hashlib.sha256(executable.read_bytes()).hexdigest(), "bundledSkills": skills}
     (stage / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     if list(stage.rglob("*.exe")): raise SystemExit("Resource updates must not contain another executable")

@@ -5,7 +5,7 @@ import inspect
 
 
 class SubagentTasks:
-    def __init__(self, limit=10, queue_limit=1000):
+    def __init__(self, limit=None, queue_limit=None):
         self.limit = limit
         self.queue_limit = queue_limit
         self.tasks = {}
@@ -19,10 +19,10 @@ class SubagentTasks:
     def check_capacity(self, count):
         if self._closing:
             raise ValueError("Subagent task owner is closing; new tasks are not accepted")
-        if self.limit <= 0:
+        if self.limit is not None and self.limit <= 0:
             raise ValueError("Subagent execution is disabled")
         outstanding = sum(not task.done() for task in self.tasks.values())
-        if max(0, outstanding + count - self.limit) > self.queue_limit:
+        if self.limit is not None and self.queue_limit is not None and max(0, outstanding + count - self.limit) > self.queue_limit:
             raise ValueError("Subagent queue capacity is exhausted")
 
     async def _enter(self, identity):
@@ -30,7 +30,7 @@ class SubagentTasks:
             self._condition = asyncio.Condition()
         async with self._condition:
             await self._condition.wait_for(lambda: self._closing or
-                bool(self.pending) and self.pending[0] == identity and len(self.running) < self.limit)
+                bool(self.pending) and self.pending[0] == identity and (self.limit is None or len(self.running) < self.limit))
             if self._closing:
                 raise asyncio.CancelledError()
             self.pending.popleft()

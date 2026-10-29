@@ -141,6 +141,7 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
             spill_recorder=spill_recorder,
         )
     else:
+        effective_tools = {}
         try:
             effective_tools = self._get_effective_tools()
             if tool_name not in effective_tools:
@@ -226,14 +227,18 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
             self._emit_tool_activity("tool_result", tool_name, tool_id, result="操作已取消。", is_error=True, status="cancelled")
             raise
         except (ValidationError, ToolProtocolError) as e:
-            detail = json.dumps(e.errors(include_input=False, include_url=False), ensure_ascii=False, default=str) if isinstance(e, ValidationError) else str(e)
+            detail = json.dumps(e.errors(include_input=False, include_url=False, include_context=False), ensure_ascii=False, default=str) if isinstance(e, ValidationError) else str(e)
             if handler_invoked:
                 res_text = "Tool Exception Caught: " + detail + "\nExecution may have begun. Inspect the existing operation and its durable result before retrying; do not blindly repeat it."
             else:
                 input_error = True
+                errors = e.errors(include_input=False, include_url=False, include_context=False) if isinstance(e, ValidationError) else []
+                hint_builder = getattr(effective_tools.get(tool_name), "input_error_hint", None)
+                hint = str(hint_builder() or "").strip() if callable(hint_builder) else ""
                 res_text = serialize_tool_result(build_tool_result(ok=False,
-                    content="Invalid tool input: " + detail + "\nCorrect the parameters using the tool schema. This call was not executed; do not repeat completed operations.",
-                    metadata={"code": "invalid_tool_input", "tool_name": tool_name, "executed": False}, is_error=True))
+                    content="Invalid tool input: " + detail + "\nCorrect the parameters using the tool schema. This call was not executed; do not repeat completed operations." + ("\n" + hint if hint else ""),
+                    metadata={"code": "invalid_tool_input", "tool_name": tool_name, "executed": False,
+                        **({"validation_errors": errors} if errors else {})}, is_error=True))
         except PersistenceError:
             raise
         except Exception as e:

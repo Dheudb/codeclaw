@@ -58,6 +58,8 @@ export type TurnTrace = {
   startedAt?: number;
   finishedAt?: number;
   elapsedMs?: number;
+  resumedAt?: number;
+  elapsedBeforeResumeMs?: number;
   approximate?: boolean;
   answer?: string;
   pendingText?: string;

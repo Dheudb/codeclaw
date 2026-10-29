@@ -18,6 +18,25 @@ from xuloom.features.goals import CURRENT_BUDGET
 
 
 class CollaborationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_modes_share_unlimited_quantities_and_old_saved_quota_is_not_restored(self):
+        auto, ultra = policy("auto"), policy("ultra")
+        self.assertEqual({k:v for k,v in auto.items() if k != "mode"}, {k:v for k,v in ultra.items() if k != "mode"})
+        for key in ("concurrency", "max_delegations", "output_tokens"):
+            self.assertIsNone(auto[key])
+        self.engine.set_collaboration_mode("auto")
+        run = self.engine.tool_context["collaboration_run"]
+        run.update(submitted=5000, output_used=5000000)
+        from xuloom.agents.collaboration import admit
+        admit(self.engine.tool_context, 100)
+        self.assertEqual(run["submitted"], 5100)
+        run["budget"]["output_tokens"] = 1000000
+        self.engine.persist_session_state()
+        self.engine.session_manager.release_writer()
+        restored = self.make_engine()
+        self.assertTrue(restored.load_session(self.engine.session_id))
+        self.assertIsNone(restored.tool_context["collaboration_run"]["budget"]["output_tokens"])
+        self.assertEqual(restored.tool_context["collaboration_run"]["submitted"], 5100)
+
     asyncSetUp = lifecycle.LifecycleTests.asyncSetUp
     asyncTearDown = lifecycle.LifecycleTests.asyncTearDown
     make_engine = lifecycle.LifecycleTests.make_engine
@@ -34,7 +53,7 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((capacity["limit"], capacity["available"]), (0, 0))
 
     async def test_auto_and_ultra_enforce_parallel_capacity_before_any_child_returns(self):
-        for mode, limit in (("auto", 3), ("ultra", 8)):
+        for mode, limit in (("auto", 10), ("ultra", 10)):
             self.engine.set_collaboration_mode(mode)
             entered, gate = [], asyncio.Event()
             async def run(child, user_input, sys_print_callback):
@@ -49,15 +68,16 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0)
                 self.assertEqual(len(entered), limit)
                 await self.tool.execute(prompt="overflow", run_in_background=True)
+                await asyncio.sleep(0)
                 capacity = json.loads(await self.tool.execute(action="capacity"))
-                self.assertEqual((capacity["active"], capacity["queued"]), (limit, 1))
+                self.assertEqual((capacity["active"], capacity["queued"]), (limit + 1, 0))
                 with self.assertRaisesRegex(ValueError, "停止"):
                     self.engine.set_collaboration_mode("solo")
                 gate.set()
                 await self.tool.execute(action="wait")
 
     async def test_attempt_quota_and_idempotency_cover_followup_and_survive_restart(self):
-        self.engine.tool_context["skill_registry"].update(collaboration_profiles={"auto": {"max_delegations": 2}})
+        self.engine.tool_context["skill_registry"].update(agent_limits={"max_delegations": 2})
         self.engine.set_collaboration_mode("auto")
         async def run(child, user_input, sys_print_callback):
             return RunResult("done", "completed", True)
@@ -116,9 +136,9 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
     async def test_long_response_default_is_independent_of_concurrency_and_remaining_budget_is_enforced(self):
         for mode in ("auto", "ultra"):
             profile = policy(mode)
-            self.assertEqual(profile["output_tokens"], 1000000)
+            self.assertIsNone(profile["output_tokens"])
             self.assertEqual(new_run(profile)["request_cap"], 64000)
-        run = new_run(policy("auto", {"collaboration_profiles": {"auto": {"concurrency": 24}}}))
+        run = new_run(policy("auto", {"agent_limits": {"concurrency": 24, "output_tokens": 1000000}}))
         self.assertEqual(run["request_cap"], 64000)
         token = DELEGATION_BUDGET.set(run)
         try:
@@ -131,7 +151,7 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
             settle(active_budgets(), amount, 9000)
             self.assertEqual(run["output_used"], 999000)
         finally: DELEGATION_BUDGET.reset(token)
-        small = policy("auto", {"collaboration_profiles": {"auto": {"request_output_tokens": 2048, "output_tokens": 5000}}})
+        small = policy("auto", {"agent_limits": {"request_output_tokens": 2048, "output_tokens": 5000}})
         self.assertEqual(new_run(small)["request_cap"], 2048)
 
     async def test_mode_does_not_change_reasoning_permissions_or_private_skills(self):
@@ -145,7 +165,7 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
         restored = self.make_engine()
         self.assertTrue(restored.load_session(self.engine.session_id))
         self.assertEqual(restored.collaboration_mode, "ultra")
-        self.assertEqual(restored.tool_context["collaboration"]["concurrency"], 8)
+        self.assertIsNone(restored.tool_context["collaboration"]["concurrency"])
 
     async def test_gui_preferences_save_without_engine_and_respect_writer_lease(self):
         self.engine.persist_session_state()
@@ -182,7 +202,7 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
             CURRENT_BUDGET.reset(t1); DELEGATION_BUDGET.reset(t2)
 
     async def test_invalid_profiles_fail_closed_and_engine_save_failure_rolls_back(self):
-        for mode, settings in (("invalid", {}), ("auto", {"agent_concurrency": True}), ("auto", {"collaboration_profiles": []}), ("ultra", {"collaboration_profiles": {"ultra": {"concurrency": 0}}})):
+        for mode, settings in (("invalid", {}), ("auto", {"agent_concurrency": True}), ("auto", {"agent_limits": []}), ("ultra", {"agent_limits": {"concurrency": 0}})):
             with self.assertRaises(ValueError): policy(mode, settings)
         with patch.object(self.engine, "persist_session_state", return_value=False):
             with self.assertRaises(OSError): self.engine.set_collaboration_mode("ultra")

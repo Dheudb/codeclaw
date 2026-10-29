@@ -13,6 +13,45 @@ from unittest.mock import patch, AsyncMock, Mock
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resume_dispatch_only_accepts_latest_stopped_task(self):
+        from types import SimpleNamespace
+        original = {"role": "user", "_uuid": "original", "content": "task"}
+        trace = {"id": "same", "userMessageId": "original", "status": "cancelled", "steps": [], "files": [], "answer": "partial"}
+        engine = SimpleNamespace(messages=[original], turn_traces=[trace], goal=None, get_mode=Mock(return_value="plan"),
+            tool_context={"subagent_tasks": SimpleNamespace(tasks={}), "command_sessions": SimpleNamespace(records={})})
+        self.bridge.engine = engine
+        self.bridge.ensure_engine = AsyncMock(return_value=engine)
+        self.bridge.turn = AsyncMock()
+        self.assertEqual(await self.bridge.dispatch("prompt.resume", {}), {"started": True})
+        await self.bridge.turn_task
+        self.bridge.turn.assert_awaited_once_with("", [], "plan", resume_trace=trace)
+        trace["status"] = "completed"
+        with self.assertRaises(ValueError): await self.bridge.dispatch("prompt.resume", {})
+        trace["status"] = "cancelled"
+        engine.messages.append({"role": "user", "_uuid": "new-task", "content": "new task"})
+        with self.assertRaises(ValueError): await self.bridge.dispatch("prompt.resume", {})
+        engine.messages.pop()
+        engine.goal = {"status": "paused"}
+        with self.assertRaises(ValueError): await self.bridge.dispatch("prompt.resume", {})
+
+    async def test_create_capabilities_validates_and_never_overwrites(self):
+        base = dict(kind="skills", scope="project", name="evidence-check", description="Check evidence", prompt="Read original sources")
+        snapshot = await self.bridge.dispatch("capabilities.create", base)
+        self.assertTrue(any(s["name"] == "evidence-check" and s["valid"] for s in snapshot["skills"]))
+        path = self.root / ".xuloom/skills/evidence-check/SKILL.md"
+        original = path.read_bytes()
+        with self.assertRaises(ValueError): await self.bridge.dispatch("capabilities.create", {**base, "prompt": "overwrite"})
+        self.assertEqual(path.read_bytes(), original)
+        for field in ({"name": "../escape"}, {"scope": "other"}, {"prompt": ""}):
+            with self.assertRaises(ValueError): await self.bridge.dispatch("capabilities.create", {**base, **field})
+        agent = dict(kind="agents", scope="project", name="evidence-reader", description="Read evidence", prompt="Verify the given claims", tools="Read, Skill", skills="evidence-check", model="inherit")
+        snapshot = await self.bridge.dispatch("capabilities.create", agent)
+        definition = self.bridge.agents.resolve("evidence-reader")
+        self.assertEqual(definition["skills"], ["evidence-check"])
+        self.assertEqual(definition["allowed_tools"], ["file_read_tool", "skill_tool"])
+        with self.assertRaises(ValueError): await self.bridge.dispatch("capabilities.create", {**agent, "name": "bad-skill", "skills": "does-not-exist"})
+        self.assertFalse((self.root / ".xuloom/agents/bad-skill.md").exists())
+
     async def test_goal_review_is_not_an_error_and_pause_is_cancelled(self):
         from types import SimpleNamespace
         for status, expected in (("awaiting_review", "completed"), ("paused", "cancelled"), ("blocked", "error")):

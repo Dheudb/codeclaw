@@ -10,6 +10,34 @@ from xuloom.core.run_result import PersistenceError
 
 
 class GoalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_continuous_goal_ignores_round_time_output_and_tool_stall_limits(self):
+        self.create(continuous=True)
+        self.engine.goal.update(rounds=25, elapsed_seconds=7200, output_used=2000000)
+        self.fixture(["Still working"] * 4 + [self.report(), "Finished"])
+        result = await goals.run(self.engine, self.emit)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["accepted_by"], "model_report")
+        self.assertEqual(result["rounds"], 30)
+        self.assertEqual(result["budget"], dict(rounds=None, seconds=None, output_tokens=None))
+
+    async def test_continuous_goal_stops_for_a_reported_blocker(self):
+        self.create(continuous=True)
+        self.fixture([self.report("blocked"), "Need user information"])
+        result = await goals.run(self.engine, self.emit)
+        self.assertEqual(result["status"], "blocked")
+
+    async def test_edit_goal_preserves_identity_progress_and_rolls_back_on_save_failure(self):
+        goal = self.create(continuous=True)
+        self.engine.goal.update(rounds=4, elapsed_seconds=20, status="blocked")
+        updated = goals.update_objective(self.engine, "Updated objective")
+        self.assertEqual(updated["id"], goal["id"])
+        self.assertEqual(updated["criteria"], ["Updated objective"])
+        self.assertEqual(updated["rounds"], 4)
+        self.assertEqual(updated["elapsed_seconds"], 20)
+        with patch.object(self.engine, "persist_session_state", return_value=False):
+            with self.assertRaises(PersistenceError): goals.update_objective(self.engine, "Not saved")
+        self.assertEqual(self.engine.goal, updated)
+
     asyncSetUp = recovery.RecoveryTests.asyncSetUp
     asyncTearDown = recovery.RecoveryTests.asyncTearDown
     fixture = recovery.RecoveryTests.fixture

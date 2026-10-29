@@ -39,7 +39,7 @@ def main():
         actual = {p.relative_to(installed) for pattern in patterns for p in installed.rglob(pattern) if p.is_file()}
         if source != actual or any((directory / name).read_bytes() != (installed / name).read_bytes() for name in source):
             raise SystemExit("Installed resources do not match source: " + directory.name)
-    if sorted(p.parent.name for p in (site / "skills/builtin").glob("*/SKILL.md")) != ["code-development", "code-review", "debug-issue", "web-research"]:
+    if sorted(p.parent.name for p in (site / "skills/builtin").glob("*/SKILL.md")) != ['code-development', 'code-review', 'data-analysis', 'debug-issue', 'document-summary', 'document-writing', 'experiment-design', 'skill-creator', 'web-research']:
         raise SystemExit("Unexpected bundled skills")
     # Only known application roots may be published. User state stays outside this package.
     allowed = {p.name for p in (DESKTOP / "node_modules/electron/dist").iterdir()} - {"electron.exe"}
@@ -55,7 +55,7 @@ def main():
     revision = git("rev-parse", "HEAD")
     record = {"tag": args.tag, "sourceCommit": revision, "platform": "windows-x64",
               "version": metadata["version"], "buildId": metadata.get("buildId"),
-              "bundledSkills": ["code-development", "code-review", "debug-issue", "web-research"]}
+              "bundledSkills": ['code-development', 'code-review', 'data-analysis', 'debug-issue', 'document-summary', 'document-writing', 'experiment-design', 'skill-creator', 'web-research']}
     skipped = 0
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path in sorted(package.rglob("*")):

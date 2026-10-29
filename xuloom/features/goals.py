@@ -49,7 +49,7 @@ def save(engine):
         raise PersistenceError("Goal checkpoint could not be saved; execution stopped.")
 
 
-def create(engine, objective, criteria, *, checks=None, rounds=20, seconds=1800, output_tokens=50000, skills=None):
+def create(engine, objective, criteria, *, checks=None, rounds=20, seconds=1800, output_tokens=50000, skills=None, continuous=False):
     engine.require_writer()
     if engine.goal and engine.goal["status"] not in TERMINAL:
         raise ValueError("Finish or cancel the existing goal first")
@@ -72,7 +72,9 @@ def create(engine, objective, criteria, *, checks=None, rounds=20, seconds=1800,
     goal = dict(version=1, id=str(uuid.uuid4()), objective=objective.strip(), criteria=criteria,
         checks=copy.deepcopy(checks), skills=list(skills or []), budget=dict(rounds=rounds, seconds=seconds, output_tokens=output_tokens),
         rounds=0, elapsed_seconds=0, output_used=0, output_reserved=0, stalls=0, status="paused", phase="ready",
-        reason="Created; explicitly run or resume to start", report=None, last_progress=None, last_result=None)
+        reason="Created; explicitly run or resume to start", report=None, last_progress=None, last_result=None, continuous=continuous)
+    if continuous:
+        goal["budget"] = dict(rounds=None, seconds=None, output_tokens=None)
     previous, engine.goal = engine.goal, goal
     try: save(engine)
     except BaseException:
@@ -96,7 +98,7 @@ def recover(goal):
         goal["reason"] = "Previous owner exited; inspect saved results and explicitly resume. No work was replayed."
         goal["output_used"] += goal.get("output_reserved", 0)
         goal["output_reserved"] = 0
-        goal["elapsed_seconds"] += min(goal["budget"]["seconds"], max(0, time.time() - goal.get("round_started_at", time.time())))
+        goal["elapsed_seconds"] += min(goal["budget"]["seconds"] or float("inf"), max(0, time.time() - goal.get("round_started_at", time.time())))
     return goal
 
 
@@ -131,7 +133,25 @@ async def control(engine, action, reason=""):
 
 
 def available_output(goal):
+    if goal.get("continuous") or goal["budget"]["output_tokens"] is None: return float("inf")
     return max(0, goal["budget"]["output_tokens"] - goal["output_used"] - goal["output_reserved"])
+
+
+def update_objective(engine, objective):
+    engine.require_writer()
+    if not isinstance(objective, str) or not objective.strip(): raise ValueError("请填写目标")
+    if engine.has_active_turn() or getattr(engine, "_goal_task", None): raise ValueError("Pause the goal before editing")
+    if not engine.goal or engine.goal["status"] == "cancelled": raise ValueError("No editable goal")
+    previous = copy.deepcopy(engine.goal)
+    engine.goal.update(objective=objective.strip(), criteria=[objective.strip()], checks=[], continuous=True,
+        budget=dict(rounds=None, seconds=None, output_tokens=None), status="paused", phase="ready", report=None,
+        previous_report=None, last_progress=None, stalls=0, reason="目标已修改，等待继续")
+    engine.goal.pop("accepted_by", None)
+    try: save(engine)
+    except BaseException:
+        engine.goal = previous
+        raise
+    return copy.deepcopy(engine.goal)
 
 
 async def run(engine, emit, validator=None):
@@ -153,8 +173,8 @@ async def run(engine, emit, validator=None):
             if getattr(engine, "_noninteractive_approval_required", False) or getattr(engine, "_noninteractive_question_required", False):
                 goal["status"], goal["reason"] = "blocked", "User input or approval required; non-interactive execution cannot grant it"
                 break
-            remaining = goal["budget"]["seconds"] - goal["elapsed_seconds"]
-            if goal["rounds"] >= goal["budget"]["rounds"] or remaining <= 0 or available_output(goal) <= 0:
+            remaining = float("inf") if goal.get("continuous") else goal["budget"]["seconds"] - goal["elapsed_seconds"]
+            if not goal.get("continuous") and (goal["rounds"] >= goal["budget"]["rounds"] or remaining <= 0 or available_output(goal) <= 0):
                 goal["status"], goal["reason"] = "budget_exhausted", "Goal round, active-time or output-token budget exhausted"
                 break
             goal["rounds"] += 1
@@ -165,7 +185,8 @@ async def run(engine, emit, validator=None):
             prompt = ("Continue the explicitly authorized goal using saved evidence; do not repeat uncertain operations.\n"
                 + json.dumps({"objective": goal["objective"], "acceptance": goal["criteria"], "round": goal["rounds"],
                     "last_report": goal.get("previous_report"), "budget": goal["budget"]}, ensure_ascii=False)
-                + "\nUse goal_report_tool to report progress, evidence for each acceptance criterion, completion or a concrete blocker. A completion claim alone is not verified acceptance.")
+                + "\nUse goal_report_tool to report progress, evidence for each acceptance criterion, completion or a concrete blocker. A completion claim alone is not verified acceptance."
+                + (" Continue until the objective is fulfilled or a concrete blocker requires user input. No goal-level round, time or output limit is set. Report complete when done; this is a model report, not independent scientific validation." if goal.get("continuous") else ""))
             result, started = None, time.monotonic()
             async def round_turn():
                 nonlocal result
@@ -211,6 +232,8 @@ async def run(engine, emit, validator=None):
                 goal["status"], goal["reason"] = "blocked", "User input or approval required; non-interactive execution cannot grant it"
                 break
             if not result or not result.get("ok"):
+                if goal.get("continuous") and result and result.get("persisted") and result.get("reason") == "turn_limit":
+                    continue
                 goal["status"], goal["reason"] = "blocked", "Framework execution did not complete: " + str((result or {}).get("reason", "missing_result"))
                 break
             report = goal.get("report") or {}
@@ -232,13 +255,16 @@ async def run(engine, emit, validator=None):
                 if accepted:
                     goal["status"], goal["reason"], goal["accepted_by"] = "completed", "Acceptance checks passed", "host_validator" if validator else "declared_file_checks"
                 elif not checks and not validator:
-                    goal["status"], goal["reason"] = "awaiting_review", "Completion reported; explicit user/host acceptance is required for these textual criteria"
+                    if goal.get("continuous"):
+                        goal["status"], goal["reason"], goal["accepted_by"] = "completed", report["summary"], "model_report"
+                    else:
+                        goal["status"], goal["reason"] = "awaiting_review", "Completion reported; explicit user/host acceptance is required for these textual criteria"
             progress = hashlib.sha256(json.dumps({"tools": sorted({(r.get("tool_name"), r.get("input_digest"), json.dumps(r.get("tool_result"), sort_keys=True, default=str)) for r in engine.recent_tool_activity if r.get("status") == "ok" and r.get("tool_name") != "goal_report_tool"}),
                 "files": engine.tool_context.get("file_changes", []), "workers": engine.subagent_registry}, sort_keys=True, default=str).encode()).hexdigest()
             goal["stalls"] = goal["stalls"] + 1 if progress == goal.get("last_progress") else 1
             if progress != goal.get("last_progress"): goal["stalls"] = 0 if any(r.get("tool_name") != "goal_report_tool" for r in engine.recent_tool_activity) else 1
             goal["last_progress"] = progress
-            if goal["status"] == "active" and goal["stalls"] >= 3:
+            if not goal.get("continuous") and goal["status"] == "active" and goal["stalls"] >= 3:
                 goal["status"], goal["reason"] = "blocked", "Three rounds without new tool, artifact or worker evidence; no automatic retry"
             save(engine)
         save(engine)

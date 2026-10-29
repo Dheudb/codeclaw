@@ -5,11 +5,38 @@ import threading
 import unittest
 from unittest.mock import patch
 
+from pydantic import ValidationError
 from xuloom.tools.web_tool import WebSearchTool, WebFetchInput
 from xuloom.tools.tool_search_tool import ToolSearchTool
 
 
 class WebTests(unittest.IsolatedAsyncioTestCase):
+    async def test_broad_search_requests_reach_provider_without_old_ten_result_cap(self):
+        tool = WebSearchTool()
+        tool.context = {}
+        with patch("xuloom.tools.web_tool.DDGS") as client:
+            client.return_value.text.return_value = [
+                {"title": f"Paper {i}", "href": f"https://example.org/{i}", "body": "Evidence"}
+                for i in range(60)]
+            for limit in (15, 30, 50):
+                with self.subTest(limit=limit):
+                    result = await tool(query="broad literature review", max_results=limit)
+                    self.assertTrue(result["ok"])
+                    client.return_value.text.assert_called_with("broad literature review", max_results=limit)
+                    self.assertEqual(result["metadata"]["result_count"], limit)
+                    self.assertIn(f"URL: https://example.org/{limit - 1}\n", result["content"])
+                    self.assertNotIn(f"URL: https://example.org/{limit}\n", result["content"])
+            client.return_value.text.return_value = [{"title": "Only paper", "href": "https://example.org/one"}]
+            result = await tool(query="narrow topic", max_results=50)
+            self.assertEqual(result["metadata"]["result_count"], 1)
+            await tool(query="ordinary search")
+            client.return_value.text.assert_called_with("ordinary search", max_results=5)
+            before = client.call_count
+            for invalid in (0, 51):
+                with self.assertRaises(ValidationError):
+                    await tool(query="invalid", max_results=invalid)
+            self.assertEqual(client.call_count, before, "Invalid input must not reach the network")
+
     async def test_search_results_and_provider_failures_are_distinct(self):
         with patch("xuloom.tools.web_tool.DDGS") as client:
             client.return_value.text.return_value = [{"title": "Paper", "href": "https://example.org/paper", "body": "Chemical reasoning"}, {"href": "javascript:invalid"}]
@@ -74,11 +101,12 @@ class WebTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("web_search_tool", engine.available_tools)
                 self.assertIn("web_fetch_tool", engine.available_tools)
                 self.assertNotIn("web_search_tool", engine.latent_tools)
-                calls = [{"id": "search", "name": "web_search_tool", "input": {"query": "chemistry reasoning"}}]
+                calls = [{"id": "search", "name": "web_search_tool", "input": {"query": "chemistry reasoning", "max_results": 15}}]
                 with patch("xuloom.tools.web_tool.DDGS") as client:
                     client.return_value.text.return_value = [{"title": "Paper", "href": "https://example.org/paper", "body": "proof"}]
                     results = await engine._execute_tool_batches(calls, lambda text: None)
                     self.assertFalse(results[0]["is_error"])
+                    client.return_value.text.assert_called_with("chemistry reasoning", max_results=15)
                     self.assertIn("https://example.org/paper", str(results[0]))
                     client.return_value.text.return_value = []
                     results = await engine._execute_tool_batches(calls, lambda text: None)

@@ -1,5 +1,6 @@
 """Opt-in completion signals from skill runtimes; never execute returned commands."""
 import json
+import copy
 
 
 class WorkflowCompletion:
@@ -12,6 +13,16 @@ class WorkflowCompletion:
         self.enabled = False
         self.pending = {}
         self.seen_commands = set()
+
+    def export_state(self):
+        return {"enabled": self.enabled, "pending": copy.deepcopy(self.pending), "seen_commands": sorted(self.seen_commands)}
+
+    def restore(self, state):
+        self.reset()
+        if isinstance(state, dict):
+            self.enabled = state.get("enabled") is True
+            self.pending = copy.deepcopy(state.get("pending", {}))
+            self.seen_commands = set(state.get("seen_commands", []))
 
     def activate(self, skill):
         if skill.get("completion_protocol") == self.PROTOCOL:

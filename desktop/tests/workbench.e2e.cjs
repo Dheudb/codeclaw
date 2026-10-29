@@ -421,7 +421,7 @@ async function main() {
       .click();
     await page.locator(".capability-card strong").filter({ hasText: /^project-review$/ }).waitFor({ state: "hidden" });
     await page.getByText("code-review", { exact: true }).waitFor();
-    assert.equal(await page.locator(".capability-card").count(), 4, "Another project has four public bundled skills but not the first project's skill");
+    assert.equal(await page.locator(".capability-card").count(), 9, "Another project has nine public bundled skills but not the first project's skill");
     await page
       .getByRole("textbox", { name: "任务输入" })
       .fill("第二个项目的独立会话");

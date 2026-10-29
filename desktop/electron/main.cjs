@@ -29,9 +29,10 @@ let workspaceQueue = Promise.resolve();
 let catalogRevision = 0;
 const engineMethods = new Set([
   "collaboration.get", "collaboration.set", "agents.resume_queue", "execution.get", "execution.set",
-  "goal.get", "goal.create", "goal.run", "goal.control",
+  "goal.get", "goal.create", "goal.run", "goal.control", "goal.update",
   "schedule.list", "schedule.add", "schedule.control",
   "prompt",
+  "prompt.resume",
   "respond",
   "stop",
   "changes",
@@ -57,6 +58,7 @@ const engineMethods = new Set([
   "mcp.test",
   "mcp.reload",
   "capabilities.example",
+  "capabilities.create",
 ]);
 function settings() {
   return preferences.readSettings(dataRoot, path.join(app.getPath("userData"), "workbench.json"));
@@ -579,14 +581,14 @@ async function invoke(method, params) {
   }
   if (!engineMethods.has(method)) throw new Error("不支持的操作");
   const { session: _session, ...payload } = params;
-  if (method === "prompt") {
+  if (method === "prompt" || method === "prompt.resume") {
     if (source.busy || source.attachmentImport) throw new Error("此会话已有运行中的任务或附件正在添加");
     source.busy = true;
     const row = catalog.find(params.session);
     try {
-      attachments.list(row, params.attachments || []);
+      if (method === "prompt") attachments.list(row, params.attachments || []);
       const result = await source.transport.request(method, payload);
-      await updateRow(row, { draft: "", draftEditId: "", draftAttachments: [], ...(row.title === "新会话" ? { title: String(params.text || "").split("\n")[0].slice(0, 80) || "附件会话" } : {}) });
+      if (method === "prompt") await updateRow(row, { draft: "", draftEditId: "", draftAttachments: [], ...(row.title === "新会话" ? { title: String(params.text || "").split("\n")[0].slice(0, 80) || "附件会话" } : {}) });
       broadcastCatalog();
       return result;
     }

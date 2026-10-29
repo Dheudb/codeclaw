@@ -11,25 +11,40 @@ import os
 
 
 class TurnRecorder:
-    def __init__(self):
+    def __init__(self, previous=None):
         self.clock = time.monotonic()
         self.baselines = {}
         self.record = {"id": str(uuid.uuid4()), "startedAt": int(time.time() * 1000),
                        "status": "running", "steps": [], "pendingText": "", "answer": "", "files": []}
+        self.elapsed_before_resume = 0
+        self.stream_offset = 0
+        self.answer_prefix = ""
+        self.first_resumed_message = bool(previous)
+        if previous:
+            self.record = copy.deepcopy(previous)
+            self.elapsed_before_resume = previous.get("elapsedMs", 0)
+            self.answer_prefix = previous.get("answer") or previous.get("pendingText", "")
+            self.stream_offset = max((item.get("turn", 0) for item in previous.get("modelStreams", [])), default=0)
+            self.record.update(status="running", answer="", pendingText=self.answer_prefix,
+                               resumedAt=int(time.time() * 1000), elapsedBeforeResumeMs=self.elapsed_before_resume)
+            self.record.pop("finishedAt", None)
+            self.record.pop("elapsedMs", None)
 
     def flush(self):
         if self.record["pendingText"].strip():
             self.record["steps"].append({"kind": "text", "text": self.record["pendingText"]})
         self.record["pendingText"] = ""
+        self.answer_prefix = ""
 
     def accept(self, event):
         kind = event.get("type")
         record = self.record
         if kind == "stream_status":
             streams = record.setdefault("modelStreams", [])
-            entry = next((item for item in streams if item.get("turn") == event["turn"]), None)
+            turn = event["turn"] + self.stream_offset
+            entry = next((item for item in streams if item.get("turn") == turn), None)
             if entry is None:
-                entry = {"turn": event["turn"]}
+                entry = {"turn": turn}
                 streams.append(entry)
             entry.update(event["metrics"])
             return True
@@ -45,7 +60,10 @@ class TurnRecorder:
             record["pendingText"] += event.get("text", "")
             return False
         if kind in {"message_start", "turn_started"}:
-            self.flush()
+            if self.first_resumed_message:
+                if kind == "message_start": self.first_resumed_message = False
+            else:
+                self.flush()
         elif kind == "message_stop":
             if event.get("stop_reason") == "tool_use":
                 self.flush()
@@ -96,7 +114,7 @@ class TurnRecorder:
                 if tool.get("waitingRequestId") == event.get("requestId") and tool.get("status") == "waiting":
                     tool["status"] = "running"
         elif kind == "final":
-            record["answer"] = event.get("text") or record["pendingText"]
+            record["answer"] = self.answer_prefix + event["text"] if event.get("text") else record["pendingText"]
             record["pendingText"] = ""
         elif kind in {"turn_finished", "turn_error", "turn_cancelled"}:
             if kind != "turn_finished":
@@ -108,7 +126,7 @@ class TurnRecorder:
             elif record["status"] == "running":
                 record["status"] = "completed"
             record["finishedAt"] = int(time.time() * 1000)
-            record["elapsedMs"] = max(0, int((time.monotonic() - self.clock) * 1000))
+            record["elapsedMs"] = self.elapsed_before_resume + max(0, int((time.monotonic() - self.clock) * 1000))
             for step in record["steps"]:
                 tool = step.get("tool", {})
                 if tool.get("status") in {"running", "queued", "waiting"}:

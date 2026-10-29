@@ -3,6 +3,7 @@ import {
   ArrowUp,
   ArrowUpRight,
   Bot,
+  Box,
   Check,
   ChevronRight,
   Workflow,
@@ -35,7 +36,8 @@ import Markdown from "./Markdown";
 import MessageActions from "./MessageActions";
 import ComposerMenu from "./ComposerMenu";
 import ExecutionDialog from "./ExecutionDialog";
-import GoalPanel from "./GoalPanel";
+import SchedulePanel from "./SchedulePanel";
+import GoalEditor from "./GoalEditor";
 import GoalStrip from "./GoalStrip";
 import McpDialog from "./McpDialog";
 import SessionSidebar from "./SessionSidebar";
@@ -89,6 +91,8 @@ export default function App() {
   draftSessions.current = sessions;
   const lastUser = active?.messages.slice().reverse().find((message) => message.role === "user");
   const paused = !active?.busy && ["cancelled", "interrupted"].includes(active?.messages.at(-1)?.trace?.status || "");
+  const resumeAvailable = paused && !active?.draft.trim() && !active?.attachments.length && !active?.editingId && !active?.goalMode &&
+    (!active?.goal || ["completed", "cancelled", "budget_exhausted"].includes(active.goal.status));
   function receiveCatalog(value: SessionCatalog) {
     setCatalog(preferences.current.receive(value));
   }
@@ -285,9 +289,21 @@ export default function App() {
     else if (name === "mcp") setMcpOpen(true);
     else if (name === "settings") void openSettings();
   }
-  async function send(continuation?: string) {
-    if (opening || importing || modelChanging || permissionChanging || collaborationChanging || !active || active.busy || (!(continuation || active.draft).trim() && !active.attachments.length)) return;
-    if (active.goalMode && !continuation) {
+  async function resume() {
+    if (!resumeAvailable || !active || opening || importing || modelChanging || permissionChanging || collaborationChanging) return;
+    const id = active.id;
+    conversationScroll.followLatest();
+    update({ busy: true, error: "" }, id);
+    try {
+      await window.xuloom.invoke("prompt.resume", { session: id });
+    } catch (error) {
+      update({ busy: false, error: String(error) }, id);
+    }
+  }
+  async function send() {
+    if (resumeAvailable) { await resume(); return; }
+    if (opening || importing || modelChanging || permissionChanging || collaborationChanging || !active || active.busy || (!active.draft.trim() && !active.attachments.length)) return;
+    if (active.goalMode) {
       if (active.attachments.length || active.editingId) { onError("目标模式请直接输入目标；附件或提示词编辑请先单独发送。"); return; }
       const id = active.id, objective = active.draft.trim();
       update({ busy: true, error: "" }, id);
@@ -305,11 +321,11 @@ export default function App() {
     }
     conversationScroll.followLatest();
     const id = active.id,
-      text = (continuation || active.draft).trim() || "请查看这些附件。",
+      text = active.draft.trim() || "请查看这些附件。",
       selected = active.selected,
       mode = active.mode,
-      attached = continuation ? [] : active.attachments,
-      replaceMessageId = continuation ? undefined : active.editingId;
+      attached = active.attachments,
+      replaceMessageId = active.editingId;
     setSessions((previous) =>
       previous.map((session) =>
         session.id === id ? replaceMessageId ? { ...session, busy: true, error: "" } : beginTurn(session, text) : session,
@@ -500,7 +516,6 @@ export default function App() {
               {[
                 { id: "files", label: "文件", icon: FolderTree },
                 { id: "activity", label: "活动", icon: Activity },
-                { id: "goals", label: "目标", icon: CircleCheck },
               ].map(({ id, label, icon: Icon }) => (
                 <button key={id} className="icon-button" title={label} aria-label={"打开" + label + "面板"}
                   aria-pressed={panelOpen && !filePreview && panelTab === id}
@@ -689,7 +704,7 @@ export default function App() {
           ))}
         </div>
         <div className="composer-area">
-          {active?.error && !paused && (
+          {active?.error && (!paused || active.error !== "任务已停止，已收到的内容保留。") && (
             <div className="session-error" role="alert">
               {active.error}
               <button
@@ -714,39 +729,27 @@ export default function App() {
             </button>
           )}
           {!!runningCommands && !active?.busy && <button className="worker-strip" onClick={() => invoke("stop").catch(onError)}><Square size={13} />{runningCommands} 个后台命令正在运行 · 停止所有后台任务</button>}
-          {paused && !active?.editingId && <div className="paused-actions" role="status"><span>任务已停止，已收到的内容保留。</span>
-            <button disabled={opening || importing || modelChanging || permissionChanging || collaborationChanging || !!active?.draft.trim() || !!active?.attachments.length} title={active?.draft.trim() || active?.attachments.length ? "请先发送或清空当前草稿" : "保留上下文，继续未完成的任务"} onClick={() => void send("请从刚才停止的位置继续完成上一项任务。先核对已完成的操作与当前文件状态，避免重复执行；按原任务要求完成并汇报结果。")}><Play size={13} />继续执行</button>
-            {lastUser?.id && <button disabled={opening || !!runningWorkers || !!runningCommands} onClick={editLastPrompt}><Pencil size={13} />编辑提示词</button>}
-          </div>}
           {active?.goal && <GoalStrip key={active.id} goal={active.goal} busy={active.busy} invoke={invoke} onError={onError} details={() => setGoalDialog("goal")} />}
           <div className={"composer " + (!active ? "disabled" : "")} onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); void importFiles(Array.from(event.clipboardData.files)); } }}>
             {active?.editingId && <div className="editing-prompt"><span>编辑上一条提示词 · 发送后重新执行，已修改的文件保留</span>
               <button aria-label="取消编辑提示词" disabled={active.busy} onClick={() => update({ editingId: undefined, draft: active.draftBeforeEdit || "", draftBeforeEdit: undefined, attachments: active.attachmentsBeforeEdit || [], attachmentsBeforeEdit: undefined })}><X size={13} /></button></div>}
             {active && <Attachments items={active.attachments} open={openAttachment} disabled={importing || active.busy} remove={(id) => update({ attachments: active.attachments.filter((item) => item.id !== id) })} />}
             {importing && <div className="attachment-loading" role="status"><LoaderCircle size={13} className="spin" />正在添加附件…</div>}
+            <div className={"composer-input " + (active?.selected.length ? "has-skills" : "")}>
             {active && active.selected.length > 0 && (
               <div className="selected-skills">
                 {active.selected.map((name) => (
-                  <button
-                    key={name}
-                    onClick={() =>
-                      update({
-                        selected: active.selected.filter(
-                          (item) => item !== name,
-                        ),
-                      })
-                    }
-                  >
-                    <Puzzle size={12} />
+                  <span className="selected-skill" key={name} title={"已选择技能：" + name + " · 在输入开头按 Backspace 移除"}>
+                    <Box size={15} />
                     {name}
-                    <X size={11} />
-                  </button>
+                  </span>
                 ))}
               </div>
             )}
             <SkillInput key={activeId} sessionId={activeId} draft={active?.draft || ""}
               selected={active?.selected || []} capabilities={active?.capabilities}
               disabled={opening || !active || active.busy} inputRef={input} update={update} send={send} editPrevious={editLastPrompt} />
+            </div>
             <div className="composer-toolbar">
               <div className="composer-options">
                 <input ref={fileInput} type="file" multiple hidden aria-label="选择附件文件" onChange={(event) => { const files = Array.from(event.target.files || []); event.target.value = ""; void importFiles(files); }} />
@@ -762,7 +765,7 @@ export default function App() {
               </div>
               <div className="send-options">
                 <select className="collaboration-picker" aria-label="协作档位"
-                  title="Solo 独立完成；Auto 按需委派（默认并发 3）；Ultra 积极寻找并行机会（默认并发 8）。与模型思考强度及权限独立，上限不是必须启动的数量。"
+                  title="Solo 独立完成；Auto 按需委派；Ultra 更积极寻找协作机会。两者不限制子代理数量，与模型思考强度、权限及宿主运行配置独立。"
                   disabled={opening || !active || collaborationChanging || active.busy || !!runningWorkers || !!runningCommands}
                   value={active?.collaborationMode || "auto"}
                   onChange={(event) => void setCollaborationMode(event.target.value as SessionView["collaborationMode"])}>
@@ -797,12 +800,13 @@ export default function App() {
                   </button>
                 ) : (
                   <button
-                    className="send-button"
-                    aria-label="发送任务"
-                    disabled={opening || importing || modelChanging || permissionChanging || collaborationChanging || (!active?.draft.trim() && !active?.attachments.length)}
+                    className={"send-button" + (resumeAvailable ? " resume" : "")}
+                    aria-label={resumeAvailable ? "继续执行" : "发送任务"}
+                    title={resumeAvailable ? "继续原任务，不新增消息" : "发送任务"}
+                    disabled={opening || importing || modelChanging || permissionChanging || collaborationChanging || (!resumeAvailable && !active?.draft.trim() && !active?.attachments.length)}
                     onClick={() => void send()}
                   >
-                    <ArrowUp size={19} />
+                    {resumeAvailable ? <Play size={16} fill="currentColor" /> : <ArrowUp size={19} />}
                   </button>
                 )}
               </div>
@@ -828,7 +832,7 @@ export default function App() {
       </main>
       {executionDialog && active && <ExecutionDialog key={active.id} invoke={invoke} close={() => setExecutionDialog(false)} saved={(mode) => update({ executionMode: mode })} onError={onError} />}
       {goalDialog && active && <div className="overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setGoalDialog(null); }}>
-        <section className="dialog composer-goal-dialog" role="dialog" aria-modal="true" aria-label={goalDialog === "goal" ? "目标模式设置" : "目标与定时唤醒"}
+        <section className="dialog composer-goal-dialog" role="dialog" aria-modal="true" aria-label={goalDialog === "goal" ? "调整目标" : "定时唤醒"}
           onKeyDown={(event) => {
             if (event.key === "Escape") { event.stopPropagation(); setGoalDialog(null); }
             if (event.key === "Tab") {
@@ -837,9 +841,8 @@ export default function App() {
               else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0]?.focus(); }
             }
           }}>
-          <header><strong>{goalDialog === "goal" ? "设置目标模式" : "目标与定时唤醒"}</strong><button aria-label="关闭目标设置" onClick={() => setGoalDialog(null)} autoFocus><X size={17} /></button></header>
-          <GoalPanel key={activeId + goalDialog} compact={goalDialog === "goal"} initialObjective={active.draft} skills={active.selected}
-            busy={active.busy} invoke={invoke} onError={onError} onCreated={() => update({ mode: "normal" })} onStarted={() => setGoalDialog(null)} />
+          <header><strong>{goalDialog === "goal" ? "调整目标" : "定时唤醒"}</strong><button aria-label="关闭目标设置" onClick={() => setGoalDialog(null)} autoFocus><X size={17} /></button></header>
+          {goalDialog === "goal" && active.goal ? <GoalEditor key={activeId} objective={active.goal.objective} invoke={invoke} close={() => setGoalDialog(null)} /> : <SchedulePanel key={activeId} invoke={invoke} onError={onError} />}
         </section>
       </div>}
       {panelOpen && (
@@ -876,6 +879,7 @@ export default function App() {
           }}
           close={() => setSettingsOpen(false)}
           save={saveModel}
+          extensions={active ? { busy: active.busy || !!runningWorkers || !!runningCommands, invoke, changed: (capabilities) => update({ capabilities }), openMcp: () => { setSettingsOpen(false); setMcpOpen(true); } } : undefined}
           deleteConnection={async (connectionId) => {
             const config = await invoke("config.delete", { connectionId, confirm: true });
             setGlobalModel(config);

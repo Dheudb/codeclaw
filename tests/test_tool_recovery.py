@@ -162,6 +162,89 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Turn aborted", result)
         self.assertEqual(len(self.requests), 1)
 
+    async def test_resume_uses_original_human_and_skill_state_without_another_user_turn(self):
+        from xuloom.core.messages import create_user_message, create_assistant_message
+        original = create_user_message("Original task\n\n<selected-skills>\nPRIVATE WORKFLOW\n</selected-skills>")
+        self.engine.messages = [original, create_assistant_message("Partial response", stop_reason="interrupted")]
+        self.engine.tool_context["workflow_completion"].enabled = True
+        run = self.engine.tool_context["collaboration_run"]
+        run["output_used"] = 123
+        self.fixture(["continued"])
+        result = await self.engine._run_loop("", resume=True, sys_print_callback=lambda _: None)
+        self.assertEqual(result.reason, "completed")
+        humans = [m for m in self.engine.messages if m.get("role") == "user" and m.get("_origin", "human") == "human"]
+        self.assertEqual(humans, [original])
+        self.assertEqual(result.user_message_id, original["_uuid"])
+        request = json.dumps(self.requests[0]["messages"])
+        self.assertIn("PRIVATE WORKFLOW", request)
+        self.assertIn("Partial response", request)
+        self.assertIn("[Task resumed by user]", request)
+        self.assertIs(self.engine.tool_context["collaboration_run"], run)
+        self.assertTrue(self.engine.tool_context["workflow_completion"].enabled)
+        saved = self.engine.session_manager.load_session_state(self.engine.session_id)
+        self.assertTrue(saved["metadata"]["workflow_completion"]["enabled"])
+
+    async def test_resume_rejects_replacement_input(self):
+        self.fixture([])
+        with self.assertRaises(ValueError):
+            await self.engine._run_loop("new task", resume=True, sys_print_callback=lambda _: None)
+        self.assertEqual(self.requests, [])
+
+    async def test_resume_retains_durable_tool_result_without_replaying_side_effect(self):
+        from xuloom.core.messages import create_user_message, create_assistant_message, create_tool_result_message
+        original = create_user_message("Original task")
+        block = {"type": "tool_use", "id": "saved-write", "name": "record_tool", "input": {"value": "written once"}}
+        self.engine.messages = [original, create_assistant_message([block], stop_reason="tool_use")]
+        receipt = await self.engine._execute_tool_wrapper(block, lambda _: None)
+        self.engine.messages += [create_tool_result_message([receipt]), create_assistant_message("Partial", stop_reason="interrupted")]
+        self.fixture(["continued"])
+        result = await self.engine._run_loop("", resume=True, sys_print_callback=lambda _: None)
+        self.assertTrue(result.ok)
+        self.assertEqual(self.tool.calls, ["written once"])
+        self.assertIn("saved:written once", json.dumps(self.requests[0]["messages"]))
+        self.assertEqual(len([message for message in self.engine.messages if message.get("_origin") == "human"]), 1)
+
+    async def test_question_shape_repair_displays_only_valid_request_and_waits_for_answer(self):
+        question = {"question": "Which weekend?", "options": [{"label": "Rest"}, {"label": "Travel"}]}
+        invalid = {"questions": question["options"]}
+        corrected = {"questions": [question]}
+        opened = asyncio.Event()
+        answer = asyncio.get_running_loop().create_future()
+        seen = []
+
+        async def picker(questions):
+            seen.append(questions)
+            opened.set()
+            return await answer
+
+        self.engine.tool_context["ask_user_callback"] = picker
+        self.fixture([("ask_user_question_tool", json.dumps(invalid)),
+            ("ask_user_question_tool", json.dumps(corrected)), "DONE"])
+        run = asyncio.create_task(self.run_task())
+        try:
+            await asyncio.wait_for(opened.wait(), 10)
+            self.assertEqual(len(seen), 1)
+            self.assertEqual(seen[0][0]["question"], "Which weekend?")
+            self.assertFalse(run.done())
+            self.assertEqual(len(self.requests), 2)
+            feedback = next(m["content"] for m in self.requests[1]["messages"] if m["role"] == "tool")
+            self.assertIn('"loc": ["questions", 0, "question"]', feedback)
+            self.assertIn("Do not place label/description directly in questions", feedback)
+            self.assertIn("Valid example", feedback)
+            self.assertIn("executed: False", feedback)
+            declared = next(t["function"]["parameters"] for t in self.requests[0]["tools"]
+                if t["function"]["name"] == "ask_user_question_tool")
+            self.assertIn("options", declared["properties"]["questions"]["items"]["properties"])
+            answer.set_result({"Which weekend?": "Travel"})
+            self.assertEqual(await run, "DONE")
+            final_request = json.dumps(self.requests[-1]["messages"])
+            self.assertIn("A: Travel", final_request)
+            self.assertEqual(len([e for e in self.events if e["type"] == "tool_protocol_error"]), 1)
+        finally:
+            if not run.done():
+                run.cancel()
+            await asyncio.gather(run, return_exceptions=True)
+
     async def test_long_skill_instructions_are_not_replaced_by_a_preview(self):
         root = self.root / '.xuloom/skills/fixture'
         root.mkdir(parents=True)

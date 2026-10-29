@@ -69,13 +69,19 @@ export default function SkillInput({ sessionId, draft, selected, capabilities, d
     </div>}
     <textarea ref={inputRef} aria-label="任务输入" aria-autocomplete="list" aria-controls={open ? "skill-options" : undefined}
       aria-expanded={open} aria-activedescendant={open && options.length ? "skill-option-" + index : undefined}
-      placeholder={sessionId ? "和 Xuloom 一起工作，输入 $ 选择 Skill…" : "点击新建会话即可开始，也可以打开项目…"}
+      placeholder={selected.length ? "" : sessionId ? "和 Xuloom 一起工作，输入 $ 选择 Skill…" : "点击新建会话即可开始，也可以打开项目…"}
       disabled={disabled} value={draft}
       onFocus={() => { setFocused(true); setCaret(inputRef.current?.selectionStart || 0); }}
       onBlur={() => setFocused(false)} onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
       onChange={(event) => { setCaret(event.target.selectionStart); update({ draft: event.target.value }); }}
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+        if (event.key === "Backspace" && !event.ctrlKey && !event.metaKey && !event.altKey &&
+            selected.length && event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0) {
+          event.preventDefault();
+          update({ selected: selected.slice(0, -1) });
+          return;
+        }
         if (!open && event.key === "Escape" && !draft.trim()) {
           event.preventDefault();
           if (Date.now() - escapeAt.current < 800) { escapeAt.current = 0; editPrevious?.(); }

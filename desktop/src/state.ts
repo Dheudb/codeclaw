@@ -53,6 +53,16 @@ export function applyEvent(
       return beginTurn({ ...session, attachments: [] }, event.text);
     case "turn_restarted":
       return beginTurn({ ...session, messages: event.history, attachments: event.attachments || [] }, event.text);
+    case "turn_resumed": {
+      let index = -1;
+      session.messages.forEach((message, at) => {
+        if (message.role === "assistant" && message.trace?.id === event.trace.id) index = at;
+      });
+      if (index < 0) return session;
+      return { ...session, busy: true, error: "", streamIndex: index,
+        messages: session.messages.map((message, at) => at === index
+          ? { ...message, trace: event.trace, text: event.trace.pendingText || event.trace.answer || "" } : message) };
+    }
     case "command_status":
       return { ...session, commands: { ...session.commands, [event.command.id]: event.command } };
     case "file_changed":
@@ -184,7 +194,9 @@ function upsertTool(tools: SessionView["tools"], value: SessionView["tools"][num
 }
 function finishTrace(session: SessionView, status: string) {
   return session.messages.map((message, index) => index === session.streamIndex && message.trace?.status === "running"
-    ? { ...message, trace: { ...message.trace, status, finishedAt: Date.now(), elapsedMs: Date.now() - (message.trace.startedAt || Date.now()) } } : message);
+    ? { ...message, trace: { ...message.trace, status, finishedAt: Date.now(), elapsedMs: message.trace.resumedAt
+      ? (message.trace.elapsedBeforeResumeMs || 0) + Date.now() - message.trace.resumedAt
+      : Date.now() - (message.trace.startedAt || Date.now()) } } : message);
 }
 function settleTools(session: SessionView, status: string, includeChildren = true) {
   return session.tools.map((tool) => (includeChildren || !tool.agentId) && ["running", "queued", "waiting"].includes(tool.status)

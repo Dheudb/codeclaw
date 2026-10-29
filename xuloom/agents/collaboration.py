@@ -4,10 +4,11 @@ from contextvars import ContextVar
 
 DELEGATION_BUDGET = ContextVar("xuloom_delegation_budget", default=None)
 MODES = ("solo", "auto", "ultra")
+# Mode is a delegation preference; limits belong to the host, independently.
 DEFAULTS = {
     "solo": {"concurrency": 0, "max_delegations": 0, "output_tokens": 0, "request_output_tokens": 0},
-    "auto": {"concurrency": 3, "max_delegations": 12, "output_tokens": 1000000, "request_output_tokens": 64000},
-    "ultra": {"concurrency": 8, "max_delegations": 32, "output_tokens": 1000000, "request_output_tokens": 64000},
+    "auto": {"concurrency": None, "max_delegations": None, "output_tokens": None, "request_output_tokens": 64000},
+    "ultra": {"concurrency": None, "max_delegations": None, "output_tokens": None, "request_output_tokens": 64000},
 }
 
 
@@ -17,22 +18,17 @@ def policy(mode="auto", settings=None):
     settings = settings or {}
     values = dict(DEFAULTS[mode])
     if mode != "solo":
-        # Retain the existing explicit host concurrency setting. Defaults are
-        # initial product choices, not measurements of useful parallelism.
         if "agent_concurrency" in settings:
             values["concurrency"] = settings["agent_concurrency"]
-            if type(values["concurrency"]) is int:
-                values["max_delegations"] = max(values["max_delegations"], values["concurrency"] * 4)
-        profiles = settings.get("collaboration_profiles", {})
-        if not isinstance(profiles, dict):
-            raise ValueError("Invalid collaboration profiles")
-        overrides = profiles.get(mode, {})
-        if not isinstance(overrides, dict) or overrides.keys() - values.keys():
-            raise ValueError("Invalid collaboration profile limits")
-        values.update(overrides)
-        for name, maximum in (("concurrency", 80), ("max_delegations", 1000), ("output_tokens", 10000000), ("request_output_tokens", 10000000)):
-            if type(values[name]) is not int or not 1 <= values[name] <= maximum:
-                raise ValueError("Invalid collaboration limit: " + name)
+        limits = settings.get("agent_limits", {})
+        if not isinstance(limits, dict) or limits.keys() - values.keys():
+            raise ValueError("Invalid agent limits")
+        values.update(limits)
+        for name, value in values.items():
+            if value is not None and (type(value) is not int or value <= 0):
+                raise ValueError("Invalid agent limit: " + name)
+        if values["request_output_tokens"] is None:
+            raise ValueError("A finite per-response model limit is required")
     return {"mode": mode, **values}
 
 
@@ -46,9 +42,9 @@ def admit(context, count):
     profile = context.get("collaboration") or policy()
     require_delegation(context)
     run = context.setdefault("collaboration_run", new_run(profile))
-    if run["submitted"] + count > profile["max_delegations"]:
+    if profile["max_delegations"] is not None and run["submitted"] + count > profile["max_delegations"]:
         raise ValueError("本轮累计子任务已达协作预算上限；请汇总已有结果，不要继续派发。")
-    if run["output_used"] + run["output_reserved"] >= run["budget"]["output_tokens"]:
+    if run["budget"]["output_tokens"] is not None and run["output_used"] + run["output_reserved"] >= run["budget"]["output_tokens"]:
         raise ValueError("本轮子代理输出预算已耗尽；请汇总已有结果。")
     # Atomic on the owning event loop; count admission attempts conservatively
     # even if registration/persistence subsequently fails.
@@ -70,9 +66,9 @@ def instructions(profile):
     return (f"# Collaboration: {mode}\n{principle}\n"
             "Never launch workers to fill a quota. Do not duplicate the same assignment unless the user explicitly asks for repeated independent trials. "
             "Give workers self-contained assignments instead of serially relaying every step. Wait for relevant results before final synthesis. "
-            "The runtime automatically queues accepted workers beyond the concurrency limit and starts them FIFO as slots free. Do not manually split a batch solely for concurrency. Queued workers consume admission quota but reserve no output tokens until they execute. "
+            "The runtime automatically queues accepted workers beyond the concurrency limit and starts them FIFO as slots free. Do not manually split a batch solely for concurrency. Queued workers reserve no output tokens until they execute. "
             "Collaboration does not change tool permissions, reasoning effort or recursion limits. "
-            f"Runtime limits per user turn: {profile['concurrency']} simultaneous workers, {profile['max_delegations']} admitted child executions, "
-            f"{profile['output_tokens']} shared child output tokens, up to {profile['request_output_tokens']} per model response "
-            "(not a currency or input-token budget). Shared means cumulative usage across all workers and responses, not a per-worker quota. "
-            "A response is also capped by the model/API and remaining goal/shared budget; an upper bound is not a requested answer length.")
+            "Auto and Ultra differ only in delegation initiative, never worker quantity. "
+            f"Host execution configuration (null means unlimited): concurrency={profile['concurrency']}, "
+            f"total_child_executions={profile['max_delegations']}, shared_output_tokens={profile['output_tokens']}. "
+            f"Each response is capped at {profile['request_output_tokens']} tokens and the model/API limit; this does not limit worker count.")

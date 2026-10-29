@@ -136,6 +136,23 @@ a, .markdown-link, .inline-file-link { color: var(--link); text-decoration-color
 .goal-strip-time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .goal-strip .icon-button { min-width: 23px; min-height: 23px; padding: 3px; }
 .composer-toolbar .send-options { margin-left: auto; }
+.goal-editor { padding: 20px 24px; }
+.goal-editor label { display: grid; gap: 10px; font-size: 14px; }
+.goal-editor textarea { width: 100%; min-height: 160px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 12px; color: var(--text); background: var(--surface); font: inherit; }
+.goal-editor p { font-size: 12px; line-height: 1.7; color: var(--text-muted); }
+.goal-editor footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.extension-settings h3 { margin-top: 0; }
+.extension-settings > .actions { flex-wrap: wrap; margin: 14px 0; }
+.extension-form { margin: 18px 0; padding: 16px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 12px; }
+.extension-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.extension-form label { display: grid; gap: 6px; margin: 0 0 14px; font-size: 13px; }
+.extension-form input, .extension-form select, .extension-form textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; background: var(--surface); color: var(--text); font: inherit; }
+.extension-form textarea { resize: vertical; min-height: 140px; }
+.extension-path { overflow-wrap: anywhere; color: var(--text-muted); font-size: 12px; }
+.extension-row { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.extension-row small { display: block; color: var(--text-muted); margin-top: 4px; }
+.extension-row p { font-size: 13px; color: var(--text-secondary); line-height: 1.7; }
+.extension-preview { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-soft); padding: 16px; border-radius: 10px; max-height: 350px; overflow: auto; }
 @container (max-width: 570px) {
   .composer-toolbar { flex-wrap: wrap; }
   .composer-toolbar .send-options { margin-left: auto; flex-wrap: wrap; }
@@ -158,8 +175,12 @@ a, .markdown-link, .inline-file-link { color: var(--link); text-decoration-color
 .composer-caption .capability-count { display: none; }
 .composer-caption .shortcut-hint { margin-left: 0; }
 .loaded-indicator { font-size: 11px; color: var(--text-secondary); }
-.selected-skills { padding: 12px 16px 0; gap: 6px; }
-.selected-skills button { background: var(--action-soft); color: var(--link); border-radius: 7px; font-size: 12px; padding: 4px 8px; }
+.selected-skills { padding: 17px 20px 0; gap: 8px 16px; }
+.selected-skills .selected-skill { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; background: transparent; color: var(--link); border: 0; border-radius: 0; font-size: 14px; font-weight: 500; padding: 0; }
+.composer-input { display: flex; align-items: flex-start; min-width: 0; }
+.composer-input textarea { flex: 1; min-width: 100px; width: 0; }
+.composer-input .selected-skills { flex: 0 1 auto; max-width: 65%; padding: 18px 0 12px 20px; }
+.composer-input.has-skills textarea { padding-left: 8px; }
 .skill-picker { border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-floating); padding: 8px; }
 .skill-picker-list button { font-size: 13px; border-radius: 8px; }
 .skill-picker-list button[aria-selected="true"] { background: var(--action-soft); }
@@ -244,9 +265,9 @@ a, .markdown-link, .inline-file-link { color: var(--link); text-decoration-color
 .message.user .message-actions { position: absolute; right: 0; top: 100%; margin-top: 3px; opacity: 0; transition: opacity .12s; white-space: nowrap; }
 .message.user:hover .message-actions, .message.user:focus-within .message-actions { opacity: 1; }
 .copy-feedback { font-size: 11px; margin-left: 4px; color: var(--text-secondary); }
-.paused-actions { max-width: var(--chat-width); margin: 0 auto 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-muted); font-size: 12px; }
-.paused-actions > span { margin-right: auto; }
-.paused-actions button { font-size: 12px; padding: 6px 9px; border-color: var(--line); }
+.turn-process-time[data-turn-status="cancelled"] { padding: 8px 0 12px; border-bottom: 1px solid var(--line); }
+.composer .send-button.resume { background: var(--text); border-color: var(--text); color: white; }
+.composer .send-button.resume:hover { background: var(--text-secondary); border-color: var(--text-secondary); }
 .editing-prompt { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 16px 0; color: var(--text-secondary); font-size: 12px; }
 .editing-prompt button { background: transparent; border: 0; padding: 4px; }
 .attach-button { padding: 6px; border: 0; background: transparent; color: var(--text-secondary); flex-shrink: 0; }

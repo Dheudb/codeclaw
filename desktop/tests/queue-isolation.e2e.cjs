@@ -49,6 +49,7 @@ async function send(text) {
 (async () => { try {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "fixture", openai_api_key: "fixture", openai_base_url: `http://127.0.0.1:${server.address().port}/v1` });
+  atomicJSON(path.join(project,".xuloom/capabilities.json"),{agent_limits:{concurrency:3}});
   await launch();
   await page.getByLabel("访问权限", { exact: true }).selectOption("full");
   await page.waitForFunction(() => !document.querySelector(".permission-picker").disabled);
