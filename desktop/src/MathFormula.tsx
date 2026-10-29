@@ -26,9 +26,8 @@ export default function MathFormula({ text, display }: { text: string; display: 
   return <span className={"math-formula " + (display ? "math-display" : "math-inline")}>
     {html ? <span className="math-render" dangerouslySetInnerHTML={{ __html: html }} />
       : <span className="math-fallback" title="公式不完整或包含不支持的 LaTeX，保留原文供复制">{text}</span>}
-    <button type="button" className="math-copy" aria-label="复制公式 LaTeX" title="复制公式 LaTeX 原文"
+    <button type="button" className="math-copy" aria-label="复制公式 LaTeX" title={copied ? "已复制" : "复制公式 LaTeX 原文"}
       onClick={() => void copy()}>{copied ? <Check size={13} /> : <Copy size={13} />}
-      {display && <span>{copied ? "已复制" : "复制 LaTeX"}</span>}
     </button>
     {copied && <span className="math-copy-feedback" role="status">已复制公式</span>}
     {copyError && <span className="math-copy-error" role="alert">复制失败，请重试。</span>}

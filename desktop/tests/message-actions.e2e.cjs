@@ -89,6 +89,11 @@ async function selectWithMouse(start, end) {
     await blocks.first().getByRole("alert").waitFor({ state: "detached" });
     assert.equal((await app.evaluate(() => globalThis.testCopiedText)).at(-1), code);
     const formulas = reply.locator(".math-formula");
+    await reply.locator("p").first().hover();
+    assert.equal(await formulas.first().evaluate(el => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
+    assert.equal(await formulas.first().locator(".math-copy").evaluate(el => getComputedStyle(el).opacity), "0");
+    await formulas.first().hover();
+    assert.equal(await formulas.first().locator(".math-copy").evaluate(el => getComputedStyle(el).opacity), "1");
     await formulas.first().getByRole("button", { name: "复制公式 LaTeX" }).click();
     await formulas.first().getByRole("status").waitFor();
     assert.equal((await app.evaluate(() => globalThis.testCopiedText)).at(-1), formula);

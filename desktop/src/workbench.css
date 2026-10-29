@@ -92,15 +92,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .code-copy-error { padding: 6px 18px; font-size: 12px; color: var(--text-secondary); }
 .math-formula { position: relative; }
 .math-inline { display: inline; }
-.math-display { display: block; margin: 16px 0; padding: 26px 12px 12px; border-radius: 10px; background: var(--surface-soft); }
-.math-render { display: inline-block; max-width: 100%; vertical-align: middle; overflow-x: auto; overflow-y: hidden; padding: 3px 0; }
-.math-display .math-render { display: block; padding: 6px 0; }
-.math-display .katex-display { margin: .4em 0; }
-.math-copy { display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 5px; padding: 3px 4px; margin-left: 3px; background: transparent; color: var(--text-muted); font-size: 11px; vertical-align: middle; }
-.math-display .math-copy { position: absolute; right: 10px; top: 6px; }
+.math-display { display: block; margin: 1em 0; }
+.math-render { display: inline-block; max-width: 100%; vertical-align: baseline; overflow-x: auto; overflow-y: hidden; }
+.math-inline .math-render { display: inline; overflow: visible; }
+.math-display .math-render { display: block; padding: 3px 0; }
+.math-display .katex-display { margin: .5em 0; }
+.math-copy { position: absolute; right: 0; bottom: 100%; display: inline-flex; align-items: center; border: 0; border-radius: 5px; padding: 4px; background: var(--surface); color: var(--text-muted); opacity: 0; pointer-events: none; }
+.math-display .math-copy { top: 0; bottom: auto; }
+.math-formula:hover > .math-copy, .math-formula:focus-within > .math-copy { opacity: 1; pointer-events: auto; }
 .math-copy:hover, .math-copy:focus-visible { color: var(--text); background: var(--surface-hover); }
 .math-fallback { font-family: monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.math-copy-feedback, .math-copy-error { font-size: 11px; color: var(--text-secondary); margin-left: 5px; }
+.math-copy-feedback { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.math-copy-error { position: absolute; right: 0; bottom: 100%; font-size: 11px; color: var(--text-secondary); background: var(--surface); white-space: nowrap; }
 .markdown table { font-size: 13px; line-height: 1.65; }
 .markdown th { background: var(--surface-soft); font-weight: 600; }
 .markdown th, .markdown td { padding: 10px 12px; }
