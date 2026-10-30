@@ -175,6 +175,7 @@ export function applyEvent(
         agentId: event.agent_id, agentRole: event.agent_role,
         status: event.status === "cancelled" ? "cancelled" : event.is_error ? "error" : "completed", finishedAt: event.timestamp || Date.now(),
         result: typeof (event.result ?? event.content) === "string" ? event.result ?? event.content : JSON.stringify(event.result ?? event.content ?? ""),
+          media: event.media,
       }) };
     case "log":
       return {

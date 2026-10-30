@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { Activity, ChevronDown } from "lucide-react";
 import type { SessionView, ToolActivity } from "./types";
+import { toolPresentation } from "./tool-presentation";
+import ToolIcon from "./ToolIcon";
+import ToolImages from "./ToolImages";
 
 export const statusText: Record<string, string> = { queued: "准备中", running: "执行中", waiting: "等待批准", completed: "已完成", error: "失败", crashed: "异常", cancelled: "已取消", interrupted: "已中断" };
 export const names: Record<string, string> = { agent_tool: "管理子代理", subagent: "子代理任务", bash_tool: "执行命令", command_tool: "命令会话", file_read_tool: "读取文件", file_write_tool: "写入文件", file_edit_tool: "编辑文件", grep_tool: "搜索内容", glob_tool: "查找文件", tool_search_tool: "查找工具", web_search_tool: "搜索网页", web_fetch_tool: "读取网页", skill_tool: "加载技能" };
@@ -30,10 +33,11 @@ export default function ActivityPanel({ session }: { session: SessionView }) {
         const worker = session.workers.find((worker) => worker.agent_id === tool.agentId);
         const origin = tool.agentId ? worker?.description || tool.agentRole || "子代理" : "主代理";
         const elapsed = tool.startedAt && tool.finishedAt ? Math.max(0, tool.finishedAt - tool.startedAt) / 1000 : null;
+        const view = toolPresentation(tool);
         const title = tool.name === "agent_tool" && input.action === "wait" ? "等待子代理结果" : names[tool.name] || tool.name;
         return <details className={"tool-row activity-card " + tool.status} key={tool.id} data-activity-id={tool.id} data-status={tool.status}>
           <summary>
-            <span className={"status-dot " + tool.status} />
+            <ToolIcon kind={view.kind} /><span className={"status-dot " + tool.status} />
             <span className="activity-heading"><strong>{title}</strong><span className="activity-origin" title={origin}>{origin}</span></span>
             <span className="activity-status">{statusText[tool.status] || tool.status}</span><ChevronDown size={13} />
             {brief && <span className="activity-brief">{String(brief)}</span>}
@@ -41,6 +45,7 @@ export default function ActivityPanel({ session }: { session: SessionView }) {
             {tool.result && <span className="activity-preview">{resultPreview(tool.result)}</span>}
           </summary>
           <div className="activity-detail">
+            <ToolImages media={tool.media} sessionId={session.id} />
             <h4>调用参数</h4><pre>{clip(JSON.stringify(input, null, 2))}</pre>
             <h4>执行结果</h4><pre>{clip(tool.result || (tool.status === "waiting" ? "等待你批准后执行。" : pending(tool) ? "尚未返回结果。" : "未返回输出。"))}</pre>
           </div>

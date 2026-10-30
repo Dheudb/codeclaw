@@ -120,6 +120,42 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.engine.session_token_usage["output_tokens"], 20)
         self.assertNotIn("tool_protocol", str(conversation_history(self.engine.messages)))
 
+    async def test_native_tool_image_reaches_model_and_durable_ui_reference(self):
+        from PIL import Image
+        from xuloom.context.tool_media import image_preview
+        from xuloom.core.storage import artifact_directory
+        from xuloom.desktop.activity import restore_activity
+        from xuloom.desktop.bridge import DesktopBridge
+        picture = self.root / "proof.png"
+        Image.new("RGB", (600, 360), "#479cc9").save(picture)
+        def capability(event):
+            self.events.append(event)
+            self.recorder.accept(event)
+        self.engine.tool_context["capability_event"] = capability
+        self.fixture([("file_read_tool", json.dumps({"file_path": str(picture)})), "DONE"])
+        self.assertEqual(await self.run_task(), "DONE")
+        self.assertIn("image_url", json.dumps(self.requests[1]["messages"]))
+        event = next(e for e in self.events if e["type"] == "tool_result")
+        media = event["media"][0]
+        self.assertEqual(media["width"], 600)
+        self.assertNotIn("base64", json.dumps(event))
+        recorded = next(s["tool"] for s in self.recorder.record["steps"] if s["kind"] == "tool")
+        self.assertEqual(recorded["media"], [media])
+        raw = self.engine.session_manager.load_session_state(self.engine.session_id)
+        activity, _ = restore_activity(raw, self.root)
+        self.assertEqual(activity[0]["media"][0]["id"], media["id"])
+        self.assertNotIn("base64", json.dumps(activity))
+        picture.unlink()
+        archive = artifact_directory(self.root) / self.engine.session_id
+        self.assertEqual(image_preview(archive, media["id"])["width"], 600)
+        bridge = DesktopBridge(lambda event: None, self.root)
+        bridge.resume_id = self.engine.session_id
+        self.assertEqual((await bridge.dispatch("media.read", {"id": media["id"], "thumbnail": True}))["previewWidth"], 256)
+        self.assertIsNone(bridge.engine)  # preview never starts a model engine
+        bridge.resume_id = "another-session"
+        with self.assertRaises(ValueError):
+            await bridge.dispatch("media.read", {"id": media["id"]})
+
     async def test_malformed_batch_is_atomic_and_repair_budget_stops(self):
         bad = dsml().replace('</｜DSML｜tool_calls>', dsml("unknown").replace('<｜DSML｜tool_calls>', ''))
         self.fixture([bad, bad, bad])

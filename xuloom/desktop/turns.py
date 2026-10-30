@@ -86,6 +86,8 @@ class TurnRecorder:
             if kind == "tool_started":
                 tool.update(status="running", startedAt=event.get("timestamp") or int(time.time() * 1000))
             elif kind == "tool_result":
+                if event.get("media"):
+                    tool["media"] = copy.deepcopy(event["media"])
                 tool.update(status="cancelled" if event.get("status") == "cancelled" else "error" if event.get("is_error") else "completed",
                             result=str(event.get("result", event.get("content", "")))[:16000],
                             finishedAt=event.get("timestamp") or int(time.time() * 1000))

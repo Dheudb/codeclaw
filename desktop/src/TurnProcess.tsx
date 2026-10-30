@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, Terminal } from "lucide-react";
-import type { TurnTrace } from "./types";
+import { ChevronDown, LoaderCircle } from "lucide-react";
+import type { TurnTrace, ToolActivity } from "./types";
 import Markdown from "./Markdown";
-import { names, statusText } from "./ActivityPanel";
+import { statusText } from "./ActivityPanel";
+import { toolPresentation } from "./tool-presentation";
+import ToolIcon from "./ToolIcon";
+import ToolImages from "./ToolImages";
 
 export function durationText(ms: number) {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -10,7 +13,25 @@ export function durationText(ms: number) {
   return `${hours ? hours + "小时" : ""}${minutes ? minutes + "分" : ""}${seconds}秒`;
 }
 
-export default function TurnProcess({ trace }: { trace: TurnTrace }) {
+function ProcessTool({ tool, sessionId }: { tool: ToolActivity; sessionId: string }) {
+  const view = toolPresentation(tool), pending = ["running", "queued"].includes(tool.status);
+  const elapsed = tool.startedAt && tool.finishedAt && tool.finishedAt - tool.startedAt >= 1000 ? durationText(tool.finishedAt - tool.startedAt) : "";
+  return <div className="turn-tool-entry">
+    <details className={"turn-tool " + tool.status}>
+      <summary title={view.brief}>
+        <ToolIcon kind={view.kind} /><span className="turn-tool-title">{view.title}</span>
+        <span className="turn-tool-brief">{view.brief}</span>
+        {pending && <LoaderCircle size={12} className="spin turn-tool-spinner" aria-label="正在执行" />}
+        {tool.status === "waiting" && <span className="turn-tool-status">{statusText[tool.status]}</span>}
+        {elapsed && <span className="turn-tool-duration">{elapsed}</span>}<ChevronDown size={12} className="turn-tool-chevron" />
+      </summary>
+      <div className="turn-tool-detail"><small>调用参数</small><pre>{JSON.stringify(tool.input || {}, null, 2)}</pre><small>执行结果</small><pre>{tool.result || "尚未返回结果。"}</pre></div>
+    </details>
+    <ToolImages media={tool.media} sessionId={sessionId} />
+  </div>;
+}
+
+export default function TurnProcess({ trace, sessionId }: { trace: TurnTrace; sessionId: string }) {
   const running = trace.status === "running";
   const [open, setOpen] = useState(running);
   const [now, setNow] = useState(Date.now());
@@ -40,10 +61,7 @@ export default function TurnProcess({ trace }: { trace: TurnTrace }) {
     <div className="turn-process-content">
       {trace.steps.map((step, index) => step.kind === "text"
         ? <div className="turn-commentary markdown" key={index}><Markdown text={step.text} /></div>
-        : <details className="turn-tool" key={index}>
-          <summary><Terminal size={14} /><span>{names[step.tool.name] || step.tool.name}</span><span className="turn-tool-brief">{String(step.tool.input?.description || step.tool.input?.command || step.tool.input?.file_path || step.tool.input?.query || "")}</span><span className="turn-tool-status">{statusText[step.tool.status] || step.tool.status}</span></summary>
-          <div><pre>{JSON.stringify(step.tool.input || {}, null, 2)}</pre><pre>{step.tool.result || "尚未返回结果。"}</pre></div>
-        </details>)}
+        : <ProcessTool tool={step.tool} sessionId={sessionId} key={step.tool.id || index} />)}
     </div>
   </details>;
 }

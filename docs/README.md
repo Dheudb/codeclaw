@@ -20,3 +20,5 @@
 模型 Thinking 开关、effort 选择、CLI 用法及简化派发入口见 [模型思考控制](model-reasoning-2026-10-30.md)。
 
 文件正文阅读、自动换行和目录栏调整见 [文件分栏修复](file-review-layout-2026-10-30.md)。
+
+执行过程图标、图片缩略图与持久回看见 [执行过程与图片回看](tool-transcript-2026-10-30.md)。

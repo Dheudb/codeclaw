@@ -679,7 +679,7 @@ export default function App() {
                           </span>
                         )}
                     </div>
-                    {message.trace && <TurnProcess trace={message.trace} />}
+                    {message.trace && <TurnProcess trace={message.trace} sessionId={activeId} />}
                     <div className="markdown message-text">
                       {message.text ? (
                         message.role === "user" ? <div className="user-prompt-text">{message.text}</div> : <Markdown text={message.text} onOpenFile={openFile} />

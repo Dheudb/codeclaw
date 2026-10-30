@@ -12,6 +12,8 @@ Open **Settings → Model connections**, enter your API endpoint, protocol, mode
 
 Choose **New conversation** to get an independent working directory, or open an existing folder. A Git repository is not required. Windows desktop builds are Beta; macOS/Linux desktop distributions are not available.
 
+Execution traces use compact rows with icons for images, edits, terminal commands and searches. Expand a row for its inputs and output; completed turns collapse automatically. Image reads show clickable thumbnails backed by session snapshots, so previews survive changes or deletion of the original file. Previewing does not call a model; model image understanding requires an endpoint supporting image input.
+
 ## Configure extensions in Settings
 
 Open a conversation first; extension management does not require a model API call.

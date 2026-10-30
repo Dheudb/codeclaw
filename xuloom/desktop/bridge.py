@@ -17,7 +17,7 @@ from xuloom.desktop.activity import restore_activity
 from xuloom.desktop.turns import TurnRecorder, conversation_history
 from xuloom.features.file_changes import legacy_changes, preview_file
 from xuloom.features.workspace_files import list_directory, git_changes, git_file_diff
-from xuloom.core.storage import session_directory
+from xuloom.core.storage import session_directory, artifact_directory
 from xuloom.skills.registry import SkillRegistry
 from xuloom.agents.registry import AgentRegistry
 from xuloom.protocols.mcp_config import MCPConfigStore
@@ -551,6 +551,13 @@ class DesktopBridge:
             return {"project": str(self.cwd), "persistedId": sid, "executionMode": self.execution_mode, "collaborationMode": self.collaboration_mode, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages, traces), "activity": activity, "workers": workers, "fileChanges": self.file_changes}
         if method == "files.read":
             return preview_file(self.cwd, params.get("path"), self.file_changes)
+        if method == "media.read":
+            from xuloom.context.tool_media import image_preview
+            sid = self.engine.session_id if self.engine else self.resume_id
+            if not sid or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", sid):
+                raise ValueError("请先打开保存此图像的会话")
+            return await asyncio.to_thread(image_preview, artifact_directory(self.cwd) / sid,
+                params.get("id"), thumbnail=params.get("thumbnail") is True)
         if method == "files.undo":
             self.require_idle()
             if params.get("confirm") is not True:

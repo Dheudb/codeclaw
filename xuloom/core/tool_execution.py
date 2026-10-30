@@ -3,6 +3,8 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
+import re
 from pydantic import ValidationError
 from xuloom.context.tool_results import build_tool_result, serialize_tool_result
 from xuloom.core.storage import artifact_directory
@@ -269,9 +271,15 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
 
     receipt = {"type": "tool_result", "tool_use_id": tool_id, "content": native_content if native_content is not None else res_text,
                "is_error": status == "error", **({"_input_error": True} if input_error else {})}
+    from xuloom.context.tool_media import archive_images
+    media_owner = (self.tool_context.get("delegation") or {}).get("owner_session_id") or self.session_id
+    if not isinstance(media_owner, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", media_owner):
+        media_owner = self.session_id
+    media = archive_images(native_content, artifact_directory(self.session_cwd) / media_owner,
+        name=os.path.basename(str(tool_inputs.get("file_path") or tool_inputs.get("path") or ""))) if native_content is not None else []
     self.in_progress_tools.pop(tool_id, None)
     self.recent_tool_activity.insert(0, {"tool_name": tool_name, "tool_use_id": tool_id, "status": status,
-        "result_preview": str(res_text)[:280], "tool_result": receipt, "user_turn_id": user_turn_id, "input_digest": digest})
+        "result_preview": str(res_text)[:280], "tool_result": receipt, "user_turn_id": user_turn_id, "input_digest": digest, "media": media})
     # Retain every receipt in the active turn, including batches larger than the UI preview limit.
     current = [row for row in self.recent_tool_activity if row.get("user_turn_id") == user_turn_id]
     older = [row for row in self.recent_tool_activity if row.get("user_turn_id") != user_turn_id]
@@ -285,7 +293,7 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
             "status": "running", "phase": "executing", "recovery_uncertain": True, "user_turn_id": user_turn_id, "input_digest": digest}
         raise PersistenceError("Tool may have executed but its result could not be persisted; do not replay it automatically. " + self.session_manager.last_save_error)
     self.attachment_collector.track_tool_use(tool_name)
-    self._emit_tool_activity("tool_result", tool_name, tool_id, result=str(res_text)[:16000], is_error=receipt["is_error"], status=status)
+    self._emit_tool_activity("tool_result", tool_name, tool_id, result=str(res_text)[:16000], is_error=receipt["is_error"], status=status, media=media)
     sys_print_callback(f"    [dim]{tool_name} -> {status}[/dim]")
     if callable(result_callback) and not receipt["is_error"]:
         result_callback(copy.deepcopy(raw_result))

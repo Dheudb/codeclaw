@@ -6,6 +6,10 @@ const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-turns-e2e-"));
 const project = path.join(fixture, "project"), data = path.join(fixture, "profile"), config = path.join(fixture, "config");
 for (const directory of [project, data, config]) fs.mkdirSync(directory);
 fs.writeFileSync(path.join(project, "proof.txt"), "TURN_OUTPUT_PROOF");
+const python = process.env.XULOOM_TEST_EXECUTABLE ? path.join(path.dirname(process.env.XULOOM_TEST_EXECUTABLE), "resources/python/python.exe") : path.join(root, "../.venv-mcp/Scripts/python.exe");
+const picture = path.join(project, "landscape.png");
+require("node:child_process").execFileSync(python, ["-I", "-c", "from PIL import Image,ImageDraw; import sys; im=Image.new('RGB',(720,420),'#e9f3fa'); d=ImageDraw.Draw(im); d.ellipse((480,40,600,160),fill='#f4cf76'); d.polygon([(0,350),(180,170),(400,420)],fill='#89b5c8'); d.polygon([(250,420),(530,210),(720,420)],fill='#bed1be'); im.save(sys.argv[1])", picture], { windowsHide: true });
+let mediaRequests = 0, modelReceivedImage = false;
 atomicJSON(path.join(data, "workbench.json"), { projects: [], activeConversation: null, defaultDirectory: project });
 let app, page;
 const errors = [];
@@ -17,13 +21,27 @@ const server = http.createServer((req, res) => {
     const task = [...body.messages].reverse().find((m) => m.role === "user" && typeof m.content === "string" && m.content.startsWith("TRACE_"));
     const after = task ? body.messages.slice(body.messages.indexOf(task) + 1) : [];
     const calls = after.filter((m) => m.role === "tool").length;
+    if (task?.content === "TRACE_MEDIA") {
+      mediaRequests++;
+      modelReceivedImage ||= JSON.stringify(after).includes('"image_url"');
+    }
     if (task?.content === "TRACE_ERROR" && calls) { res.writeHead(401, { "Content-Type": "application/json" }).end(JSON.stringify({ error: { message: "fixture error", type: "authentication_error" } })); return; }
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const chunk = (delta, finish_reason = null) => res.write("data: " + JSON.stringify({ id: "fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] }) + "\n\n");
     const multi = task?.content === "TRACE_MULTI" && calls < 2;
     const cancel = task?.content === "TRACE_CANCEL" && !calls;
     const error = task?.content === "TRACE_ERROR" && !calls;
-    if (multi || cancel || error) {
+    if (task?.content === "TRACE_MEDIA" && !calls) {
+      chunk({ role: "assistant", content: "我会查看图片，整理资料，并保存说明。" });
+      const tools = [
+        ["file_read_tool", { file_path: picture }],
+        ["grep_tool", { pattern: "TURN_OUTPUT_PROOF", path: path.join(project, "proof.txt") }],
+        ["command_tool", { command: "echo TOOL_TERMINAL_PROOF", wait_ms: 1000 }],
+        ["file_write_tool", { file_path: path.join(project, "image-notes.md"), content: "# 图片说明\n蓝色山丘与阳光。\n" }],
+      ];
+      chunk({ tool_calls: tools.map(([name, input], index) => ({ index, id: "media_" + index, type: "function", function: { name, arguments: JSON.stringify(input) } })) });
+      chunk({}, "tool_calls");
+    } else if (multi || cancel || error) {
       chunk({ role: "assistant", content: cancel ? "先请求批准，再写文件。" : calls ? "再检查一次，确认结果。" : "我先检查文件内容。" });
       await new Promise((resolve) => setTimeout(resolve, multi && !calls ? 1400 : 30));
       chunk({ tool_calls: [{ index: 0, id: `call_${calls}`, type: "function", function: { name: cancel ? "file_write_tool" : "file_read_tool", arguments: JSON.stringify({ file_path: path.join(project, cancel ? "cancelled.txt" : "proof.txt"), ...(cancel ? { content: "never write" } : {}) }) } }] });
@@ -85,7 +103,30 @@ async function main() {
     await page.locator(".turn-process").first().locator(":scope > summary").click();
     assert.equal(await page.locator(".turn-process").first().locator(".turn-commentary").count(), 2);
     assert.equal(await page.locator(".message.assistant").count(), 4);
-    await page.locator(".message.assistant").first().scrollIntoViewIfNeeded();
+    await page.getByLabel("访问权限", { exact: true }).selectOption("full");
+    await page.waitForFunction(() => !document.querySelector(".permission-picker").disabled);
+    await send("TRACE_MEDIA"); await finished();
+    const mediaTurn = () => page.locator(".turn-process").last();
+    await mediaTurn().locator(":scope > summary").click();
+    for (const kind of ["image", "search", "terminal", "edit"]) assert.equal(await mediaTurn().locator(`[data-tool-kind="${kind}"]`).count(), 1);
+    assert.equal(await mediaTurn().locator(".turn-tool.completed").count(), 4);
+    const thumbnail = () => mediaTurn().getByRole("button", { name: "放大图像 landscape.png" });
+    await thumbnail().scrollIntoViewIfNeeded();
+    await thumbnail().locator("img").waitFor();
+    await thumbnail().click();
+    await page.getByRole("dialog", { name: "图片附件预览" }).waitFor();
+    assert.equal(await page.getByRole("dialog").locator("img").evaluate(im => im.naturalWidth), 720);
+    await page.getByRole("button", { name: "关闭图片预览" }).click();
+    assert(modelReceivedImage, "the native image must reach the model, not only the UI");
+    assert.equal(mediaRequests, 2, "preview must not call the model");
+    fs.unlinkSync(picture);
+    await app.close(); await launch();
+    await mediaTurn().locator(":scope > summary").click();
+    await thumbnail().scrollIntoViewIfNeeded(); await thumbnail().locator("img").waitFor();
+    await thumbnail().click(); await page.getByRole("dialog", { name: "图片附件预览" }).waitFor();
+    await page.getByRole("button", { name: "关闭图片预览" }).click();
+    assert.equal(mediaRequests, 2, "history preview must not rerun image tools or model requests");
+    await mediaTurn().scrollIntoViewIfNeeded();
     fs.mkdirSync(path.join(root, "test-results"), { recursive: true });
     // Playwright's screenshot waits for a visible compositor in hidden windows.
     // Electron can wake the renderer and capture without showing the test app.
@@ -97,7 +138,7 @@ async function main() {
     });
     fs.writeFileSync(path.join(root, "test-results/turn-process.png"), Buffer.from(shot, "base64"));
     assert.deepEqual(errors, []);
-    console.log("Turn process E2E passed: live expanded timer, completed collapse, commentary/tool results retained, per-turn isolation, cancellation/error and restart persistence");
+    console.log("Turn process E2E passed: typed compact rows, native model image input, thumbnail/enlargement after original deletion and restart, live timer, collapse, details, cancellation/error and per-turn isolation");
   } finally { if (app) await app.close().catch(() => {}); server.closeAllConnections(); server.close(); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -140,11 +140,13 @@ export type Worker = {
   model?: string;
   background?: boolean;
 };
+export type ToolMedia = { id?: string; kind: "image"; name: string; width?: number; height?: number; error?: string };
 export type ToolActivity = {
   id: string;
   name: string;
   status: string;
   result?: string;
+  media?: ToolMedia[];
   input?: Record<string, any>;
   agentId?: string;
   agentRole?: string;

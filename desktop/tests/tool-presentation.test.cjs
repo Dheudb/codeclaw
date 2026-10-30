@@ -1,0 +1,19 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+test("tool transcript uses semantic labels without hiding failures", async () => {
+  const { toolPresentation: view } = await import("../src/tool-presentation.ts");
+  const tool = (name, input = {}, status = "completed", extra = {}) => view({ name, input, status, ...extra });
+  assert.deepEqual(tool("file_read_tool", { file_path: "C:\\work\\photo.PNG" }), { kind: "image", title: "已查看图像", brief: "photo.PNG" });
+  assert.equal(tool("custom_tool", {}, "completed", { media: [{ kind: "image", id: "fixture" }] }).kind, "image");
+  assert.equal(tool("file_edit_tool", { file_path: "/work/main.py" }).kind, "edit");
+  assert.equal(tool("command_tool", { command: "echo hello" }).brief, "echo hello");
+  assert.equal(tool("command_tool", {}, "error").title, "运行命令失败");
+  assert.equal(tool("command_tool", {}, "cancelled").title, "运行命令已取消");
+  assert.equal(tool("grep_tool").kind, "search");
+  assert.equal(tool("web_search_tool", { query: "query" }).title, "已搜索网页");
+  assert.equal(tool("file_read_tool", { file_path: "notes.md" }).kind, "file");
+  assert.equal(tool("web_fetch_tool").kind, "web");
+  assert.equal(tool("spawn_agent").kind, "agent");
+  assert.equal(tool("skill_tool").kind, "skill");
+  assert.equal(tool("unknown").brief, "unknown");
+});

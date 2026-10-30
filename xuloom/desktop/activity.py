@@ -1,6 +1,8 @@
 """Rebuild desktop activity from the shared CLI/desktop transcripts."""
 import json
 import re
+import os
+from xuloom.context.tool_media import archive_images, receipt_text
 from datetime import datetime
 from xuloom.core.storage import session_directory
 
@@ -26,8 +28,12 @@ def transcript_activity(messages, agent_id=None, agent_role="main"):
                                       "input": block.get("input", {}), "status": "interrupted",
                                       "agentId": agent_id, "agentRole": agent_role, "startedAt": timestamp(message)}
             elif block.get("type") == "tool_result" and block.get("tool_use_id") in tools:
+                tool = tools[block["tool_use_id"]]
+                media = archive_images(block.get("content"), name=os.path.basename(str(tool["input"].get("file_path") or tool["input"].get("path") or "")))
+                if media:
+                    tool["media"] = media
                 tools[block["tool_use_id"]].update(status="error" if block.get("is_error") else "completed",
-                                                  result=str(block.get("content", ""))[:16000], finishedAt=timestamp(message))
+                                                  result=receipt_text(block.get("content", ""))[:16000], finishedAt=timestamp(message))
     return list(tools.values())
 
 
