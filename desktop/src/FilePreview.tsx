@@ -1,17 +1,30 @@
-import { useEffect, useState } from "react";
-import { RefreshCw, X, FolderTree } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { RefreshCw, X, FolderTree, WrapText } from "lucide-react";
 import type { FileChange } from "./types";
 import Markdown from "./Markdown";
 import FileChanges, { ChangeCounts, relativeFile } from "./FileChanges";
 import DiffView from "./DiffView";
 import WorkspaceTree from "./WorkspaceTree";
 import HtmlPreview from "./HtmlPreview";
+import PanelResizer from "./PanelResizer";
+import { clampReviewTreeWidth, reviewTreeLimits } from "./panel-width";
 
-export default function FilePreview({ sessionId, project, path, change, version, close, onOpen, initialView, changes }: {
+export default function FilePreview({ sessionId, project, path, change, version, close, onOpen, initialView, changes, treeWidth, setTreeWidth, saveTreeWidth }: {
   sessionId: string; project: string; path: string; change?: FileChange; version?: number;
   initialView: "diff" | "content"; changes: FileChange[];
   close: () => void; onOpen: (path: string, change?: FileChange) => void;
+  treeWidth: number; setTreeWidth: (width: number) => void; saveTreeWidth: (width: number) => void;
 }) {
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const [layoutWidth, setLayoutWidth] = useState(318), [wrap, setWrap] = useState(true);
+  useEffect(() => {
+    const element = layoutRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setLayoutWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const shownTreeWidth = clampReviewTreeWidth(treeWidth, layoutWidth);
   const [file, setFile] = useState<{ content: string; path: string; size: number; truncated: boolean }>();
   const [error, setError] = useState(""), [loading, setLoading] = useState(true), [refresh, setRefresh] = useState(0);
   const [gitChange, setGitChange] = useState<FileChange>(), [diffError, setDiffError] = useState("");
@@ -49,18 +62,19 @@ export default function FilePreview({ sessionId, project, path, change, version,
   const shownChange = change?.source === "git" ? gitChange : change;
   const listedChanges = change?.source === "git" ? gitFiles : changes;
   return <section className="file-preview docked-review" role="region" aria-label="文件预览">
-    <header><div><h2 title={path}>{relativeFile(path, project)}</h2><small>{tab === "diff" ? (change?.source === "git" ? "Git 工作区 · HEAD 与当前文件" : "会话变更 · 任务修改前后") : "文件内容 · 磁盘最新版本"}</small></div>
+    <header><div><h2 title={path}>{relativeFile(path, project).split(/[\\/]/).pop()}</h2><small title={path}>{tab === "diff" ? (change?.source === "git" ? "Git 工作区 · HEAD 与当前文件" : "会话变更 · 任务修改前后") : "文件内容 · 磁盘最新版本"}</small></div>
+      <button className="icon-button" aria-label="自动换行" aria-pressed={wrap} title="源码与差异自动换行" onClick={() => setWrap(!wrap)}><WrapText size={16} /></button>
       <button className="icon-button" aria-label="显示工作区文件树" aria-pressed={tree} onClick={() => setTree(!tree)}><FolderTree size={16} /></button>
       <button className="icon-button" aria-label="刷新文件内容" disabled={loading || diffLoading} onClick={() => setRefresh(refresh + 1)}><RefreshCw size={16} /></button>
       <button className="icon-button" aria-label="关闭文件预览" onClick={close}><X size={19} /></button></header>
-    <div className="review-layout">
+    <div className="review-layout" ref={layoutRef}>
       <div className="review-editor">
         <nav className="file-preview-tabs" role="tablist" aria-label="文件视图">
           {[["diff", "差异"], ["source", "源码"], ["preview", "预览"]].filter(([id]) => id !== "preview" || previewable).map(([id, label]) =>
             <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>)}
           {shownChange && <ChangeCounts added={shownChange.added} removed={shownChange.removed} />}
         </nav>
-        <div className={"file-preview-body " + (tab === "preview" && html ? "web-preview-body" : "")} role="tabpanel">
+        <div className={"file-preview-body " + (wrap ? "wrap-lines " : "") + (tab === "preview" && html ? "web-preview-body" : "")} role="tabpanel">
           {tab === "diff" ? <>
             {diffLoading && <p role="status">正在读取 Git 差异…</p>}
             {diffError && <p role="alert" className="error">{diffError}</p>}
@@ -79,7 +93,10 @@ export default function FilePreview({ sessionId, project, path, change, version,
           </>}
         </div>
       </div>
-      {tree && <aside className="review-files"><nav className="review-file-tabs" aria-label="文件列表范围">
+      {tree && <aside className="review-files" style={{ flexBasis: shownTreeWidth }}>
+        <PanelResizer width={shownTreeWidth} viewport={layoutWidth} bounds={reviewTreeLimits(layoutWidth)}
+          label="调整文件目录栏宽度" defaultWidth={220} change={setTreeWidth} save={saveTreeWidth} />
+        <nav className="review-file-tabs" aria-label="文件列表范围">
         <button aria-pressed={scope === "workspace"} onClick={() => setScope("workspace")}>工作区</button>
         <button aria-pressed={scope === "changes"} onClick={() => setScope("changes")}>变更文件</button>
       </nav>{scope === "workspace" ? <WorkspaceTree {...{ sessionId, project, onOpen }} changes={listedChanges} selected={file?.path || path} />

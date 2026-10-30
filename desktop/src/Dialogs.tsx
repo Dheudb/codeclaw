@@ -5,6 +5,7 @@ import Markdown from "./Markdown";
 import ArchivePanel from "./ArchivePanel";
 import ExtensionSettings from "./ExtensionSettings";
 import type { Capabilities } from "./types";
+import { ReasoningSettings } from "./ReasoningControls";
 
 export function SettingsDialog({
   config,
@@ -46,6 +47,7 @@ export function SettingsDialog({
     apiKey: "",
     networkMode: config?.networkMode || "direct",
     modelInputs: config?.modelInputs || {} as NonNullable<ModelConfig["modelInputs"]>,
+    modelReasoning: config?.modelReasoning || {} as NonNullable<ModelConfig["modelReasoning"]>,
   });
   const [modelsText, setModelsText] = useState((config?.models || (config?.model ? [config.model] : [])).join("\n"));
   const [discovering, setDiscovering] = useState(false);
@@ -69,7 +71,8 @@ export function SettingsDialog({
     setError("");
     try {
       const models = [...new Set([...modelsText.split(/[\n,，]/).map((name) => name.trim()).filter(Boolean), form.model.trim()])];
-      await save({ ...form, models, modelInputs: Object.fromEntries(Object.entries(form.modelInputs).filter(([name]) => models.includes(name))) });
+      await save({ ...form, models, modelInputs: Object.fromEntries(Object.entries(form.modelInputs).filter(([name]) => models.includes(name))),
+        modelReasoning: Object.fromEntries(Object.entries(form.modelReasoning).filter(([name]) => models.includes(name))) });
       close();
     } catch (e) {
       setError(String(e));
@@ -130,13 +133,13 @@ export function SettingsDialog({
           <div className="api-connection-row"><label>API 连接
             <select aria-label="API 连接" disabled={discovering || saving} value={form.connectionId} onChange={(event) => {
               const connection = config?.connections?.find((item) => item.connectionId === event.target.value);
-              if (connection) { setForm({ ...connection, apiKey: "", networkMode: connection.networkMode || "direct", modelInputs: connection.modelInputs || {} }); setModelsText(connection.models.join("\n")); setDiscoveryStatus(""); setError(""); setDeleteId(""); }
+              if (connection) { setForm({ ...connection, apiKey: "", networkMode: connection.networkMode || "direct", modelInputs: connection.modelInputs || {}, modelReasoning: connection.modelReasoning || {} }); setModelsText(connection.models.join("\n")); setDiscoveryStatus(""); setError(""); setDeleteId(""); }
             }}>
               {(config?.connections || []).map((connection) => <option key={connection.connectionId} value={connection.connectionId}>{connection.connectionName}</option>)}
               {!config?.connections?.some((connection) => connection.connectionId === form.connectionId) && <option value={form.connectionId}>{form.connectionName}</option>}
             </select></label>
             <button disabled={discovering || saving} onClick={() => {
-              setForm({ connectionId: crypto.randomUUID(), connectionName: "新 API", provider: "openai", model: "", baseUrl: "", hasKey: false, apiKey: "", networkMode: "direct", modelInputs: {} });
+              setForm({ connectionId: crypto.randomUUID(), connectionName: "新 API", provider: "openai", model: "", baseUrl: "", hasKey: false, apiKey: "", networkMode: "direct", modelInputs: {}, modelReasoning: {} });
               setModelsText(""); setDiscoveryStatus(""); setError(""); setDeleteId("");
             }}>新增 API</button>
             <button className="danger" disabled={!savedConnection || saving || discovering || deleting} onClick={() => { setDeleteId(form.connectionId); setError(""); }}>删除 API</button>
@@ -149,7 +152,7 @@ export function SettingsDialog({
                 try {
                   const next = await deleteConnection(deleteId);
                   setForm({ connectionId: next.connectionId || crypto.randomUUID(), connectionName: next.connectionName || "我的 API", provider: next.provider,
-                    model: next.model, baseUrl: next.baseUrl, hasKey: next.hasKey, apiKey: "", networkMode: next.networkMode || "direct", modelInputs: next.modelInputs || {} });
+                    model: next.model, baseUrl: next.baseUrl, hasKey: next.hasKey, apiKey: "", networkMode: next.networkMode || "direct", modelInputs: next.modelInputs || {}, modelReasoning: next.modelReasoning || {} });
                   setModelsText((next.models || []).join("\n")); setDeleteId("");
                   setDiscoveryStatus(next.connections?.length ? "已删除 API 连接。" : "已删除所有 API 连接，请添加新的连接。");
                 } catch (e) { setError(String(e)); } finally { setDeleting(false); }
@@ -171,6 +174,7 @@ export function SettingsDialog({
                   hasKey: false,
                   apiKey: "",
                   modelInputs: {},
+                  modelReasoning: {},
                 }); setModelsText(""); setDiscoveryStatus(""); }
               }
             >
@@ -216,6 +220,11 @@ export function SettingsDialog({
             </select>
           </label>
           <p className="fine-print">按当前模型 ID 分别保存。仅文本模型会拦截图片附件和历史图片；未知能力不根据模型名称猜测，也不自动切换模型。</p>
+          {!!form.model.trim() && <ReasoningSettings provider={form.provider} profile={form.modelReasoning[form.model]} change={profile => {
+            const modelReasoning = { ...form.modelReasoning };
+            if (profile) modelReasoning[form.model] = profile; else delete modelReasoning[form.model];
+            setForm({ ...form, modelReasoning });
+          }} />}
           <label>
             API 地址
             <input

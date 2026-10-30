@@ -299,6 +299,7 @@ def run_command_palette(tui: InteractiveTerminalTUI) -> str:
             {"value": "/team", "label": "View team status"},
             {"value": "/model", "label": "Switch model/provider"},
             {"value": "/model status", "label": "Show current model runtime"},
+            {"value": "/thinking", "label": "Show model Thinking and effort settings"},
             {"value": "/sessions", "label": "List session history"},
             {"value": "/resume", "label": "Resume a session"},
             {"value": "/quit", "label": "Quit CLI"},
@@ -610,7 +611,9 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                     "  /model            Interactive model/provider switch\n"
                     "  /model status     Show current model runtime\n"
                     "  /model list       List saved API models\n"
-                    "  /model use 2      Switch to a saved model\n\n"
+                    "  /model use 2      Switch to a saved model\n"
+                    "  /thinking         Show Thinking settings; /thinking enabled|disabled|default\n"
+                    "  /thinking effort high   Set model effort independently of collaboration\n\n"
                     "[bold white]Other[/bold white]\n"
                     "  /palette          Open command palette\n"
                     "  /quit             Exit CLI\n"
@@ -761,6 +764,24 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                     console.print(json.dumps(await engine.undo_file(user_input.split(maxsplit=1)[1].strip()), ensure_ascii=False))
                 except Exception as error:
                     console.print("Undo refused: " + str(error))
+                continue
+            elif normalized_input == "/thinking" or normalized_input.startswith("/thinking "):
+                parts = user_input.strip().split()
+                if len(parts) == 1:
+                    console.print(json.dumps(engine.reasoning_profile or {"effort": engine.reasoning_effort or "default"}, ensure_ascii=False))
+                    console.print("[dim]/thinking enabled|disabled|default   /thinking effort low|medium|high|xhigh|max|default[/dim]")
+                else:
+                    try:
+                        if len(parts) == 2:
+                            result = engine.set_reasoning_options(thinking=parts[1])
+                        elif len(parts) == 3 and parts[1] == "effort":
+                            result = engine.set_reasoning_options(effort=parts[2])
+                        else:
+                            raise ValueError("Use /thinking enabled|disabled|default or /thinking effort <level>")
+                        if not engine.persist_session_state(): raise OSError("Thinking settings could not be saved")
+                        console.print(json.dumps(result, ensure_ascii=False))
+                    except (ValueError, OSError, RuntimeError) as error:
+                        console.print("Thinking settings: " + str(error))
                 continue
             elif normalized_input.startswith("/model"):
                 raw = user_input.strip()

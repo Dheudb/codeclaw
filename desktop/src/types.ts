@@ -37,6 +37,14 @@ export type Capabilities = {
     globalAgentsRoot?: string;
   };
 };
+export type ReasoningProfile = {
+  adapter: "openai" | "deepseek" | "qwen" | "qwen-local" | "anthropic" | "anthropic-budget";
+  efforts: string[];
+  canDisable: boolean;
+  thinking: "default" | "enabled" | "disabled";
+  effort: string;
+  budgetTokens: number;
+};
 export type ModelConfig = {
   connectionId?: string;
   connectionName?: string;
@@ -47,6 +55,7 @@ export type ModelConfig = {
   networkMode?: "direct" | "system";
   models?: string[];
   modelInputs?: Record<string, ("text" | "image" | "document")[]>;
+  modelReasoning?: Record<string, ReasoningProfile>;
   connections?: ModelConnection[];
 };
 export type ModelConnection = Omit<ModelConfig, "connections"> & { connectionId: string; connectionName: string; models: string[] };

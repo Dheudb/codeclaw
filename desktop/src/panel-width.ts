@@ -11,9 +11,16 @@ export function clampSidebarWidth(width: number, viewport: number, panelOpen = t
   return Math.round(Math.max(min, Math.min(max, Number.isFinite(width) ? width : defaultSidebarWidth(viewport))));
 }
 export function panelLimits(viewport: number, sidebarWidth = defaultSidebarWidth(viewport)) {
-  return { min: 280, max: Math.max(280, Math.min(760, viewport - sidebarWidth - 400)) };
+  return { min: 280, max: Math.max(280, Math.min(12000, viewport - sidebarWidth - 400)) };
 }
 export function clampPanelWidth(width: number, viewport: number, sidebarWidth = defaultSidebarWidth(viewport)) {
   const { min, max } = panelLimits(viewport, sidebarWidth);
   return Math.round(Math.max(min, Math.min(max, Number.isFinite(width) ? width : DEFAULT_PANEL_WIDTH)));
+}
+export function reviewTreeLimits(panelWidth: number) {
+  return { min: 120, max: Math.max(120, panelWidth - 180) };
+}
+export function clampReviewTreeWidth(width: number, panelWidth: number) {
+  const { min, max } = reviewTreeLimits(panelWidth);
+  return Math.round(Math.max(min, Math.min(max, Number.isFinite(width) ? width : 220)));
 }

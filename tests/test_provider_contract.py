@@ -12,10 +12,11 @@ class ProviderContractTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = recovery.RecoveryTests.asyncSetUp
     asyncTearDown = recovery.RecoveryTests.asyncTearDown
 
-    async def verify_provider(self, provider, truncate):
+    async def verify_provider(self, provider, truncate, reasoning=None, expected=None):
         transport_http = getattr(anthropic_transport, "httpx2", httpx) if provider == "anthropic" else httpx
         await self.engine.client.close()
         self.engine.model_provider = provider
+        self.engine.reasoning_profile = reasoning
         self.engine.api_base_url = "https://api.anthropic.com" if provider == "anthropic" else "https://fixture.invalid/v1"
         requests = []
         successful = 0
@@ -70,6 +71,20 @@ class ProviderContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(request["model"] == "fixture" for request in requests))
         self.assertIn("saved:FIRST", json.dumps(requests[-1]))
         self.assertIn("saved:SECOND", json.dumps(requests[-1]))
+        if expected is not None:
+            for request in requests:
+                for key, value in expected.items():
+                    self.assertEqual(request.get(key), value)
+
+    async def test_anthropic_adaptive_effort_uses_native_sdk_and_wire_fields(self):
+        from xuloom.core.reasoning import normalize_profile
+        profile = normalize_profile({"adapter": "anthropic", "thinking": "enabled", "efforts": ["high"], "effort": "high"}, "anthropic")
+        await self.verify_provider("anthropic", False, profile, {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}})
+
+    async def test_qwen_extra_body_survives_sdk_serialization_and_retry(self):
+        from xuloom.core.reasoning import normalize_profile
+        profile = normalize_profile({"adapter": "qwen-local", "thinking": "disabled"}, "openai")
+        await self.verify_provider("openai", False, profile, {"chat_template_kwargs": {"enable_thinking": False}, "reasoning_effort": None})
 
     async def test_openai_parallel_streamed_arguments_and_http_retry(self):
         await self.verify_provider("openai", False)

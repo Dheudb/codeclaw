@@ -61,7 +61,7 @@ def instructions(profile):
     principle = {
         "solo": "Complete work yourself. Do not spawn or resume subagents. If the user explicitly requests parallel workers, explain Solo is selected and ask them to switch the collaboration menu; do not switch it yourself.",
         "auto": "Delegate only when there is clearly independent work and its benefit exceeds coordination cost. Keep small, tightly coupled tasks together. Answer ordinary questions directly.",
-        "ultra": "Proactive delegation is enabled. For substantial tasks, delegate independent research branches, alternative approaches or checks early instead of doing every branch yourself. Ultra is the user's request for proactive collaboration; no extra request is needed. Keep the critical path and final synthesis yourself; work alongside the agents. Answer simple questions and tightly sequential tasks directly.",
+        "ultra": "Proactive delegation is enabled. Use spawn_agent early for independent research branches, alternative approaches or checks when this can save time or improve quality, instead of doing every branch yourself. Ultra is the user's request for proactive collaboration; no extra request is needed. Keep the critical path and final synthesis yourself; work alongside the agents. Answer simple questions and tightly sequential tasks directly.",
     }[mode]
     return (f"# Collaboration: {mode}\n{principle}\n"
             "Never launch workers to fill a quota. Do not duplicate the same assignment unless the user explicitly asks for repeated independent trials. "

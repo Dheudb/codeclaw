@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import type { SessionView, ModelConfig, SessionCatalog, PermissionMode, FileChange, Attachment } from "./types";
 import { applyEvent, beginTurn, createSession } from "./state";
+import { ReasoningControls } from "./ReasoningControls";
 import CapabilityPanel from "./CapabilityPanel";
 import { InteractionCard, SettingsDialog } from "./Dialogs";
 import Markdown from "./Markdown";
@@ -71,6 +72,7 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelTab, setPanelTab] = useState("skills");
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [reviewTreeWidth, setReviewTreeWidth] = useState(220);
   const [sidebarWidth, setSidebarWidth] = useState<number>();
   const [viewport, setViewport] = useState(window.innerWidth);
   const [opening, setOpening] = useState(true);
@@ -121,6 +123,7 @@ export default function App() {
         setBuildId(value.buildId || "");
         setDefaultDirectory(value.workspaceSettings.defaultDirectory);
         if (Number.isFinite(value.layout?.inspectorWidth)) setPanelWidth(value.layout.inspectorWidth);
+        if (Number.isFinite(value.layout?.reviewTreeWidth)) setReviewTreeWidth(value.layout.reviewTreeWidth);
         if (Number.isFinite(value.layout?.sidebarWidth)) setSidebarWidth(value.layout.sidebarWidth);
         receiveCatalog(value.catalog);
         setSessions((value.restored || []).map(createSession));
@@ -390,6 +393,16 @@ export default function App() {
       const config = await invoke("config.select", { connectionId, model });
       setGlobalModel(config);
       setSessions((previous) => previous.map((session) => session.busy ? session : { ...session, config }));
+    } catch (error) { onError(error); }
+    finally { setModelChanging(false); }
+  }
+  async function selectReasoning(value: { thinking?: "default" | "enabled" | "disabled"; effort?: string }) {
+    if (!globalModel || modelChanging) return;
+    setModelChanging(true);
+    try {
+      const config = await invoke("config.reasoning", { connectionId: globalModel.connectionId, model: globalModel.model, ...value });
+      setGlobalModel(config);
+      setSessions(previous => previous.map(session => session.busy ? session : { ...session, config }));
     } catch (error) { onError(error); }
     finally { setModelChanging(false); }
   }
@@ -785,6 +798,9 @@ export default function App() {
                       {connection.models.map((model) => <option key={model} value={JSON.stringify([connection.connectionId, model])}>{model}</option>)}
                     </optgroup>)}
                 </select> : <button className="model-button" onClick={openSettings}>连接模型<ChevronRight size={12} /></button>}
+                <ReasoningControls profile={globalModel?.modelReasoning?.[globalModel.model]}
+                  disabled={opening || modelChanging || !!active?.busy || !!runningWorkers || !!runningCommands}
+                  change={value => void selectReasoning(value)} />
                 {active?.loaded.length ? (
                   <span
                     className="loaded-indicator"
@@ -854,6 +870,8 @@ export default function App() {
         <PanelResizer width={clampPanelWidth(panelWidth, viewport, effectiveSidebarWidth)} viewport={viewport} sidebarWidth={effectiveSidebarWidth} change={setPanelWidth}
           save={(inspectorWidth) => { void window.xuloom.invoke("layout.save", { inspectorWidth }).catch(onError); }} />
         {filePreview && active ? <FilePreview sessionId={activeId} project={active.project}
+          treeWidth={reviewTreeWidth} setTreeWidth={setReviewTreeWidth}
+          saveTreeWidth={(value) => { void window.xuloom.invoke("layout.save", { reviewTreeWidth: value }).catch(onError); }}
           version={active.fileChanges?.find((file) => file.path === (filePreview.change?.path || filePreview.path) || relativeFile(file.path, active.project) === filePreview.path)?.updatedAt}
           {...filePreview} changes={active.fileChanges || []} close={() => setFilePreview(undefined)} onOpen={openFile} /> : <CapabilityPanel
             onOpenFile={openFile}

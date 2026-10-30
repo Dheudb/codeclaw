@@ -16,3 +16,7 @@
 | [Ultra 主动委派校准](ultra-delegation-2026-10-30.md) | Codex 策略对照、非阻塞子任务指引与实际请求验证 |
 
 普通用户从桌面说明开始；修改代码从开发说明和架构开始。
+
+模型 Thinking 开关、effort 选择、CLI 用法及简化派发入口见 [模型思考控制](model-reasoning-2026-10-30.md)。
+
+文件正文阅读、自动换行和目录栏调整见 [文件分栏修复](file-review-layout-2026-10-30.md)。

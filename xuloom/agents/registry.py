@@ -37,7 +37,8 @@ class AgentRegistry:
                     if metadata.get("model") == "inherit":
                         metadata["model"] = None
                     effort = metadata.get("reasoning_effort")
-                    if effort not in {None, "low", "medium", "high", "xhigh"}:
+                    from xuloom.core.reasoning import EFFORTS
+                    if effort is not None and effort not in EFFORTS:
                         raise ValueError("Unsupported reasoning_effort")
                     web = metadata.get("web_search", "inherit")
                     if web not in {"inherit", "disabled", "enabled"}:

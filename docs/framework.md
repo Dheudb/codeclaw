@@ -148,9 +148,11 @@ read_only: true
 角色工具和潜在工具一起过滤，不能通过搜索工具重新激活被排除的工具。默认子代理不再嵌套委派。
 不支持的 `sandbox_mode` 会报错，不会假装已有相应隔离。
 
-子代理默认继承父任务的模型、供应商和思考设置。`reasoning_effort` 可显式设置 `low/medium/high/xhigh`，
-目前通过 OpenAI 兼容接口传递，由供应商和具体模型决定是否支持；不兼容会报错，不自动忽略。
-Anthropic 使用现有 thinking 配置继承，不接受此显式覆盖字段。
+子代理默认继承父任务的模型、供应商和实际思考选择。模型接口可声明 Thinking 开关和支持的 effort；
+`reasoning_effort` 可显式请求 `none/minimal/low/medium/high/xhigh/max`，但只能使用目标模型允许的值。
+Anthropic 模型声明相应能力后通过 `output_config.effort` 传递；不同模型不盲目继承父任务参数。
+模型可用 `spawn_agent(prompt="独立任务")` 简化后台派发，仍使用 `agent_tool` 的原生命周期与权限。
+详见 [模型思考控制](model-reasoning-2026-10-30.md)。
 
 ## 命令会话
 

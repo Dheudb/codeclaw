@@ -1,5 +1,5 @@
 """Domain-neutral roles; specialized roles use the existing AgentRegistry."""
-DISALLOWED_WRITE_TOOLS = frozenset({"agent_tool", "ask_user_question_tool", "send_message_tool", "team_create_tool", "team_delete_tool", "file_edit_tool", "file_write_tool"})
+DISALLOWED_WRITE_TOOLS = frozenset({"agent_tool", "spawn_agent", "ask_user_question_tool", "send_message_tool", "team_create_tool", "team_delete_tool", "file_edit_tool", "file_write_tool"})
 
 GENERAL_PURPOSE_SYSTEM_PROMPT = """You are a delegated Xuloom assistant. Complete the assignment supplied by the parent, respecting its scope, constraints and required output. Parent conversation is reference, not a new assignment or authorization.
 Respond directly to simple questions. Use tools, planning and domain skills only when the assignment requires them. Do not assume the task concerns software or requires inspecting files. Preserve evidence sources, distinguish facts from inference, and report actual results, uncertainties and unfinished work. Execution finishing does not prove domain acceptance."""

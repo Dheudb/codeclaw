@@ -20,7 +20,7 @@ from xuloom.agents.builtin_agents import (
 MAX_SUBAGENT_DEPTH = 2
 
 ALL_AGENT_DISALLOWED_TOOLS = frozenset({
-    "agent_tool",
+    "agent_tool", "spawn_agent",
     "ask_user_question_tool",
     "send_message_tool",
     "team_create_tool",
@@ -36,7 +36,7 @@ class AgentToolInput(BaseModel):
     timeout_ms: int = Field(30000, ge=0, le=60000, description="Bounded wait timeout")
     response_format: str = Field("text", pattern="^(text|json)$", description="Use json for structured spawn receipts and wait results")
     request_id: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,128}$", description="Stable caller-supplied spawn identity. Repeating the same request returns its existing workers; changed arguments are rejected")
-    reasoning_effort: Optional[str] = Field(None, pattern="^(low|medium|high|xhigh)$")
+    reasoning_effort: Optional[str] = Field(None, pattern="^(none|minimal|low|medium|high|xhigh|max)$")
     agent_id: Optional[str] = Field(None, description="Background subagent ID for result or cancel")
     description: str = Field("", description="A short description of the task")
     prompt: str = Field("", description="The task for the agent to perform")
@@ -58,6 +58,15 @@ class AgentToolInput(BaseModel):
         description="Use true to launch without blocking the parent or peer workers; collect results before final synthesis. False waits inside this call.",
     )
     inherit_context: bool = Field(False, description="Include the parent conversation as reference only. Defaults to an independent task context.")
+
+
+class SpawnAgentInput(BaseModel):
+    model_config = {"extra": "forbid"}
+    prompt: str = Field(..., min_length=1, description="Self-contained assignment, constraints and desired output")
+    description: str = Field("", description="Short task label")
+    subagent_type: Optional[str] = Field(None, description="Optional registered role; defaults to general-purpose")
+    inherit_context: bool = Field(False, description="Include parent history as reference; otherwise provide needed context in prompt")
+    count: int = Field(1, ge=1, le=10, strict=True, description="Use more than one only for explicitly requested repeated independent trials of this same assignment")
 
 class AgentTool(AgentLifecycle, BaseAgenticTool):
     name = "agent_tool"
@@ -252,8 +261,10 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             effective_role = builtin_agent_def.get("agent_role", agent_role)
 
         child_agent_id = child_agent_id or f"{effective_role}-{uuid.uuid4()}"
+        child_model = model or (builtin_agent_def or {}).get("model") or self.context.get("primary_model")
+        same_model = child_model == self.context.get("primary_model")
         sub_engine = QueryEngine(
-            model=model or (builtin_agent_def or {}).get("model") or self.context.get("primary_model"),
+            model=child_model,
             fallback_model=self.context.get("fallback_model"),
             permission_handler=self.context.get("permission_handler"),
             agent_id=child_agent_id,
@@ -264,12 +275,19 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             api_base_url=self.context.get("api_base_url"),
             local_tokenizer_path=self.context.get("local_tokenizer_path"),
             cwd=self.context.get("session_cwd"),
-            thinking_config=self.context.get("thinking_config"),
-            mode_thinking_overrides=self.context.get("mode_thinking_overrides"),
-            reasoning_effort=(builtin_agent_def or {}).get("reasoning_effort") or self.context.get("reasoning_effort"),
+            thinking_config=self.context.get("thinking_config") if same_model else None,
+            mode_thinking_overrides=self.context.get("mode_thinking_overrides") if same_model else None,
+            reasoning_effort=(builtin_agent_def or {}).get("reasoning_effort") or (self.context.get("reasoning_effort") if same_model else None),
             collaboration_mode="solo",
             execution_mode=getattr(self.context.get("execution_sandbox"), "mode", "host"),
         )
+        if same_model and self.context.get("reasoning_profile") is not None:
+            from xuloom.core.reasoning import request_options
+            sub_engine.reasoning_profile = copy.deepcopy(self.context["reasoning_profile"])
+            request_options(sub_engine.reasoning_profile, sub_engine.model_provider, effort_override=sub_engine.reasoning_effort)
+            sub_engine._sync_model_runtime_context()
+        sub_engine._thinking_config_explicit = same_model and self.context.get("thinking_config_explicit", False)
+        sub_engine.tool_context["thinking_config_explicit"] = sub_engine._thinking_config_explicit
         definition = copy.deepcopy(builtin_agent_def or {})
         sub_engine.tool_context["delegation"] = {"owner_session_id": self.context.get("session_id"), "role_definition": definition}
         sub_engine.tool_context["delegated_mailbox"] = lambda: self._mailbox(child_agent_id)
@@ -641,11 +659,19 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
         builtin_def = registry.resolve(subagent_type or "general-purpose")
         builtin_def = copy.deepcopy(builtin_def)
         builtin_def["disallowed_tools"] = list(builtin_def.get("disallowed_tools", []))
-        builtin_def["reasoning_effort"] = builtin_def.get("reasoning_effort") or self.context.get("reasoning_effort")
+        if (model or builtin_def.get("model") or self.context.get("primary_model")) == self.context.get("primary_model"):
+            builtin_def["reasoning_effort"] = builtin_def.get("reasoning_effort") or self.context.get("reasoning_effort")
         if reasoning_effort:
-            if reasoning_effort not in {"low", "medium", "high", "xhigh"}:
+            from xuloom.core.reasoning import EFFORTS
+            if reasoning_effort not in EFFORTS:
                 raise ValueError("Unsupported reasoning_effort")
             builtin_def["reasoning_effort"] = reasoning_effort
+        from xuloom.core.reasoning import configured_profile, request_options
+        target_model = model or builtin_def.get("model") or self.context.get("primary_model")
+        target_profile = (self.context.get("reasoning_profile") if target_model == self.context.get("primary_model")
+            else configured_profile(self.context.get("model_provider"), target_model, self.context.get("api_base_url")))
+        if target_profile is not None:
+            request_options(target_profile, self.context.get("model_provider"), effort_override=builtin_def.get("reasoning_effort"))
         parent_agent_id = self.context.get("agent_id")
 
         allowed = builtin_def.get("allowed_tools")
@@ -746,3 +772,22 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
                 "task": kwargs["task"], "status": "crashed", "result": str(exc)}
             await self._write_subagent_registry_record({**payload, "finished_at": int(time.time() * 1000)})
         return payload
+
+
+class SpawnAgentTool(AgentTool):
+    """Small model-facing launch surface over the existing worker runtime."""
+    name = "spawn_agent"
+    description = "Start a subagent on a bounded independent task in the background, then continue your own work. Returns actual worker IDs."
+    input_schema = SpawnAgentInput
+    permission_aliases = {"agent_tool": {"action": "spawn", "run_in_background": True}}
+
+    def prompt(self):
+        return "Launch independent branches early under the selected collaboration policy. Use agent_tool for wait, results, messaging and cancellation; await relevant results before final synthesis."
+
+    def build_permission_summary(self, **kwargs):
+        return super().build_permission_summary(run_in_background=True, **kwargs)
+
+    async def execute(self, prompt, description="", subagent_type=None, inherit_context=False, count=1):
+        return await super().execute(action="spawn", prompt=prompt, description=description,
+            subagent_type=subagent_type, inherit_context=inherit_context, count=count,
+            run_in_background=True, response_format="json")

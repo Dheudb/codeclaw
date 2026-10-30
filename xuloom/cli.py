@@ -10,6 +10,7 @@ import time
 
 from xuloom.core.config import load_config_into_env
 from xuloom.core.engine import QueryEngine
+from xuloom.core.reasoning import EFFORTS
 from xuloom.core.session import SessionManager
 from xuloom.core.session_lock import SessionBusyError, SessionConflictError
 from xuloom.features import goals, schedules
@@ -33,6 +34,8 @@ def parser():
                           help="OS execution isolation, separate from approvals; workspace fails closed if unavailable")
         item.add_argument("--collaboration", choices=("solo", "auto", "ultra"), default=None,
                           help="Delegation policy, independent of reasoning and permissions; resume keeps the saved mode unless supplied")
+        item.add_argument("--effort", choices=("default", *EFFORTS), help="Model reasoning effort, independent of collaboration")
+        item.add_argument("--thinking", choices=("default", "enabled", "disabled"), help="Requires the model's declared Thinking parameter format")
         if name == "exec": item.add_argument("prompt", nargs="?", help="Task text, or - to read UTF-8 stdin")
         else:
             item.add_argument("action", choices=("start", "run", "pause", "resume", "cancel", "accept", "status") if name == "goal" else ("add", "list", "pause", "resume", "cancel", "serve"))
@@ -94,6 +97,10 @@ async def open_engine(args, emit):
             engine.persist_session_state()
         if getattr(args, "collaboration", None) is not None:
             engine.set_collaboration_mode(args.collaboration)
+        if getattr(args, "effort", None) is not None or getattr(args, "thinking", None) is not None:
+            engine.set_reasoning_options(thinking=args.thinking, effort=args.effort)
+            if not engine.persist_session_state():
+                raise OSError("推理设置保存失败")
         await engine.start_protocols(lambda _: None)
         await emit({"type": "session_started", "session_id": engine.session_id, "cwd": engine.session_cwd})
         return engine

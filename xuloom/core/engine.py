@@ -30,6 +30,7 @@ except ImportError:
     git = None
 from xuloom.core.run_result import RunResult, PersistenceError, finish_run
 from xuloom.core.session_lock import SessionBusyError, SessionConflictError
+from xuloom.core.reasoning import EFFORTS, configured_profile, request_options, normalize_profile
 from xuloom.features.auto_commit import AutoCommitManager
 from xuloom.features.browser import BrowserSessionManager
 from xuloom.context.context import ContextBuilder
@@ -85,7 +86,7 @@ from xuloom.tools.notebook_tool import NotebookTool
 from xuloom.tools.notebook_edit_tool import NotebookEditTool
 from xuloom.tools.plan_tool import PlanTool
 from xuloom.tools.todo_tool import TodoWriteTool
-from xuloom.agents.agent_tool import AgentTool
+from xuloom.agents.agent_tool import AgentTool, SpawnAgentTool
 from xuloom.tools.browser_tool import BrowserTool
 from xuloom.tools.repl_tool import ReplTool
 from xuloom.skills.skill_tool import SkillTool
@@ -147,12 +148,10 @@ class QueryEngine:
         self.execution_sandbox = ExecutionSandbox(cwd or os.getcwd(), execution_mode or os.environ.get("XULOOM_EXECUTION_MODE", "host"))
         self.collaboration_mode = collaboration_mode or os.environ.get("XULOOM_COLLABORATION_MODE", "auto")
         self.session_cwd = cwd or os.getcwd()
-        if reasoning_effort not in {None, "low", "medium", "high", "xhigh"}:
+        if reasoning_effort is not None and reasoning_effort not in EFFORTS:
             raise ValueError("Unsupported reasoning_effort")
         self.reasoning_effort = reasoning_effort
         self.model_provider = self._resolve_model_provider(model_provider, model)
-        if reasoning_effort and self.model_provider != "openai":
-            raise ValueError("Explicit reasoning_effort currently requires an OpenAI-compatible provider")
         self.api_base_url = api_base_url or os.environ.get("OPENAI_BASE_URL", "")
         self.local_tokenizer_path = (
             local_tokenizer_path
@@ -160,9 +159,15 @@ class QueryEngine:
             or os.environ.get("XULOOM_LOCAL_TOKENIZER_MODEL", "")
         )
         self.primary_model = self._resolve_primary_model(model)
+        self.reasoning_profile = configured_profile(self.model_provider, self.primary_model, self.api_base_url)
+        if reasoning_effort and self.model_provider != "openai" and self.reasoning_profile is None:
+            raise ValueError("Anthropic effort requires an explicit model reasoning profile")
+        if self.reasoning_profile is not None:
+            request_options(self.reasoning_profile, self.model_provider, effort_override=reasoning_effort)
         self.fallback_model = self._resolve_fallback_model(fallback_model)
         self.model = self.primary_model
         self.client = self._build_model_client()
+        self._thinking_config_explicit = thinking_config is not None or bool(mode_thinking_overrides)
         self.default_thinking_config = self._normalize_thinking_config(
             thinking_config if thinking_config is not None else {"type": "adaptive", "display": "summarized"}
         )
@@ -277,6 +282,7 @@ class QueryEngine:
             "plan_tool": PlanTool(),
             "todo_write_tool": TodoWriteTool(),
             "agent_tool": AgentTool(),
+            "spawn_agent": SpawnAgentTool(),
             "browser_tool": BrowserTool(),
             "repl_tool": ReplTool(),
             "skill_tool": SkillTool(),
@@ -349,7 +355,9 @@ class QueryEngine:
             "post_sampling_history": self.post_sampling_history,
             "session_token_usage": self.session_token_usage,
             "thinking_config": self.default_thinking_config,
+            "thinking_config_explicit": self._thinking_config_explicit,
             "reasoning_effort": self.reasoning_effort,
+            "reasoning_profile": copy.deepcopy(self.reasoning_profile),
             "mode_thinking_overrides": self.mode_thinking_overrides,
             "model_provider": self.model_provider,
             "primary_model": self.primary_model,
@@ -400,6 +408,14 @@ class QueryEngine:
         Hot-swap the model provider, model name, API base URL, and/or API key at runtime.
         Returns a dict with the new effective configuration.
         """
+        next_provider = self._resolve_model_provider(provider or self.model_provider, model or self.primary_model)
+        next_profile = configured_profile(next_provider, model if model is not None else self.primary_model,
+            api_base_url if api_base_url is not None else self.api_base_url)
+        if next_provider != self.model_provider or model is not None and model != self.primary_model or next_profile != self.reasoning_profile:
+            self._strip_thinking_signatures_from_history()
+        self.reasoning_profile = next_profile
+        self.reasoning_effort = None  # Per-model controls must not leak from the previous model.
+        self._thinking_config_explicit = False
         if provider:
             self.model_provider = self._resolve_model_provider(provider, model or self.primary_model)
         if model is not None:
@@ -452,6 +468,9 @@ class QueryEngine:
         self.tool_context["fallback_model"] = self.fallback_model
         self.tool_context["api_base_url"] = self.api_base_url
         self.tool_context["local_tokenizer_path"] = self.local_tokenizer_path
+        self.tool_context["reasoning_effort"] = self.reasoning_effort
+        self.tool_context["reasoning_profile"] = copy.deepcopy(self.reasoning_profile)
+        self.tool_context["thinking_config_explicit"] = self._thinking_config_explicit
 
     def _resolve_model_provider(self, provider: str = None, model: str = None) -> str:
         resolved = str(
@@ -1140,14 +1159,14 @@ class QueryEngine:
     # --- Coordinator mode ---
 
     COORDINATOR_ALLOWED_TOOLS = {
-        "agent_tool", "send_message_tool", "team_create_tool",
+        "agent_tool", "spawn_agent", "send_message_tool", "team_create_tool",
         "team_delete_tool", "plan_tool", "todo_write_tool",
         "file_read_tool", "grep_tool", "glob_tool",
     }
 
     PLAN_MODE_ALLOWED_TOOLS = {
         "file_read_tool", "grep_tool", "glob_tool",
-        "plan_tool", "todo_write_tool", "agent_tool",
+        "plan_tool", "todo_write_tool", "agent_tool", "spawn_agent",
         "web_search_tool", "web_fetch_tool",
         "lsp_tool", "tool_search_tool",
     }
@@ -1265,6 +1284,27 @@ class QueryEngine:
             }
         return None
 
+    def set_reasoning_options(self, *, thinking=None, effort=None):
+        if self.has_active_turn() or any(not task.done() for task in self.tool_context["subagent_tasks"].tasks.values()):
+            raise SessionBusyError("请先停止或等待任务，再切换推理设置")
+        if self.reasoning_profile is None:
+            if thinking is not None:
+                raise ValueError("请先在模型设置中声明 Thinking 参数格式，不能根据模型别名猜测")
+            if effort not in (None, "default") and effort not in EFFORTS:
+                raise ValueError("Unsupported reasoning effort")
+            if effort not in (None, "default") and self.model_provider != "openai":
+                raise ValueError("请先声明 Anthropic 模型的 effort 能力")
+            self.reasoning_effort = None if effort in (None, "default") else effort
+        else:
+            profile = {**self.reasoning_profile, **({"thinking": thinking} if thinking is not None else {}),
+                **({"effort": effort} if effort is not None else {})}
+            profile = normalize_profile(profile, self.model_provider)
+            if profile != self.reasoning_profile:
+                self._strip_thinking_signatures_from_history()
+            self.reasoning_profile, self.reasoning_effort = profile, None
+        self._sync_model_runtime_context()
+        return copy.deepcopy(self.reasoning_profile or {"effort": self.reasoning_effort or "default"})
+
     def _thinking_config_to_text(self, config) -> str:
         normalized = self._normalize_thinking_config(config)
         if not normalized:
@@ -1283,6 +1323,8 @@ class QueryEngine:
         if normalized is None:
             raise ValueError("Unsupported thinking config.")
         self.default_thinking_config = normalized
+        self._thinking_config_explicit = True
+        self.tool_context["thinking_config_explicit"] = True
         self.tool_context["thinking_config"] = self.default_thinking_config
         return copy.deepcopy(self.default_thinking_config)
 
@@ -1296,6 +1338,8 @@ class QueryEngine:
         else:
             self.mode_thinking_overrides[mode_name] = normalized
         self.tool_context["mode_thinking_overrides"] = self.mode_thinking_overrides
+        self._thinking_config_explicit = True
+        self.tool_context["thinking_config_explicit"] = True
         return copy.deepcopy(self.mode_thinking_overrides)
 
     def get_thinking_config(self, mode: str = None) -> dict:
@@ -2618,6 +2662,18 @@ class QueryEngine:
             self.security_classifier.load_state(metadata.get("security_classifier", {}))
             self.vcr_manager.load_state(metadata.get("vcr", {}))
             thinking_state = metadata.get("thinking", {})
+            self._thinking_config_explicit = thinking_state.get("explicit", bool(thinking_state))
+            self.tool_context["thinking_config_explicit"] = self._thinking_config_explicit
+            saved_profile = thinking_state.get("profile")
+            saved_runtime = metadata.get("model_runtime", {})
+            if saved_profile and self.reasoning_profile and saved_runtime.get("primary_model") == self.primary_model and saved_runtime.get("provider") == self.model_provider and saved_runtime.get("api_base_url", "") == self.api_base_url:
+                # Keep saved choices only under the current connection's declared capabilities.
+                candidate = {**self.reasoning_profile, **{key: saved_profile[key] for key in ("thinking", "effort") if key in saved_profile}}
+                try:
+                    self.reasoning_profile = normalize_profile(candidate, self.model_provider)
+                except ValueError:
+                    pass
+                self.tool_context["reasoning_profile"] = copy.deepcopy(self.reasoning_profile)
             self.reasoning_effort = thinking_state.get("reasoning_effort")
             self.tool_context["reasoning_effort"] = self.reasoning_effort
             self.default_thinking_config = self._normalize_thinking_config(
@@ -2691,6 +2747,8 @@ class QueryEngine:
                 "default": self.default_thinking_config,
                 "mode_overrides": self.mode_thinking_overrides,
                 "reasoning_effort": self.reasoning_effort,
+                "profile": copy.deepcopy(self.reasoning_profile),
+                "explicit": self._thinking_config_explicit,
             },
             "subagents": self.subagent_registry,
             "delegation": self.tool_context.get("delegation", {}),
@@ -3338,7 +3396,11 @@ class QueryEngine:
                 }
                 if tools_schema:
                     create_kwargs["tools"] = tools_schema
-                if self.reasoning_effort:
+                profile = self.reasoning_profile if model_name == self.primary_model else configured_profile(self.model_provider, model_name, self.api_base_url)
+                if profile is not None:
+                    create_kwargs.update(request_options(profile, self.model_provider,
+                        effort_override=self.reasoning_effort if model_name == self.primary_model else None, max_tokens=max_tokens))
+                elif self.reasoning_effort and model_name == self.primary_model:
                     create_kwargs["reasoning_effort"] = self.reasoning_effort
 
                 text_fragments = []
@@ -3573,7 +3635,11 @@ class QueryEngine:
                 "tools": tools_schema,
                 "max_tokens": max_tokens,
             }
-            if thinking_config is not None and self._is_native_anthropic():
+            profile = self.reasoning_profile if model_name == self.primary_model else configured_profile(self.model_provider, model_name, self.api_base_url)
+            if profile is not None:
+                stream_kwargs.update(request_options(profile, self.model_provider,
+                    effort_override=self.reasoning_effort if model_name == self.primary_model else None, max_tokens=max_tokens))
+            elif thinking_config is not None and self._thinking_config_explicit and self._is_native_anthropic():
                 stream_kwargs["thinking"] = thinking_config
 
             try:
@@ -3995,6 +4061,8 @@ class QueryEngine:
                     tools=tools_schema,
                     max_tokens=min(loop_state["max_tokens"], remaining_output_budget),
                     thinking=effective_thinking_config,
+                    reasoning={"profile": self.reasoning_profile if loop_state["active_model"] == self.primary_model else configured_profile(self.model_provider, loop_state["active_model"], self.api_base_url),
+                        "effort": self.reasoning_effort if loop_state["active_model"] == self.primary_model else None},
                 )
                 streaming_fallback = False
                 replayed_response = self.vcr_manager.try_replay(vcr_request_payload)

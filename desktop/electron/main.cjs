@@ -49,6 +49,7 @@ const engineMethods = new Set([
   "agents.capacity",
   "config.save",
   "config.select",
+  "config.reasoning",
   "config.delete",
   "mcp.list",
   "mcp.market",
@@ -368,7 +369,9 @@ async function invoke(method, params) {
     if ([...sessions.values()].some(running)) throw new Error("请先停止运行中的任务，再删除 API 连接");
     return globalConfig().request(method, params);
   }
-  if (["config.save", "config.select"].includes(method) && !params.session)
+  if (method === "config.reasoning" && [...sessions.values()].some(running))
+    throw new Error("请先停止运行中的任务，再更改模型推理设置");
+  if (["config.save", "config.select", "config.reasoning"].includes(method) && !params.session)
     return globalConfig().request(method, params);
   if (method === "project.open") {
     let project = params.path;
@@ -642,7 +645,7 @@ app.whenReady().then(() => {
     if (typeof method !== "string" || !params || typeof params !== "object")
       throw new Error("Invalid request");
     if (quitting) throw new Error("正在保存并退出，请稍候");
-    if (/^(app\.initialize|layout\.save|attachments\.import|execution\.set|collaboration\.set|permissions\.set|config\.(save|select|delete)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
+    if (/^(app\.initialize|layout\.save|attachments\.import|execution\.set|collaboration\.set|permissions\.set|config\.(save|select|delete|reasoning)|workspace\.save|archive\.restore|project\.(open|update|close|remove|delete)|session\.(open|new|select|update|fork|move|delete|close|activate)|catalog\.)/.test(method)) {
       const operation = workspaceQueue.then(() => invoke(method, params));
       workspaceQueue = operation.catch(() => {});
       return operation;

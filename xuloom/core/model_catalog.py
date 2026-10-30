@@ -56,7 +56,7 @@ def public_connection(item):
     return {"connectionId": item["id"], "connectionName": item.get("name", item["id"]), "provider": item["provider"],
             "model": item.get("model", ""), "models": item.get("models", []), "baseUrl": item.get("base_url", ""),
             "hasKey": bool(item.get("api_key")), "networkMode": item.get("network_mode", "direct"),
-            "modelInputs": item.get("model_inputs", {})}
+            "modelInputs": item.get("model_inputs", {}), "modelReasoning": item.get("model_reasoning", {})}
 
 
 def public_config(cfg):
@@ -127,13 +127,35 @@ def save_connection(cfg, params):
             raise ValueError("modelInputs 必须按模型 ID 配置 text/image/document 数组且包含 text；原生 document 目前仅支持 Anthropic 协议")
         inputs = {name: list(dict.fromkeys(kinds)) for name, kinds in values.items()}
     inputs = {name: kinds for name, kinds in inputs.items() if name in names}
+    from xuloom.core.reasoning import normalize_profile
+    profiles = params.get("modelReasoning", previous.get("model_reasoning", {}))
+    if not isinstance(profiles, dict) or any(name not in names for name in profiles):
+        raise ValueError("推理能力必须按此连接已配置的模型 ID 保存")
+    profiles = {name: normalize_profile(value, provider) for name, value in profiles.items()}
     item = {"id": identity, "name": str(params.get("connectionName") or previous.get("name") or "我的 API").strip()[:100],
             "provider": provider, "model": model, "models": names, "base_url": base,
-            "api_key": key, "network_mode": mode, "model_inputs": inputs}
+            "api_key": key, "network_mode": mode, "model_inputs": inputs, "model_reasoning": profiles}
     items = [item if old["id"] == identity else old for old in items]
     if not previous:
         items.append(item)
     return project_active(cfg, item, items)
+
+
+def select_reasoning(cfg, params):
+    from xuloom.core.reasoning import normalize_profile
+    active = active_connection(cfg)
+    if active["id"] != params.get("connectionId") or active.get("model") != params.get("model"):
+        raise ValueError("当前 API 或模型已变化，请刷新后重试")
+    profiles = dict(active.get("model_reasoning", {}))
+    previous = profiles.get(active["model"])
+    if previous is None:
+        raise ValueError("请先在模型设置中声明此模型的推理参数格式与能力")
+    if params.keys() - {"connectionId", "model", "thinking", "effort", "session"}:
+        raise ValueError("未知的推理设置")
+    updated = {**previous, **{key: params[key] for key in ("thinking", "effort") if key in params}}
+    profiles[active["model"]] = normalize_profile(updated, active["provider"])
+    item = {**active, "model_reasoning": profiles}
+    return project_active(dict(cfg), item, [item if old["id"] == item["id"] else old for old in connections(cfg)])
 
 
 def delete_connection(cfg, identity):

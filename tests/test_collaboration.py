@@ -257,8 +257,7 @@ class ConversationPolicyTests(unittest.IsolatedAsyncioTestCase):
                 gate.set()
 
         self.fixture([
-            ("agent_tool", json.dumps({"prompt": "Independently check the given evidence.",
-                "count": 2, "run_in_background": True, "response_format": "json"})),
+            ("spawn_agent", json.dumps({"prompt": "Independently check the given evidence.", "count": 2})),
             ("record_tool", '{"value":"PARENT_EVIDENCE"}'),
             "PROVISIONAL",
             "SYNTHESIS_WITH_ALL_EVIDENCE",
@@ -273,6 +272,35 @@ class ConversationPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(row["status"] == "completed" for row in self.engine.subagent_registry))
         self.assertIn("WORKER_EVIDENCE", json.dumps(self.requests[-1]["messages"]))
         self.assertEqual(len(self.requests), 4, "No hidden planning call or worker relaunch")
+
+    async def test_simple_spawn_surface_still_obeys_solo_and_has_no_recursive_children(self):
+        schema = self.engine.available_tools["spawn_agent"].get_tool_definition()["input_schema"]
+        self.assertEqual(schema["required"], ["prompt"])
+        self.assertNotIn("action", schema["properties"])
+        self.assertNotIn("run_in_background", schema["properties"])
+        self.engine.set_collaboration_mode("solo")
+        with self.assertRaisesRegex(ValueError, "Solo"):
+            await self.engine.available_tools["spawn_agent"].execute(prompt="must not start")
+        self.assertEqual(self.engine.subagent_registry, [])
+
+    async def test_simple_spawn_cannot_bypass_old_or_new_permission_rules(self):
+        manager = self.engine.permission_manager
+        tool = self.engine.available_tools["spawn_agent"]
+        manager.approval_policy.set_mode("full")
+        for name in ("agent_tool", "spawn_agent"):
+            manager.always_deny_tools.add(name)
+            decision = await manager.authorize(tool, {"prompt": "denied"})
+            self.assertEqual(decision.behavior, "deny")
+            manager.always_deny_tools.clear()
+        prompted = []
+        async def approve(request):
+            prompted.append(request.tool_name)
+            return "allow"
+        manager.set_prompt_handler(approve)
+        manager.always_ask_tools.add("agent_tool")
+        self.assertEqual((await manager.authorize(tool, {"prompt": "ask"})).behavior, "allow")
+        self.assertEqual(prompted, ["spawn_agent"])
+        self.assertEqual(self.engine.subagent_registry, [])
 
     async def test_proactive_policy_and_nonblocking_guidance_reach_real_model_request(self):
         self.engine.set_collaboration_mode("ultra")

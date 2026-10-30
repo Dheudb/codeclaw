@@ -129,7 +129,42 @@ async function main() {
     await shot("workspace-tree.png"); await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "变更", exact: true }).click();
     assert.equal(await page.locator(".inspector .changed-file-row").count(), 4); await page.locator(".inspector").getByRole("button", { name: "打开文件 note.md", exact: true }).click();
-    await dialog().getByRole("tab", { name: "预览", exact: true }).click(); await dialog().getByText("DISK_REFRESH_PROOF", { exact: true }).waitFor(); await shot("file-preview.png"); await page.keyboard.press("Escape");
+    await dialog().getByRole("tab", { name: "预览", exact: true }).click(); await dialog().getByText("DISK_REFRESH_PROOF", { exact: true }).waitFor();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(2100, 1000));
+    async function dragTo(control, target) {
+      const width = Number(await control.getAttribute("aria-valuenow")), box = await control.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + width - target, box.y + box.height / 2, { steps: 12 }); await page.mouse.up();
+      await page.waitForFunction(({ label, value }) => Number(document.querySelector(`[aria-label="${label}"]`)?.getAttribute("aria-valuenow")) === value,
+        { label: await control.getAttribute("aria-label"), value: target });
+    }
+    await dragTo(separator, 1100);
+    assert(Math.abs((await page.locator(".inspector-shell").boundingBox()).width - 1100) < 2, "Outer drag must resize beyond the old 760 cap");
+    const treeSeparator = dialog().getByRole("separator", { name: "调整文件目录栏宽度", exact: true });
+    await dragTo(treeSeparator, 300);
+    const savedLayout = () => JSON.parse(fs.readFileSync(path.join(data, "workbench.json"), "utf8")).layout;
+    await page.waitForFunction(() => !document.body.classList.contains("panel-resizing"));
+    assert.equal(savedLayout().inspectorWidth, 1100); assert.equal(savedLayout().reviewTreeWidth, 300);
+    const longLine = "READABLE_LONG_LINE_" + "可读内容-with-space ".repeat(160) + "TAIL_VISIBLE";
+    fs.writeFileSync(path.join(project, "note.md"), longLine + "\n" + Array.from({ length: 200 }, (_, index) => "line " + index).join("\n"));
+    await dialog().getByRole("button", { name: "刷新文件内容", exact: true }).click();
+    await dialog().getByRole("tab", { name: "源码", exact: true }).click();
+    await dialog().locator(".source-line code").first().filter({ hasText: "TAIL_VISIBLE" }).waitFor();
+    assert.equal(await dialog().getByRole("button", { name: "自动换行", exact: true }).getAttribute("aria-pressed"), "true");
+    const body = dialog().locator(".file-preview-body");
+    assert(await body.evaluate(element => element.scrollWidth <= element.clientWidth + 2), "Wrapped long lines must stay readable without clipping");
+    await shot("file-long-lines.png");
+    await body.hover(); await page.mouse.wheel(0, 600); await page.waitForFunction(() => document.querySelector(".file-preview-body").scrollTop > 100);
+    await dialog().getByRole("button", { name: "自动换行", exact: true }).click();
+    assert(await body.evaluate(element => element.scrollWidth > element.clientWidth + 500), "Unwrapped source must retain horizontal scrolling");
+    await body.evaluate(element => { element.scrollLeft = element.scrollWidth; });
+    assert(await body.evaluate(element => element.scrollLeft > 500));
+    await treeSeparator.focus(); await page.keyboard.press("ArrowRight"); assert.equal(await treeSeparator.getAttribute("aria-valuenow"), "276");
+    await dialog().getByRole("button", { name: "自动换行", exact: true }).click();
+    fs.writeFileSync(path.join(project, "note.md"), "# Latest\nDISK_REFRESH_PROOF\n");
+    await dialog().getByRole("button", { name: "刷新文件内容", exact: true }).click();
+    await dialog().getByRole("tab", { name: "预览", exact: true }).click();
+    await dialog().getByText("DISK_REFRESH_PROOF", { exact: true }).waitFor(); await shot("file-preview.png"); await page.keyboard.press("Escape");
     await send("FILE_CHILD"); await finished("FILE_CHILD");
     assert(fs.existsSync(path.join(project, "child.txt"))); assert.equal(await page.locator(".conversation .file-changes").last().getByRole("button", { name: "打开文件 child.txt", exact: true }).count(), 1);
     await page.getByLabel("访问权限", { exact: true }).selectOption("ask"); await page.waitForFunction(() => !document.querySelector(".permission-picker").disabled);

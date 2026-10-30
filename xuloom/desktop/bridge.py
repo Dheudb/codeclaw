@@ -11,7 +11,7 @@ from pathlib import Path
 from xuloom.branding import configuration_file
 
 from xuloom.core.config import load_config, load_config_into_env, update_config, normalize_api_base_url
-from xuloom.core.model_catalog import public_config, active_connection, save_connection, delete_connection, select_model, discover_models, apply_connection_env, apply_catalog_env
+from xuloom.core.model_catalog import public_config, active_connection, save_connection, delete_connection, select_model, select_reasoning, discover_models, apply_connection_env, apply_catalog_env
 from xuloom.security.permissions import ApprovalPolicy
 from xuloom.desktop.activity import restore_activity
 from xuloom.desktop.turns import TurnRecorder, conversation_history
@@ -145,7 +145,8 @@ class DesktopBridge:
         config = public_config(cfg)
         provider = config["provider"]
         key = active_connection(cfg).get("api_key", "")
-        signature = (provider, config["model"], config["baseUrl"], key, config["networkMode"])
+        signature = (provider, config["model"], config["baseUrl"], key, config["networkMode"],
+            json.dumps(config.get("modelReasoning", {}).get(config["model"]), sort_keys=True))
         if not force and signature == self.model_signature:
             return
         if not config["connections"]:
@@ -686,12 +687,14 @@ class DesktopBridge:
         if method in {"agents.list", "agents.capacity"}:
             await self.ensure_engine()
             return json.loads(await self.engine.available_tools["agent_tool"].execute(action=method.split(".")[1]))
-        if method in {"config.save", "config.select", "config.delete"}:
+        if method in {"config.save", "config.select", "config.delete", "config.reasoning"}:
             self.require_idle()
             if method == "config.delete":
                 if params.get("confirm") is not True:
                     raise ValueError("请确认删除 API 连接")
                 change = lambda cfg: delete_connection(cfg, params.get("connectionId"))
+            elif method == "config.reasoning":
+                change = lambda cfg: select_reasoning(cfg, params)
             else:
                 change = (lambda cfg: save_connection(cfg, params)) if method == "config.save" else (lambda cfg: select_model(cfg, params.get("connectionId"), params.get("model")))
             cfg = await asyncio.to_thread(update_config, change)

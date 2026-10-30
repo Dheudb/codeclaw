@@ -66,8 +66,8 @@ class VCRManager:
     def _cassette_path(self, request_hash: str) -> str:
         return os.path.abspath(os.path.join(self.cassette_dir, f"{request_hash}.json"))
 
-    def build_request_payload(self, *, model: str, system: str, messages: list, tools: list, max_tokens: int, thinking: dict = None, provider: str = "anthropic") -> dict:
-        return {
+    def build_request_payload(self, *, model: str, system: str, messages: list, tools: list, max_tokens: int, thinking: dict = None, provider: str = "anthropic", reasoning: dict = None) -> dict:
+        result = {
             "provider": provider,
             "model": model,
             "system": system,
@@ -76,6 +76,9 @@ class VCRManager:
             "max_tokens": int(max_tokens),
             "thinking": copy.deepcopy(thinking),
         }
+        if reasoning is not None:
+            result["reasoning"] = copy.deepcopy(reasoning)
+        return result
 
     def try_replay(self, request_payload: dict):
         if self.mode != "replay":

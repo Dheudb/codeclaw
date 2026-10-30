@@ -4,7 +4,7 @@ import inspect
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, Optional
 
 from xuloom.features.plans import is_session_plan_file
@@ -167,7 +167,14 @@ class PermissionManager:
         forced_prompt_reasons = (["An interrupted operation has uncertain effects. Inspect existing state before approving a new mutation."]
             if (context or {}).get("recovery_uncertain") and not is_read_only else [])
 
-        rule_decision = self._evaluate_rule_layer(request)
+        rule_decisions = [self._evaluate_rule_layer(request)]
+        # A smaller wire surface must not bypass existing capability rules.
+        # Aliases come from the trusted tool class, never from model input.
+        for alias, defaults in getattr(tool, "permission_aliases", {}).items():
+            alias_request = replace(request, tool_name=alias, input_payload={**defaults, **request.input_payload})
+            rule_decisions.append(self._evaluate_rule_layer(alias_request))
+        rule_decision = min((decision for decision in rule_decisions if decision),
+            key=lambda decision: {"deny": 0, "ask": 1, "allow": 2}[decision.behavior], default=None)
         if rule_decision and rule_decision.behavior != "allow":
             finalized_rule_decision = self._finalize_permission_decision(tool_name, rule_decision, request)
             if finalized_rule_decision.behavior == "ask":
