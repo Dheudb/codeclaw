@@ -16,7 +16,7 @@ def profile(adapter="deepseek", **values):
 
 
 class ReasoningTests(unittest.TestCase):
-    def test_adapters_emit_only_their_native_parameters_and_default_omits_overrides(self):
+    def test_adapters_emit_only_native_parameters_and_legacy_switch_defaults_mean_enabled(self):
         for adapter, expected in [
             ("openai", {"reasoning_effort": "high"}),
             ("deepseek", {"reasoning_effort": "high", "extra_body": {"thinking": {"type": "enabled"}}}),
@@ -27,7 +27,9 @@ class ReasoningTests(unittest.TestCase):
             provider = "anthropic" if adapter == "anthropic" else "openai"
             p = profile(adapter, efforts=["low", "high"], effort="high", thinking="default" if adapter == "openai" else "enabled")
             self.assertEqual(request_options(p, provider), expected)
-            self.assertEqual(request_options(profile(adapter), provider), {})
+            enabled_options = {key: value for key, value in expected.items() if key not in {"reasoning_effort", "output_config"}}
+            self.assertEqual(request_options(profile(adapter), provider), enabled_options)
+            self.assertEqual(profile(adapter)["thinking"], "default" if adapter == "openai" else "enabled")
         self.assertEqual(request_options(profile("anthropic-budget", thinking="enabled"), "anthropic", max_tokens=4096),
             {"thinking": {"type": "enabled", "budget_tokens": 2048}})
 
@@ -53,7 +55,7 @@ class ReasoningTests(unittest.TestCase):
         with patch("xuloom.core.config.load_config", return_value=cfg):
             self.assertEqual(configured_profile("openai", "shared", "https://fixture.invalid/v1")["adapter"], "qwen")
         cfg = select_model(cfg, "one", "shared")
-        self.assertEqual(public_config(cfg)["modelReasoning"]["shared"]["thinking"], "default")
+        self.assertEqual(public_config(cfg)["modelReasoning"]["shared"]["thinking"], "enabled")
         with self.assertRaises(ValueError): select_reasoning(cfg, {"connectionId": "two", "model": "shared", "thinking": "enabled"})
         self.assertNotIn("api_key", json.dumps(public_config(cfg)))
 

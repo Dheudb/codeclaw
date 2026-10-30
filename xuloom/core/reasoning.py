@@ -26,6 +26,8 @@ def normalize_profile(value, provider):
     thinking = value.get("thinking", "default")
     if not isinstance(thinking, str) or thinking not in {"default", "enabled", "disabled"} or adapter == "openai" and thinking != "default":
         raise ValueError("此模型不支持所选 Thinking 设置")
+    if thinking == "default" and adapter != "openai":
+        thinking = "enabled"  # Legacy preference; the UI now has an explicit on/off switch.
     if thinking == "disabled" and not toggle:
         raise ValueError("此模型未声明支持关闭 Thinking")
     effort = value.get("effort", "default")

@@ -38,6 +38,21 @@ async function launch() {
   await page.waitForFunction(() => document.querySelector(".new-task")?.disabled === false);
 }
 const picker = () => page.getByLabel("协作档位", { exact: true });
+async function capture(name) {
+  const png = await app.evaluate(async ({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows()[0].webContents;
+    await contents.capturePage(undefined, { stayHidden: true, stayAwake: true });
+    return (await contents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString("base64");
+  });
+  fs.mkdirSync(path.join(root, "test-results"), { recursive: true });
+  fs.writeFileSync(path.join(root, "test-results", name), Buffer.from(png, "base64"));
+}
+async function controlsFit() {
+  assert.equal(await page.locator(".composer-toolbar").evaluate(el => el.scrollWidth > el.clientWidth), false);
+  assert((await page.getByLabel("选择模型", { exact: true }).boundingBox()).width >= 140, "The model name must not be squeezed away");
+  const effort = page.getByLabel("推理强度", { exact: true });
+  if (await effort.count()) assert((await effort.boundingBox()).width <= 110, "Effort must not inherit a form's full width");
+}
 async function choose(mode) {
   await picker().selectOption(mode);
   await page.waitForFunction((mode) => { const el = document.querySelector(".collaboration-picker"); return el.value === mode && !el.disabled; }, mode);
@@ -71,10 +86,22 @@ async function choose(mode) {
         canDisable: true, thinking: "default", effort: "high", budgetTokens: 2048 } },
     }] });
     await launch();
+    assert.deepEqual(await page.getByLabel("Thinking 模式", { exact: true }).locator("option").allTextContents(), ["开启思考", "关闭思考"]);
+    assert.equal(await page.getByLabel("Thinking 模式", { exact: true }).inputValue(), "enabled", "Legacy default thinking must show an explicit enabled state");
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    const efforts = page.getByRole("group", { name: "模型支持的推理强度", exact: true });
+    await efforts.scrollIntoViewIfNeeded();
+    const gap = await efforts.evaluate(element => element.querySelector("label").getBoundingClientRect().top - element.querySelector("span").getBoundingClientRect().bottom);
+    assert(gap >= 0 && gap <= 12, "Checkboxes must sit directly below their label, without a blank band");
+    assert(await efforts.locator("label").first().evaluate(element => ["inline-flex", "flex"].includes(getComputedStyle(element).display)));
+    await capture("reasoning-settings-compact.png");
+    await page.keyboard.press("Escape");
     await page.getByLabel("Thinking 模式", { exact: true }).selectOption("disabled");
     await page.waitForFunction(() => document.querySelector(".thinking-picker")?.value === "disabled" && !document.querySelector(".thinking-picker").disabled);
     assert(await page.getByLabel("推理强度", { exact: true }).isDisabled());
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 850));
+    await controlsFit();
+    await capture("reasoning-toolbar-compact.png");
     assert.equal(await page.locator(".composer-toolbar").evaluate(el => el.scrollWidth > el.clientWidth), false, "Thinking controls must fit a narrow composer");
     const firstRequest = nextRequest();
     await page.getByRole("textbox", { name: "任务输入" }).fill("Hold for stop test");
@@ -124,6 +151,13 @@ async function choose(mode) {
     const saved = JSON.parse(fs.readFileSync(path.join(config, "config.json"), "utf8"));
     assert.equal(saved.model_connections[0].model_reasoning["unknown-fixture"].adapter, "qwen-local");
     assert.equal(saved.model_connections[0].model_reasoning["collaboration-fixture"].effort, "max");
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    await page.getByLabel("推理参数格式", { exact: true }).selectOption("openai");
+    await page.getByRole("button", { name: "保存配置", exact: true }).click();
+    await page.getByRole("dialog", { name: "工作台设置", exact: true }).waitFor({ state: "hidden" });
+    assert.equal(await page.getByLabel("Thinking 模式", { exact: true }).count(), 0);
+    await controlsFit();
+    await capture("reasoning-effort-only.png");
     await choose("solo");
     assert.deepEqual(errors, []);
     console.log("Collaboration/reasoning E2E passed: mode persistence, native spawn schema, model-specific settings, SDK wire parameters, unknown-model reset, narrow layout and stop; hidden local fixture only");

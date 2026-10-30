@@ -789,7 +789,7 @@ export default function App() {
                   <option value="solo">Solo · 独立</option><option value="auto">Auto · 自动</option><option value="ultra">Ultra · 增强</option>
                 </select>
                 {globalModel?.connections?.some((connection) => connection.models.length) ? <select
-                  className="model-picker" aria-label="选择模型" title="切换 API 与模型"
+                  className="model-picker" aria-label="选择模型" title={`${globalModel.connectionName || "API"} · ${globalModel.model}`}
                   disabled={opening || modelChanging || active?.busy || !!runningWorkers || !!runningCommands}
                   value={JSON.stringify([globalModel.connectionId, globalModel.model])}
                   onChange={(event) => void selectModel(event.target.value)}>

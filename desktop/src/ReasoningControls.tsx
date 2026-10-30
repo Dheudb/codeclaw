@@ -13,10 +13,10 @@ export function ReasoningControls({ profile, disabled, change }: {
 }) {
   if (!profile) return null;
   return <>
-    {profile.adapter !== "openai" && <select className="thinking-picker" aria-label="Thinking 模式" title="独立于协作档位；默认不覆盖接口设置"
-      disabled={disabled} value={profile.thinking} onChange={event => change({ thinking: event.target.value as ReasoningProfile["thinking"] })}>
-      <option value="default">默认思考</option><option value="enabled">开启思考</option>
-      {profile.canDisable && <option value="disabled">关闭思考</option>}
+    {profile.adapter !== "openai" && <select className="thinking-picker" aria-label="Thinking 模式" title={profile.canDisable ? "开启或关闭思考；独立于协作档位" : "此模型不支持关闭思考"}
+      disabled={disabled} value={profile.thinking === "disabled" ? "disabled" : "enabled"} onChange={event => change({ thinking: event.target.value as ReasoningProfile["thinking"] })}>
+      <option value="enabled">开启思考</option>
+      <option value="disabled" disabled={!profile.canDisable}>关闭思考</option>
     </select>}
     {!!profile.efforts.length && <select className="reasoning-picker" aria-label="推理强度" title="仅显示当前模型声明支持的档位；关闭 Thinking 时不发送强度参数"
       disabled={disabled || profile.thinking === "disabled"} value={profile.effort} onChange={event => change({ effort: event.target.value })}>
@@ -30,7 +30,7 @@ export function ReasoningSettings({ provider, profile, change }: {
 }) {
   function choose(adapter: ReasoningProfile["adapter"]) {
     change({ adapter, efforts: adapter === "openai" || adapter === "anthropic" ? ["low", "medium", "high"] : adapter === "deepseek" ? ["low", "high", "max"] : [],
-      canDisable: !["openai", "anthropic"].includes(adapter), thinking: "default", effort: "default", budgetTokens: 2048 });
+      canDisable: !["openai", "anthropic"].includes(adapter), thinking: adapter === "openai" ? "default" : "enabled", effort: "default", budgetTokens: 2048 });
   }
   return <fieldset className="reasoning-settings"><legend>当前模型的思考能力</legend>
     <label>参数格式<select aria-label="推理参数格式" value={profile?.adapter || "unknown"} onChange={event => event.target.value === "unknown" ? change() : choose(event.target.value as ReasoningProfile["adapter"])}>
@@ -39,11 +39,12 @@ export function ReasoningSettings({ provider, profile, change }: {
     </select></label>
     {profile && <>
       {profile.adapter !== "openai" && <label className="reasoning-toggle"><input type="checkbox" aria-label="模型支持关闭 Thinking" checked={profile.canDisable}
-        onChange={event => change({ ...profile, canDisable: event.target.checked, thinking: !event.target.checked && profile.thinking === "disabled" ? "default" : profile.thinking })} />模型支持关闭 Thinking</label>}
+        onChange={event => change({ ...profile, canDisable: event.target.checked, thinking: !event.target.checked && profile.thinking === "disabled" ? "enabled" : profile.thinking })} />模型支持关闭 Thinking</label>}
       {profile.adapter !== "anthropic-budget" && <div role="group" aria-label="模型支持的推理强度" className="reasoning-efforts">
         <span>接口支持的强度</span>
-        {[...(profile.adapter === "openai" ? ["none"] : []), "minimal", "low", "medium", "high", "xhigh", "max"].map(value => <label key={value}><input type="checkbox" checked={profile.efforts.includes(value)}
+        <div className="reasoning-effort-options">{[...(profile.adapter === "openai" ? ["none"] : []), "minimal", "low", "medium", "high", "xhigh", "max"].map(value => <label key={value}><input type="checkbox" checked={profile.efforts.includes(value)}
           onChange={event => { const efforts = event.target.checked ? [...profile.efforts, value] : profile.efforts.filter(item => item !== value); change({ ...profile, efforts, effort: efforts.includes(profile.effort) ? profile.effort : "default" }); }} />{labels[value]}</label>)}
+        </div>
       </div>}
       {profile.adapter === "anthropic-budget" && <label>Thinking token 预算<input type="number" aria-label="Thinking token 预算" min={1024} max={1000000} value={profile.budgetTokens}
         onChange={event => change({ ...profile, budgetTokens: Number(event.target.value) })} /></label>}
