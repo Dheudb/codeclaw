@@ -135,4 +135,4 @@ class DomainAcceptanceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(Path(self.engine.session_manager.get_subagent_transcript_path(identity)).is_file())
         with patch.object(QueryEngine, "run", run):
             await self.evaluate("multiagent", "Start three parallel greeting workers and summarize the actual results",
-                [self.call("agent_tool", prompt="Hello", count=3, request_id="acceptance-workers"), "THREE_ACTUAL_RESULTS"], check)
+                [self.call("agent_tool", prompt="Hello", count=3, request_id="acceptance-workers", run_in_background=False), "THREE_ACTUAL_RESULTS"], check)

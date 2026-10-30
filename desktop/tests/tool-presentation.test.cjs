@@ -14,6 +14,8 @@ test("tool transcript uses semantic labels without hiding failures", async () =>
   assert.equal(tool("file_read_tool", { file_path: "notes.md" }).kind, "file");
   assert.equal(tool("web_fetch_tool").kind, "web");
   assert.equal(tool("spawn_agent").kind, "agent");
+  assert.equal(tool("agent_tool", { action: "spawn" }, "running").title, "启动子代理");
+  assert.equal(tool("agent_tool", { action: "wait" }, "running").title, "等待子代理");
   assert.equal(tool("skill_tool").kind, "skill");
   assert.equal(tool("unknown").brief, "unknown");
 });

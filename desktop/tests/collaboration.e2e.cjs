@@ -131,6 +131,13 @@ async function choose(mode) {
     assert(!JSON.stringify(requests[0].messages).includes("run_in_background=false when the current answer requires"));
     assert(requests[0].tools.some((tool) => tool.function.name === "agent_tool" && tool.function.description.includes("bounded independent assignment")));
     assert(requests[0].tools.some((tool) => tool.function.name === "spawn_agent" && !tool.function.parameters.properties.action));
+    for (const name of ["agent_tool", "spawn_agent"]) {
+      const schema = requests[0].tools.find(tool => tool.function.name === name).function.parameters;
+      const roles = schema.properties.subagent_type.anyOf.find(option => option.type === "string").enum;
+      for (const role of ["explore", "general-purpose", "plan", "verification", "software-engineer"]) assert(roles.includes(role));
+      assert(!roles.includes("research"));
+      if (name === "agent_tool") assert.equal(schema.properties.run_in_background.default, true);
+    }
     assert.deepEqual(requests[0].thinking, { type: "disabled" });
     assert.equal(requests[0].reasoning_effort, undefined, "Disabled thinking must omit conflicting effort");
     await page.getByLabel("Thinking 模式", { exact: true }).selectOption("enabled");

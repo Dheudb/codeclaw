@@ -27,6 +27,7 @@ class ProgrammaticAgentTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(first["ok"], first)
             identities = [row["agent_id"] for row in first["data"]["agents"]]
             self.assertEqual(len(identities), 2)
+            self.assertTrue(all(row["status"] == "completed" and not row["background"] for row in self.engine.subagent_registry))
             repeated = await self.engine.agents("spawn", **parameters)
             self.assertTrue(repeated["data"]["reused"])
             self.assertEqual([row["agent_id"] for row in repeated["data"]["agents"]], identities)

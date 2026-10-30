@@ -2122,6 +2122,9 @@ class QueryEngine:
         identity = "host-" + uuid.uuid4().hex
         captured = []
         inputs = {**parameters, "action": action, "response_format": "json"}
+        # Keep the versioned host API's blocking default; model calls launch in
+        # the background unless explicitly requested otherwise.
+        inputs.setdefault("run_in_background", False)
         try:
             self.require_writer()
             receipt = await self._execute_tool_wrapper({"id": identity, "name": "agent_tool", "input": inputs},

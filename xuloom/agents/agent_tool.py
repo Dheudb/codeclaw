@@ -4,7 +4,7 @@ import hashlib
 import json
 import time
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Literal
 from pydantic import BaseModel, Field
 from xuloom.tools.base import BaseAgenticTool
 from xuloom.agents.registry import AgentRegistry
@@ -31,7 +31,7 @@ ALL_AGENT_DISALLOWED_TOOLS = frozenset({
 
 class AgentToolInput(BaseModel):
     model_config = {"extra": "forbid"}
-    action: str = Field("spawn", description="spawn, capacity, list, result, wait, send, followup, resume_queue, cancel, or close")
+    action: Literal["spawn", "capacity", "list", "result", "wait", "send", "followup", "resume_queue", "cancel", "close"] = "spawn"
     agent_ids: Optional[List[str]] = Field(None, description="Worker IDs to wait for; returns when any finishes or timeout expires")
     timeout_ms: int = Field(30000, ge=0, le=60000, description="Bounded wait timeout")
     response_format: str = Field("text", pattern="^(text|json)$", description="Use json for structured spawn receipts and wait results")
@@ -44,9 +44,7 @@ class AgentToolInput(BaseModel):
     subagent_type: Optional[str] = Field(
         None,
         description=(
-            "The type of specialized agent to use for this task. "
-            "Available types: explore, plan, verification, general-purpose. "
-            "If omitted, defaults to general-purpose behavior."
+            "Optional registered role from the supplied enum. Omit for general-purpose behavior."
         ),
     )
     model: Optional[str] = Field(
@@ -54,8 +52,8 @@ class AgentToolInput(BaseModel):
         description="Optional model override for this agent. If omitted, inherits from the parent.",
     )
     run_in_background: bool = Field(
-        False,
-        description="Use true to launch without blocking the parent or peer workers; collect results before final synthesis. False waits inside this call.",
+        True,
+        description="Defaults to true: launch without blocking the parent or peer workers; collect results before final synthesis. Explicit false waits inside this call.",
     )
     inherit_context: bool = Field(False, description="Include the parent conversation as reference only. Defaults to an independent task context.")
 
@@ -73,6 +71,22 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
     description = "Delegate a bounded independent assignment to a worker; launch, message, wait for, or continue agents using the selected collaboration policy."
     input_schema = AgentToolInput
     risk_level = "medium"
+
+    def _roles(self):
+        registry = self.context.get("agent_registry") or AgentRegistry(self.context.get("session_cwd"))
+        return registry.definitions()
+
+    def get_tool_definition(self):
+        definition = super().get_tool_definition()
+        field = definition["input_schema"]["properties"]["subagent_type"]
+        for option in field.get("anyOf", [field]):
+            if option.get("type") == "string":
+                option["enum"] = sorted(self._roles())
+        return definition
+
+    def validate_input(self, action="spawn", subagent_type=None, **kwargs):
+        if action == "spawn" and subagent_type is not None and subagent_type not in self._roles():
+            return "Unknown or invalid subagent: " + str(subagent_type) + ". Available roles: " + ", ".join(sorted(self._roles())) + "; omit subagent_type for general-purpose."
 
     def is_concurrency_safe_call(self, action="spawn", **kwargs):
         return action in {"spawn", "followup", "send", "capacity", "list", "result", "wait"}

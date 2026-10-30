@@ -238,6 +238,12 @@ class ConversationPolicyTests(unittest.IsolatedAsyncioTestCase):
     fixture = recovery.RecoveryTests.fixture
 
     async def test_native_background_delegation_works_alongside_parent_and_waits_before_final(self):
+        await self.background_delegation("spawn_agent")
+
+    async def test_agent_tool_omitted_background_runs_alongside_parent_and_waits_before_final(self):
+        await self.background_delegation("agent_tool")
+
+    async def background_delegation(self, launch_tool):
         self.engine.set_collaboration_mode("ultra")
         self.engine.permission_manager.approval_policy.set_mode("full")
         gate = asyncio.Event()
@@ -257,7 +263,7 @@ class ConversationPolicyTests(unittest.IsolatedAsyncioTestCase):
                 gate.set()
 
         self.fixture([
-            ("spawn_agent", json.dumps({"prompt": "Independently check the given evidence.", "count": 2})),
+            (launch_tool, json.dumps({"prompt": "Independently check the given evidence.", "count": 2})),
             ("record_tool", '{"value":"PARENT_EVIDENCE"}'),
             "PROVISIONAL",
             "SYNTHESIS_WITH_ALL_EVIDENCE",
@@ -270,8 +276,45 @@ class ConversationPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.text, "SYNTHESIS_WITH_ALL_EVIDENCE")
         self.assertEqual(len(self.engine.subagent_registry), 2)
         self.assertTrue(all(row["status"] == "completed" for row in self.engine.subagent_registry))
+        self.assertTrue(all(row["background"] for row in self.engine.subagent_registry))
         self.assertIn("WORKER_EVIDENCE", json.dumps(self.requests[-1]["messages"]))
         self.assertEqual(len(self.requests), 4, "No hidden planning call or worker relaunch")
+
+    async def test_registered_role_enum_and_invalid_role_repair_precede_approval_or_execution(self):
+        roles = self.root / ".xuloom/agents"
+        roles.mkdir(parents=True)
+        (roles / "science.md").write_text("---\nname: science\ndescription: Scientific evidence check\n---\nCheck the supplied evidence.", encoding="utf-8")
+        for name in ("agent_tool", "spawn_agent"):
+            schema = self.engine.available_tools[name].get_tool_definition()["input_schema"]
+            enum = next(option["enum"] for option in schema["properties"]["subagent_type"]["anyOf"] if option.get("type") == "string")
+            self.assertIn("science", enum)
+            self.assertIn("general-purpose", enum)
+            self.assertNotIn("research", enum)
+            with patch.object(self.engine.permission_manager, "authorize", side_effect=AssertionError("Invalid role must not request approval")):
+                receipt = await self.engine._execute_tool_wrapper({"id": name + "-invalid", "name": name, "input": {"prompt": "check", "subagent_type": "research"}}, lambda _: None)
+            self.assertTrue(receipt["is_error"])
+            self.assertTrue(receipt["_input_error"])
+            self.assertIn("executed: False", receipt["content"])
+            self.assertIn("Available roles:", receipt["content"])
+            self.assertNotIn("Execution may have begun", receipt["content"])
+            self.assertEqual(self.engine.subagent_registry, [])
+        self.assertTrue(self.engine.available_tools["agent_tool"].get_tool_definition()["input_schema"]["properties"]["run_in_background"]["default"])
+
+    async def test_explicit_foreground_still_waits(self):
+        self.engine.permission_manager.approval_policy.set_mode("full")
+        gate, entered = asyncio.Event(), asyncio.Event()
+        async def child_run(child, user_input, sys_print_callback):
+            entered.set()
+            await gate.wait()
+            return RunResult("DONE", "completed", True)
+        with patch.object(QueryEngine, "run", child_run):
+            task = asyncio.create_task(self.engine._execute_tool_wrapper({"id": "explicit-wait", "name": "agent_tool", "input": {"prompt": "check", "run_in_background": False, "response_format": "json"}}, lambda _: None))
+            await asyncio.wait_for(entered.wait(), 3)
+            self.assertFalse(task.done())
+            gate.set()
+            receipt = await asyncio.wait_for(task, 3)
+        self.assertFalse(receipt["is_error"])
+        self.assertFalse(self.engine.subagent_registry[0]["background"])
 
     async def test_simple_spawn_surface_still_obeys_solo_and_has_no_recursive_children(self):
         schema = self.engine.available_tools["spawn_agent"].get_tool_definition()["input_schema"]

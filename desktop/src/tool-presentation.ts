@@ -24,7 +24,7 @@ export function toolPresentation(tool: ToolActivity): { kind: ToolKind; title: s
   } else if (/fetch|browser/.test(name)) {
     kind = "web"; action = "读取网页"; brief = String(input.url || input.action || "");
   } else if (/agent|team|send_message/.test(name)) {
-    kind = "agent"; action = name === "spawn_agent" ? "派发子任务" : input.action === "wait" ? "等待子代理" : "管理子代理";
+    kind = "agent"; action = name === "spawn_agent" || name === "agent_tool" && (!input.action || input.action === "spawn") ? "启动子代理" : input.action === "wait" ? "等待子代理" : "管理子代理";
     brief = String(input.description || input.action || "");
   } else if (name === "skill_tool") {
     kind = "skill"; action = "加载技能"; brief = String(input.name || input.skill || "");
