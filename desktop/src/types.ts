@@ -46,6 +46,7 @@ export type ModelConfig = {
   hasKey: boolean;
   networkMode?: "direct" | "system";
   models?: string[];
+  modelInputs?: Record<string, ("text" | "image" | "document")[]>;
   connections?: ModelConnection[];
 };
 export type ModelConnection = Omit<ModelConfig, "connections"> & { connectionId: string; connectionName: string; models: string[] };
@@ -168,6 +169,7 @@ export type SessionView = InitialSession & {
 };
 export type PermissionMode = "ask" | "full";
 export type FileChange = {
+  revisionId?: string;
   source?: "git";
   path: string; operation: string; updatedAt: number;
   added: number | null; removed: number | null; diff: string;

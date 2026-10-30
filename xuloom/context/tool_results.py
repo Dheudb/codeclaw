@@ -1,7 +1,34 @@
 import os
 import uuid
+import copy
 from typing import Any, Dict
 from xuloom.core.storage import artifact_directory
+
+
+def native_tool_content(payload, *, errors=None, **serialization):
+    """Preserve provider-native media blocks; archive oversized text through the existing path."""
+    blocks = payload.get("content") if isinstance(payload, dict) else payload
+    if not isinstance(blocks, list):
+        return None
+    result = []
+    def text_block(text):
+        rendered = serialize_tool_result(text, **serialization)
+        if len(text) > serialization.get("spill_threshold_chars", 5000) and rendered.startswith("Status: error") and errors is not None:
+            errors.append("content_archive_failed")
+        return {"type": "text", "text": rendered}
+    if isinstance(payload, dict):
+        summary = {**payload, "content": ""}
+        result.append({"type": "text", "text": serialize_tool_result(summary, **serialization)})
+    for block in blocks:
+        if not isinstance(block, dict):
+            result.append(text_block(str(block)))
+        elif block.get("type") == "text":
+            result.append(text_block(block.get("text", "")))
+        elif block.get("type") in {"image", "document"}:
+            result.append(copy.deepcopy(block))
+        else:
+            result.append(text_block(str(block)))
+    return result
 
 
 def build_tool_result(

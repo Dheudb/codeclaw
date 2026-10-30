@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, FileDiff } from "lucide-react";
+import { ChevronDown, FileDiff, Undo2 } from "lucide-react";
 import type { FileChange } from "./types";
 
 export function relativeFile(path: string, project: string) {
@@ -11,19 +11,29 @@ export function ChangeCounts({ added, removed }: { added: number | null; removed
   return added === null || removed === null ? <small className="file-counts-unknown">未记录行数</small>
     : <span className="file-counts"><span className="lines-added">+{added}</span><span className="lines-removed">-{removed}</span></span>;
 }
-export default function FileChanges({ files, project, onOpen, compact = false }: {
-  files: FileChange[]; project: string; onOpen: (path: string, change?: FileChange) => void; compact?: boolean;
+export default function FileChanges({ files, project, onOpen, onUndo, compact = false }: {
+  files: FileChange[]; project: string; onOpen: (path: string, change?: FileChange) => void; onUndo?: (file: FileChange) => Promise<void>; compact?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [confirm, setConfirm] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [restored, setRestored] = useState<string[]>([]);
   if (!files.length) return null;
   const known = files.filter((file) => file.statsAvailable);
   return <section className={"file-changes " + (compact ? "compact" : "")} aria-label="文件变更">
     <header><FileDiff size={17} /><div><strong>{compact ? files[0]?.source === "git" ? "Git 未提交的文件" : "会话修改的文件" : `已修改 ${files.length} 个文件`}</strong>
       <ChangeCounts added={known.length ? known.reduce((sum, file) => sum + (file.added || 0), 0) : null} removed={known.length ? known.reduce((sum, file) => sum + (file.removed || 0), 0) : null} />
       {known.length !== files.length && <small>部分文件未记录行数</small>}</div></header>
-    {(expanded || compact ? files : files.slice(0, 3)).map((file) => <button key={file.path} className="changed-file-row" title={file.path}
+    {(expanded || compact ? files : files.slice(0, 3)).map((file) => <div key={file.path} className="file-change-actions"><button className="changed-file-row" title={file.path}
       aria-label={"打开文件 " + relativeFile(file.path, project)} onClick={() => onOpen(file.path, file)}>
-      <span>{relativeFile(file.path, project)}</span><ChangeCounts added={file.added} removed={file.removed} /></button>)}
+      <span>{relativeFile(file.path, project)}</span><ChangeCounts added={file.added} removed={file.removed} /></button>
+      {onUndo && file.revisionId && !restored.includes(file.revisionId) && <button className="icon-button" aria-label={"撤销最近一次写入 " + relativeFile(file.path, project)} title="撤销该文件最近一次工具写入" disabled={busy}
+        onClick={() => { setConfirm(file.revisionId!); setError(""); }}><Undo2 size={14} /></button>}
+      {confirm === file.revisionId && <div className="file-undo-confirm"><span>恢复这一次写入前的内容？后续改动会阻止撤销。</span><button disabled={busy} onClick={() => setConfirm("")}>取消</button><button disabled={busy} onClick={async () => {
+        setBusy(true); setError(""); try { await onUndo!(file); setRestored((old) => [...old, file.revisionId!]); setConfirm(""); }
+        catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+      }}>确认撤销</button></div>}
+      </div>)}
+    {error && <p role="alert" className="error">{error}</p>}
     {!compact && files.length > 3 && <button className="show-more-files" onClick={() => setExpanded(!expanded)}>
       {expanded ? "收起文件列表" : `再显示 ${files.length - 3} 个文件`}<ChevronDown size={13} /></button>}
   </section>;

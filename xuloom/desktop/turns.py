@@ -54,6 +54,8 @@ class TurnRecorder:
             if identity not in self.baselines: self.baselines[identity] = event.get("before")
             previous = next((item for item in record["files"] if os.path.normcase(item["path"]) == identity), None)
             change = describe_change(change["path"], self.baselines[identity], event.get("after"), (previous or change)["operation"])
+            if event["change"].get("revisionId"):
+                change["revisionId"] = event["change"]["revisionId"]
             record["files"] = [item for item in record["files"] if os.path.normcase(item["path"]) != identity] + [change]
             return True
         if kind == "text_delta":

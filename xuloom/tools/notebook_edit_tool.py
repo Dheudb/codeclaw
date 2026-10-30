@@ -197,9 +197,9 @@ class NotebookEditTool(BaseAgenticTool):
 
         def _perform_write():
             before_text = read_snapshot(abs_path)
-            write_file_text(abs_path, json.dumps(notebook, indent=1, ensure_ascii=False) + "\n")
-            _, write_metadata = record_written_file(self.context, abs_path, before_text, "notebook_edit")
-            if write_metadata.get("post_write_warnings"):
+            revision = write_file_text(abs_path, json.dumps(notebook, indent=1, ensure_ascii=False) + "\n", context=self.context)
+            _, write_metadata = record_written_file(self.context, abs_path, before_text, "notebook_edit", revision=revision)
+            if revision or write_metadata.get("post_write_warnings"):
                 return build_tool_result(ok=True, content=result_msg, metadata=write_metadata)
             return result_msg
 

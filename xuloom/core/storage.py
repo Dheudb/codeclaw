@@ -49,7 +49,7 @@ def file_hash(path):
     return digest.hexdigest()
 
 
-def atomic_copy(path, source, expected_hash):
+def atomic_copy(path, source, expected_hash, *, preserve_mode=False):
     """Publish a streamed copy only after verifying the complete source bytes."""
     def write(stream):
         digest = hashlib.sha256()
@@ -60,7 +60,7 @@ def atomic_copy(path, source, expected_hash):
         if digest.hexdigest() != expected_hash:
             from xuloom.core.session_lock import SessionConflictError
             raise SessionConflictError("Source changed during a session operation; records were preserved")
-    _atomic_write(path, write)
+    _atomic_write(path, write, preserve_mode=preserve_mode)
 
 
 def _atomic_write(path, write, *, preserve_mode=False, create_only=False):

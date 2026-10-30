@@ -138,6 +138,16 @@ async function main() {
     const denied = await page.evaluate(async (id) => { try { await window.xuloom.invoke("files.read", { session: id, path: "../outside.md" }); return false; } catch { return true; } }, id); assert(denied);
     await app.close(); await launch();
     assert.equal(await page.locator(".conversation .file-changes").count(), 3);
+    const undoChild = page.getByRole("button", { name: "撤销最近一次写入 child.txt", exact: true });
+    await undoChild.click();
+    await page.getByRole("button", { name: "确认撤销", exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector(".file-undo-confirm"));
+    assert(!fs.existsSync(path.join(project, "child.txt")), "Persisted child file revision can be undone after restart");
+    await page.getByRole("button", { name: "撤销最近一次写入 note.md", exact: true }).first().click();
+    await page.getByRole("button", { name: "确认撤销", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "拒绝覆盖" }).waitFor();
+    assert(fs.readFileSync(path.join(project, "note.md"), "utf8").includes("DISK_REFRESH_PROOF"), "Undo cannot erase external edits");
+    await page.locator(".file-undo-confirm").getByRole("button", { name: "取消", exact: true }).click();
     await page.locator(".message-body > .markdown .inline-file-link").filter({ hasText: "note.md" }).first().click(); await dialog().getByText("DISK_REFRESH_PROOF", { exact: true }).waitFor(); await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "在项目 other 中新建会话", exact: true }).click(); await page.waitForFunction(() => !document.querySelector(".new-task").disabled);
     await page.getByRole("button", { name: "变更", exact: true }).click(); assert.equal(await page.locator(".inspector .changed-file-row").count(), 0);

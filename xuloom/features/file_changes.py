@@ -17,14 +17,17 @@ def check_observed_file(context, path):
             raise ValueError("File changed since this agent last read it. Read the current file before editing; no write was performed.")
 
 
-def write_file_text(path, text, *, create_only=False):
+def write_file_text(path, text, *, create_only=False, context=None):
     from xuloom.core.storage import atomic_text
+    from xuloom.features.file_revisions import prepare_revision
+    revision = prepare_revision(context or {}, path, text.encode("utf-8"))
     # Match normal write semantics for symlinks without replacing the link itself.
     atomic_text(os.path.realpath(path), text, preserve_mode=True, create_only=create_only)
+    return revision
 
 
 def record_written_file(context, path, before, operation, *, before_snapshot=None,
-                        target_preview="", replacement_preview=""):
+                        target_preview="", replacement_preview="", revision=None):
     """Observers run after the mutation; their failure must not invite a replay."""
     warnings = []
     def observe(name, callback):
@@ -36,7 +39,7 @@ def record_written_file(context, path, before, operation, *, before_snapshot=Non
     cache = context.get("file_state_cache")
     snapshot = observe("file_state_cache", lambda: cache.record_write(path)) if cache is not None else None
     context.setdefault("read_file_state", {})[path] = True
-    notify_change(context, path, before, read_snapshot(path), operation)
+    notify_change(context, path, before, read_snapshot(path), operation, revision)
     tracker = context.get("artifact_tracker")
     if tracker is not None:
         observe("artifact_tracker", lambda: tracker.record_file_change(path=path, operation=operation,
@@ -45,7 +48,7 @@ def record_written_file(context, path, before, operation, *, before_snapshot=Non
     verifier = context.get("verification_manager")
     if verifier is not None:
         observe("verification_manager", lambda: verifier.record_file_modification(path, operation))
-    return snapshot, {"write_applied": True, **({"post_write_warnings": warnings,
+    return snapshot, {"write_applied": True, **({"revision_id": revision} if revision else {}), **({"post_write_warnings": warnings,
         "retry_advice": "File was written. Do not repeat the mutation to repair observer records."} if warnings else {})}
 
 
@@ -65,14 +68,14 @@ def describe_change(path, before, after, operation="edit"):
     return record
 
 
-def notify_change(context, path, before, after, operation):
+def notify_change(context, path, before, after, operation, revision=None):
     callback = context.get("capability_event")
     if not callable(callback): return
     # Large files remain clickable, but unbounded snapshots never cross IPC.
     before = before if before is not None and len(before) <= SNAPSHOT_LIMIT else None
     after = after if after is not None and len(after) <= SNAPSHOT_LIMIT else None
     try:
-        callback({"type": "file_changed", "change": describe_change(os.path.realpath(path), before, after, operation),
+        callback({"type": "file_changed", "change": {**describe_change(os.path.realpath(path), before, after, operation), **({"revisionId": revision} if revision else {})},
                   "before": before, "after": after, "agent_id": context.get("agent_id")})
     except Exception:
         # A UI observer must never turn an already successful write into a tool failure.

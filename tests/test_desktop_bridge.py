@@ -144,7 +144,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_model_can_save_without_project_engine_and_normalizes_full_endpoint(self):
         existing = {"openai_api_key": "fixture-existing-key", "other_setting": "keep"}
-        with patch("xuloom.desktop.bridge.load_config", return_value=existing), patch("xuloom.desktop.bridge.save_config") as saved, patch.dict(os.environ, {}, clear=True):
+        with patch("xuloom.core.config.load_config", return_value=existing), patch("xuloom.core.config.save_config") as saved, patch("xuloom.core.config.CONFIG_FILE", self.root / "model-config.json"), patch.dict(os.environ, {}, clear=True):
             result = await self.bridge.dispatch("config.save", {"provider": "openai", "model": " model-id ", "baseUrl": "https://example.invalid/v1/chat/completions/", "apiKey": ""})
             self.assertEqual(result["baseUrl"], "https://example.invalid/v1")
             self.assertEqual(result["model"], "model-id")
@@ -162,7 +162,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("fixture-private-key", json.dumps(result))
 
     async def test_invalid_model_url_does_not_write_config(self):
-        with patch("xuloom.desktop.bridge.save_config") as saved:
+        with patch("xuloom.core.config.CONFIG_FILE", self.root / "config.json"), patch("xuloom.core.config.save_config") as saved:
             with self.assertRaises(ValueError):
                 await self.bridge.dispatch("config.save", {"provider": "openai", "model": "model", "baseUrl": "not-an-api-url"})
         saved.assert_not_called()

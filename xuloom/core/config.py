@@ -8,7 +8,7 @@ written back when /model changes them.
 
 import json
 import os
-import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -45,32 +45,46 @@ _PERSISTED_KEYS = {
 }
 
 
-def _ensure_dir():
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-
 def load_config() -> dict:
-    """Read config from disk. Returns empty dict on any failure."""
+    """Missing configuration is empty; damaged configuration must never be overwritten as empty."""
     try:
-        if CONFIG_FILE.exists():
-            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {}
+        value = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as error:
+        raise ValueError("无法读取模型配置；原文件已保留，请修复配置或从备份恢复。") from error
+    if not isinstance(value, dict):
+        raise ValueError("模型配置必须是 JSON 对象；原文件已保留。")
+    return value
 
 
 def save_config(cfg: dict):
     """Write config dict to disk."""
-    _ensure_dir()
-    temporary = None
+    from xuloom.core.storage import atomic_json
+    if not isinstance(cfg, dict):
+        raise ValueError("Configuration must be an object")
+    atomic_json(CONFIG_FILE, cfg)
+
+
+def update_config(transform, timeout=10):
+    """Reload and mutate under the existing OS lease, across CLI/desktop processes."""
+    from xuloom.core.session_lock import SessionLock, SessionBusyError
+    lease = SessionLock(CONFIG_FILE.parent, "config-writer")
+    deadline = time.monotonic() + timeout
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=CONFIG_DIR, prefix=".config-", suffix=".tmp", delete=False) as handle:
-            temporary = Path(handle.name)
-            handle.write(json.dumps(cfg, indent=2, ensure_ascii=False))
-        os.replace(temporary, CONFIG_FILE)
+        while True:
+            try:
+                lease.acquire()
+                break
+            except SessionBusyError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("模型配置正被另一个进程保存，本次未修改。") from None
+                time.sleep(.02)
+        cfg = transform(load_config())
+        save_config(cfg)
+        return cfg
     finally:
-        if temporary and temporary.exists():
-            temporary.unlink()
+        lease.close()
 
 
 def load_config_into_env():
@@ -100,17 +114,18 @@ def save_current_env_to_config():
     Snapshot current env vars back into the config file.
     Only writes non-empty values.
     """
-    cfg = load_config()
-    for cfg_key, env_key in _PERSISTED_KEYS.items():
-        val = os.environ.get(env_key, "")
-        if val:
-            cfg[cfg_key] = val
-        else:
-            cfg.pop(cfg_key, None)
-    if cfg.get(cfg.get("model_provider", "anthropic") + "_model"):
-        from xuloom.core.model_catalog import sync_legacy_connection
-        cfg = sync_legacy_connection(cfg)
-    save_config(cfg)
+    def change(cfg):
+        for cfg_key, env_key in _PERSISTED_KEYS.items():
+            val = os.environ.get(env_key, "")
+            if val:
+                cfg[cfg_key] = val
+            else:
+                cfg.pop(cfg_key, None)
+        if cfg.get(cfg.get("model_provider", "anthropic") + "_model"):
+            from xuloom.core.model_catalog import sync_legacy_connection
+            cfg = sync_legacy_connection(cfg)
+        return cfg
+    update_config(change)
 
 
 # ── Model Output Token Limits ──────────────────────────────────────

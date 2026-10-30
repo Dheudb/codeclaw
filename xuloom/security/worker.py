@@ -23,7 +23,8 @@ async def execute(request):
     cache = FileStateCache(); cache.load_state(request.get("cache", {}))
     tool = tools[request["name"]]()
     tool.context = {"session_cwd": os.getcwd(), "confined_sync_worker": True, "session_id": request.get("session_id"), "agent_id": request.get("agent_id"),
-        "read_file_state": request.get("read_state", {}), "file_state_cache": cache, "capability_event": events.append}
+        "read_file_state": request.get("read_state", {}), "file_state_cache": cache, "capability_event": events.append,
+        "revision_tracking": False, "model_input_modalities": request.get("model_input_modalities")}
     with contextlib.redirect_stdout(sys.stderr):
         result = await tool(**request["arguments"])
     if isinstance(result, str) and result.startswith(("Error:", "Error reading file:", "Search execution error:", "Ripgrep error")):

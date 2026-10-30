@@ -67,6 +67,8 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
     input_error = bool(self._tb_get(tool_block, "_argument_error", ""))
     handler_invoked = False
     raw_result = None
+    native_content = None
+    native_errors = []
     status = "error"
     user_turn_id, digest = tool_identity(self, tool_name, tool_inputs)
     for row in self.recent_tool_activity:
@@ -206,8 +208,13 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
                     raw_result = await confinement.tool(tool_name, tool_inputs, self.tool_context)
                 else:
                     raw_result = await handler(**tool_inputs)
+                from xuloom.core.model_inputs import configured_inputs, filter_tool_media
+                raw_result = filter_tool_media(raw_result, configured_inputs(self.model_provider, self.tool_context.get("request_model", self.primary_model), self.api_base_url))
+                from xuloom.context.tool_results import native_tool_content
+                native_content = native_tool_content(raw_result, errors=native_errors,
+                    artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id), spill_recorder=spill_recorder)
                 res_text = serialize_tool_result(
-                    raw_result,
+                    "\n".join(part["text"] for part in native_content if part.get("type") == "text") + "\n[Media blocks retained in tool receipt.]" if native_content is not None else raw_result,
                     spill_threshold_chars=tool_inputs.get("max_chars", 100000) if tool_name == "skill_tool" else 5000,
                     artifact_dir=str(artifact_directory(self.session_cwd) / self.session_id),
                     spill_recorder=spill_recorder,
@@ -218,11 +225,13 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
                     # Legacy string tools use a leading error marker; ordinary result text is not a status protocol.
                     failed = str(res_text).lstrip().startswith(("Permission denied", "Error:", "Error reading file:",
                         "Sub-agent spawn denied:", "Status: error", "Tool Exception Caught"))
+                    if isinstance(raw_result, list):
+                        failed = any(isinstance(block, dict) and block.get("type") == "text" and block.get("text", "").startswith("Error:") for block in raw_result)
                 if tool_name == "command_tool" and isinstance(raw_result, str):
                     command_receipt = json.loads(raw_result)
                     failed = isinstance(command_receipt, dict) and command_receipt.get("status") in {
                         "failed", "cancelled", "interrupted", "timed_out", "output_limit", "storage_error", "output_incomplete"}
-                status = "error" if failed else "ok"
+                status = "error" if failed or native_errors else "ok"
         except asyncio.CancelledError:
             if handler_invoked:
                 self.in_progress_tools[tool_id]["recovery_uncertain"] = True
@@ -255,8 +264,10 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
 
     if before_tool_prefix:
         res_text = before_tool_prefix + str(res_text)
+        if native_content is not None:
+            native_content.insert(0, {"type": "text", "text": before_tool_prefix})
 
-    receipt = {"type": "tool_result", "tool_use_id": tool_id, "content": res_text,
+    receipt = {"type": "tool_result", "tool_use_id": tool_id, "content": native_content if native_content is not None else res_text,
                "is_error": status == "error", **({"_input_error": True} if input_error else {})}
     self.in_progress_tools.pop(tool_id, None)
     self.recent_tool_activity.insert(0, {"tool_name": tool_name, "tool_use_id": tool_id, "status": status,

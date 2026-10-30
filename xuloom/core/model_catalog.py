@@ -55,7 +55,8 @@ def active_connection(cfg):
 def public_connection(item):
     return {"connectionId": item["id"], "connectionName": item.get("name", item["id"]), "provider": item["provider"],
             "model": item.get("model", ""), "models": item.get("models", []), "baseUrl": item.get("base_url", ""),
-            "hasKey": bool(item.get("api_key")), "networkMode": item.get("network_mode", "direct")}
+            "hasKey": bool(item.get("api_key")), "networkMode": item.get("network_mode", "direct"),
+            "modelInputs": item.get("model_inputs", {})}
 
 
 def public_config(cfg):
@@ -116,9 +117,19 @@ def save_connection(cfg, params):
     names = model_ids(params.get("models", previous.get("models", [])))
     if model not in names:
         names.append(model)
+    inputs = dict(previous.get("model_inputs", {}))
+    if "modelInputs" in params:
+        values = params["modelInputs"]
+        if not isinstance(values, dict) or any(name not in names or not isinstance(kinds, list)
+            or "text" not in kinds or any(kind not in {"text", "image", "document"} for kind in kinds)
+            or provider == "openai" and "document" in kinds
+            for name, kinds in values.items()):
+            raise ValueError("modelInputs 必须按模型 ID 配置 text/image/document 数组且包含 text；原生 document 目前仅支持 Anthropic 协议")
+        inputs = {name: list(dict.fromkeys(kinds)) for name, kinds in values.items()}
+    inputs = {name: kinds for name, kinds in inputs.items() if name in names}
     item = {"id": identity, "name": str(params.get("connectionName") or previous.get("name") or "我的 API").strip()[:100],
             "provider": provider, "model": model, "models": names, "base_url": base,
-            "api_key": key, "network_mode": mode}
+            "api_key": key, "network_mode": mode, "model_inputs": inputs}
     items = [item if old["id"] == identity else old for old in items]
     if not previous:
         items.append(item)

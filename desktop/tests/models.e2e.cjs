@@ -69,8 +69,10 @@ async function main() {
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", openai_model: "one", openai_base_url: firstUrl, openai_api_key: "first-fixture-key" });
     await launch(); await settings();
     await page.getByLabel("连接名称", { exact: true }).fill("第一个 API");
+    await page.getByLabel("模型输入能力", { exact: true }).selectOption("text");
     await page.getByLabel("可选模型列表", { exact: true }).fill("one\ntwo\ntwo"); await save();
     assert.deepEqual(readConfig().openai_models, ["one", "two"]);
+    assert.deepEqual(readConfig().model_connections[0].model_inputs.one, ["text"]);
     await settings();
     const unchanged = fs.readFileSync(path.join(config, "config.json"), "utf8");
     await page.getByRole("button", { name: "从 API 获取模型", exact: true }).click();

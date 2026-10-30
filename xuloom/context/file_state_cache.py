@@ -58,6 +58,12 @@ class FileStateCache:
     def get_entry(self, path: str) -> Optional[dict]:
         return self.entries.get(self._normalize_path(path))
 
+    def invalidate(self, path):
+        identity = os.path.normcase(os.path.realpath(path))
+        for key in list(self.entries):
+            if os.path.normcase(os.path.realpath(key)) == identity:
+                self.entries.pop(key, None)
+
     def should_skip_redundant_read(self, path: str, *, start_line=None, end_line=None) -> bool:
         abs_path = self._normalize_path(path)
         entry = self.entries.get(abs_path)

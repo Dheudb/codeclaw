@@ -37,6 +37,7 @@ const engineMethods = new Set([
   "stop",
   "changes",
   "files.read",
+  "files.undo",
   "files.list",
   "files.gitDiff",
   "capabilities.list",

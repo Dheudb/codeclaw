@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from xuloom.branding import configuration_file
 
-from xuloom.core.config import load_config, load_config_into_env, save_config, normalize_api_base_url
+from xuloom.core.config import load_config, load_config_into_env, update_config, normalize_api_base_url
 from xuloom.core.model_catalog import public_config, active_connection, save_connection, delete_connection, select_model, discover_models, apply_connection_env, apply_catalog_env
 from xuloom.security.permissions import ApprovalPolicy
 from xuloom.desktop.activity import restore_activity
@@ -550,6 +550,12 @@ class DesktopBridge:
             return {"project": str(self.cwd), "persistedId": sid, "executionMode": self.execution_mode, "collaborationMode": self.collaboration_mode, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages, traces), "activity": activity, "workers": workers, "fileChanges": self.file_changes}
         if method == "files.read":
             return preview_file(self.cwd, params.get("path"), self.file_changes)
+        if method == "files.undo":
+            self.require_idle()
+            if params.get("confirm") is not True:
+                raise ValueError("请确认撤销文件最近一次写入")
+            engine = await self.ensure_engine(write=True)
+            return await engine.undo_file(params.get("revisionId"))
         if method == "files.list":
             return list_directory(self.cwd, params.get("path", ""))
         if method == "files.gitDiff":
@@ -685,11 +691,11 @@ class DesktopBridge:
             if method == "config.delete":
                 if params.get("confirm") is not True:
                     raise ValueError("请确认删除 API 连接")
-                cfg = delete_connection(load_config(), params.get("connectionId"))
+                change = lambda cfg: delete_connection(cfg, params.get("connectionId"))
             else:
-                cfg = save_connection(load_config(), params) if method == "config.save" else select_model(load_config(), params.get("connectionId"), params.get("model"))
+                change = (lambda cfg: save_connection(cfg, params)) if method == "config.save" else (lambda cfg: select_model(cfg, params.get("connectionId"), params.get("model")))
+            cfg = await asyncio.to_thread(update_config, change)
             provider, network_mode = cfg["model_provider"], cfg["network_mode"]
-            save_config(cfg)
             if method == "config.delete":
                 apply_catalog_env(cfg)
             for suffix in ("model", "base_url", "api_key"):

@@ -442,6 +442,7 @@ class QueryEngine:
         }
 
     def _sync_model_runtime_context(self):
+        self.tool_context.pop("request_model", None)
         for name in ("session_memory_manager", "memory_extractor"):
             manager = getattr(self, name, None)
             if manager is not None:
@@ -3306,6 +3307,10 @@ class QueryEngine:
         event_callback=None,
     ):
         """Returns (response, tool_entries, streaming_fallback_occurred)."""
+        from xuloom.core.model_inputs import configured_inputs, validate_media, validate_transport
+        validate_media(api_messages, configured_inputs(self.model_provider, model_name, self.api_base_url))
+        validate_transport(api_messages, self.model_provider)
+        self.tool_context["request_model"] = model_name
         tool_entries = []
         self.active_streaming_tool_entries = tool_entries
         previous_batch_gate = None
@@ -3805,6 +3810,14 @@ class QueryEngine:
             return RunResult(str(error), "session_busy" if isinstance(error, SessionBusyError) else "session_conflict", session_id=self.session_id, agent_id=self.agent_id)
         if resume and (user_input or input_blocks or attachments or selected_skills):
             raise ValueError("Resume cannot replace the original prompt, attachments or skills")
+        from xuloom.core.model_inputs import configured_inputs, validate_media, validate_transport, UnsupportedInput
+        try:
+            input_history = self.messages + ([{"content": input_blocks}] if input_blocks else [])
+            validate_transport(input_history, self.model_provider)
+            validate_media(input_history,
+                configured_inputs(self.model_provider, self.primary_model, self.api_base_url))
+        except UnsupportedInput as error:
+            return finish_run(self, str(error), 'unsupported_input')
         if self.agent_depth == 0 and not resume:
             from xuloom.agents.collaboration import new_run, policy
             profile = policy(self.collaboration_mode, self.tool_context["skill_registry"].settings())
@@ -4389,6 +4402,9 @@ class QueryEngine:
                     return finish_run(self, ("[bold red]API Loop Exception:[/bold red] " + str(e)), 'stream_interrupted')
                 if isinstance(e, PersistenceError):
                     return finish_run(self, "Storage checkpoint failed: " + str(e), 'persistence_error')
+                from xuloom.core.model_inputs import UnsupportedInput
+                if isinstance(e, UnsupportedInput):
+                    return finish_run(self, str(e), 'unsupported_input')
                 if (
                     self._is_model_fallback_error(e)
                     and loop_state["active_model"] != self.fallback_model
@@ -4492,6 +4508,26 @@ class QueryEngine:
                 
         return finish_run(self, ("[bold red]System Halt:[/bold red] "
             f"Max internal reasoning turns ({loop_state['max_turns']}) reached without returning an answer."), 'turn_limit')
+
+    async def undo_file(self, revision_id):
+        """An explicit user/API action; never a model tool or an automatic replay."""
+        if self.has_active_turn() or getattr(self, "_goal_task", None) is not None:
+            raise ValueError("Stop the active turn or goal before undoing a file")
+        if any(not task.done() for task in self.tool_context["subagent_tasks"].tasks.values()) or any(
+            row["status"] == "running" for row in self.tool_context["command_sessions"].records.values()):
+            raise ValueError("Stop owned agents and commands before undoing a file")
+        self.require_writer()
+        if self.execution_sandbox.enabled:
+            raise ValueError("当前系统隔离后端尚不支持文件撤销；未执行宿主写入。")
+        self.active_run_task = asyncio.current_task()
+        try:
+            from xuloom.features.file_revisions import restore_revision
+            result = await restore_revision(self.tool_context, revision_id)
+            if not self.persist_session_state():
+                raise PersistenceError("File was restored, but the session checkpoint failed. Do not replay other operations; undo itself is idempotent.")
+            return result
+        finally:
+            self.active_run_task = None
 
     async def run(self, user_input: str, sys_print_callback=print, *, selected_skills=None):
         if self.has_active_turn() or getattr(self, "_goal_task", None) is not None and asyncio.current_task() not in (self._goal_task, getattr(self, "_goal_turn_task", None)):

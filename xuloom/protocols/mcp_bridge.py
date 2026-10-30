@@ -68,17 +68,21 @@ class MCPToolWrapper:
         try:
             result = await self.session.call_tool(self.mcp_tool_name, arguments=kwargs)
             blocks = []
+            visual = False
             for block in result.content:
                 if getattr(block, "type", "") == "text":
-                    blocks.append(block.text)
+                    blocks.append({"type": "text", "text": block.text})
+                elif getattr(block, "type", "") == "image":
+                    visual = True
+                    blocks.append({"type": "image", "source": {"type": "base64", "media_type": block.mimeType, "data": block.data}})
                 else:
                     raw = block.model_dump(mode="json", by_alias=True) if hasattr(block, "model_dump") else vars(block)
-                    blocks.append(json.dumps(raw, ensure_ascii=False))
+                    blocks.append({"type": "text", "text": json.dumps(raw, ensure_ascii=False)})
             structured = getattr(result, "structuredContent", None)
             if structured is not None:
-                blocks.append("Structured content:\n" + json.dumps(structured, ensure_ascii=False))
+                blocks.append({"type": "text", "text": "Structured content:\n" + json.dumps(structured, ensure_ascii=False)})
             error = bool(getattr(result, "isError", False))
-            return build_tool_result(ok=not error, is_error=error, content="\n".join(blocks),
+            return build_tool_result(ok=not error, is_error=error, content=blocks if visual else "\n".join(block["text"] for block in blocks),
                 metadata={"server": self.server_name, "tool": self.mcp_tool_name, "content_blocks": len(result.content)})
         except Exception as exc:
             return build_tool_result(ok=False, is_error=True, content=connection_error(exc), metadata={"server": self.server_name})

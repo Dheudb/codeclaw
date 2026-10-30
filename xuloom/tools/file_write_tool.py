@@ -88,9 +88,9 @@ class FileWriteTool(BaseAgenticTool):
                 check_observed_file(self.context, abs_path)
             before_text = read_snapshot(abs_path) if os.path.isfile(abs_path) else ""
             os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-            write_file_text(abs_path, content, create_only=not file_exists)
+            revision = write_file_text(abs_path, content, create_only=not file_exists, context=self.context)
             after_snapshot, write_metadata = record_written_file(self.context, abs_path, before_text, operation,
-                before_snapshot=before_snapshot, replacement_preview=content)
+                before_snapshot=before_snapshot, replacement_preview=content, revision=revision)
             success_verb = "created" if operation == "create" else "overwrote"
             return build_tool_result(
                 ok=True,

@@ -199,9 +199,9 @@ class FileEditTool(BaseAgenticTool):
                 if os.path.exists(abs_path):
                     raise ValueError("File was created while this edit waited. Read it before modifying; no write was performed.")
                 os.makedirs(os.path.dirname(abs_path) or '.', exist_ok=True)
-                write_file_text(abs_path, new_string, create_only=True)
+                revision = write_file_text(abs_path, new_string, create_only=True, context=self.context)
                 created_snapshot, write_metadata = record_written_file(self.context, abs_path, "", "create",
-                    replacement_preview=new_string)
+                    replacement_preview=new_string, revision=revision)
                 return build_tool_result(
                     ok=True,
                     content=f"Successfully created new file '{abs_path}'.",
@@ -333,9 +333,9 @@ class FileEditTool(BaseAgenticTool):
                 
             # Straight precise swap (either 1, or bulk all)
             new_content = content_to_use.replace(target_to_use, repl_to_use)
-            write_file_text(abs_path, new_content)
+            revision = write_file_text(abs_path, new_content, context=self.context)
             after_snapshot, write_metadata = record_written_file(self.context, abs_path, content, "edit",
-                before_snapshot=before_snapshot, target_preview=old_string, replacement_preview=new_string)
+                before_snapshot=before_snapshot, target_preview=old_string, replacement_preview=new_string, revision=revision)
 
             msg = f"Successfully edited file '{abs_path}'."
             if replace_all and occurrences > 1:

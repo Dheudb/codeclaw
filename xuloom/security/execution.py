@@ -157,8 +157,10 @@ class ExecutionSandbox:
         package_root = str(Path(__file__).resolve().parents[2])
         entry = "import sys;sys.path.insert(0," + repr(package_root) + ");from xuloom.security.worker import main;main()"
         cache = context.get("file_state_cache")
+        from xuloom.core.model_inputs import configured_inputs
         request = {"name": name, "arguments": arguments, "provider": context.get("model_provider"), "read_state": context.get("read_file_state", {}),
-            "cache": cache.export_state() if cache else {}, "agent_id": context.get("agent_id"), "session_id": context.get("session_id")}
+            "cache": cache.export_state() if cache else {}, "agent_id": context.get("agent_id"), "session_id": context.get("session_id"),
+            "model_input_modalities": configured_inputs(context.get("model_provider", ""), context.get("request_model", context.get("primary_model", "")), context.get("api_base_url", ""))}
         rg = shutil.which("rg") if name == "grep_tool" else None
         code, output, error = await self.communicate(argv=[sys.executable, "-I", "-B", "-X", "utf8", "-c", entry], read_roots=[Path(rg)] if rg else [],
             data=json.dumps(request, ensure_ascii=False).encode("utf-8"))

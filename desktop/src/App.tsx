@@ -681,7 +681,11 @@ export default function App() {
                       ) : null}
                     </div>
                     {!!message.attachments?.length && <Attachments items={message.attachments} open={openAttachment} />}
-                    {!!message.trace?.files?.length && <FileChanges files={message.trace.files} project={active.project} onOpen={openFile} />}
+                    {!!message.trace?.files?.length && <FileChanges files={message.trace.files} project={active.project} onOpen={openFile}
+                      onUndo={!active.busy && !runningWorkers && !runningCommands ? async (file) => {
+                        await window.xuloom.invoke("files.undo", { session: active.id, revisionId: file.revisionId, confirm: true });
+                        setFilePreview(undefined);
+                      } : undefined} />}
                     {!!message.text && <MessageActions key={active.id + ":" + index} role={message.role} text={message.text} onError={onError}
                       fork={message.role === "assistant" ? () => branchFrom(index) : undefined}
                       disabled={opening || active.busy || !!runningWorkers || !!runningCommands}>

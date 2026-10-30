@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import time
@@ -14,7 +15,7 @@ from rich.text import Text
 
 with redirect_stdout(sys.stderr):
     from xuloom.core.engine import QueryEngine
-from xuloom.core.config import CONFIG_FILE, load_config_into_env, save_current_env_to_config, load_config, save_config
+from xuloom.core.config import CONFIG_FILE, load_config_into_env, save_current_env_to_config, load_config
 from xuloom.core.model_catalog import connections, select_model, active_connection, apply_connection_env
 
 console = Console()
@@ -585,6 +586,7 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                     "  /new              Start a fresh session\n"
                     "  /sessions         List saved sessions\n"
                     "  /resume <id>      Resume a saved session\n"
+                    "  /undo <revision>  Restore one file-tool write if it has not changed\n"
                     "  /delete <id>      Delete a saved session\n"
                     "  /clear sessions   Delete all saved sessions\n\n"
                     "[bold white]Planning[/bold white]\n"
@@ -754,6 +756,12 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                         "Type /coordinator off to restore full tool access.[/dim]"
                     )
                 continue
+            elif normalized_input.startswith("/undo "):
+                try:
+                    console.print(json.dumps(await engine.undo_file(user_input.split(maxsplit=1)[1].strip()), ensure_ascii=False))
+                except Exception as error:
+                    console.print("Undo refused: " + str(error))
+                continue
             elif normalized_input.startswith("/model"):
                 raw = user_input.strip()
                 parts = raw.split(maxsplit=1)
@@ -790,7 +798,8 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                             console.print("[yellow]Wait for background agents or stop them before switching.[/yellow]")
                             continue
                         connection, model = choices[int(number) - 1]
-                        cfg = select_model(cfg, connection["id"], model)
+                        from xuloom.core.config import update_config
+                        cfg = await asyncio.to_thread(update_config, lambda latest: select_model(latest, connection["id"], model))
                         selected = active_connection(cfg)
                         apply_connection_env(selected)
                         previous_client, previous_compactor = engine.client, engine.compactor
@@ -799,7 +808,6 @@ async def interactive_loop(resume_session_id: str = None, initial_prompt: str = 
                         await previous_client.close()
                         if previous_compactor.client:
                             await previous_compactor.client.close()
-                        save_config(cfg)
                         console.print(f"[green]Model switched to {model}.[/green]")
                 else:
                     await _interactive_model_switch(engine, tui)

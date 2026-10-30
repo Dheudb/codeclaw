@@ -77,6 +77,13 @@ class FileReadTool(BaseAgenticTool):
 
         # 1. Image parsing (Multimodal vision)
         if ext in ['.png', '.jpg', '.jpeg', '.webp', '.gif']:
+            from xuloom.core.model_inputs import configured_inputs, validate_media, UnsupportedInput
+            try:
+                inputs = self.context["model_input_modalities"] if "model_input_modalities" in self.context else configured_inputs(self.context.get("model_provider", ""),
+                    self.context.get("request_model", self.context.get("primary_model", "")), self.context.get("api_base_url", ""))
+                validate_media([{"type": "image"}], inputs)
+            except UnsupportedInput as error:
+                return "Error: " + str(error)
             if Image is None:
                 return "Error: Image reading requires the 'pillow' library to be installed."
 

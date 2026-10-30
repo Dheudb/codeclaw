@@ -101,6 +101,17 @@ async function screenshot() {
     await pasteImage(); await draft().locator(".attachment-chip").waitFor();
     assert(await page.getByRole("button", { name: "发送任务", exact: true }).isEnabled());
     await page.getByRole("button", { name: "发送任务", exact: true }).click(); await page.getByText("IMAGE_ONLY_VERIFIED", { exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector(".send-button.stop"));
+    await page.getByRole("button", { name: "设置与模型", exact: true }).click();
+    await page.getByLabel("模型输入能力", { exact: true }).selectOption("text");
+    await page.getByRole("button", { name: "保存配置", exact: true }).click();
+    await page.getByRole("dialog", { name: "工作台设置" }).waitFor({ state: "hidden" });
+    const beforeRejected = requests.length;
+    await pasteImage(); await draft().locator(".attachment-chip").waitFor();
+    await page.getByRole("button", { name: "发送任务", exact: true }).click();
+    await page.locator(".session-error").filter({ hasText: "不支持 image" }).waitFor();
+    await page.waitForFunction(() => !document.querySelector(".send-button.stop"));
+    assert.equal(requests.length, beforeRejected, "Known text-only model must not receive image payloads or image history");
     assert.deepEqual(failures, []); assert(requests.length >= 3);
     console.log("Attachments E2E passed: real disk File drop, clipboard image bytes, picker, remove, automatic independent session, persistent draft/history, image preview, deleted originals, PDF read and actual visual API payload, image-only send");
   } catch (error) {
