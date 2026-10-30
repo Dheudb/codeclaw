@@ -244,6 +244,7 @@ class ContextBuilder:
         model_name: str = "",
         mcp_instructions: str = "",
         language_preference: str = "",
+        collaboration_summary: str = "",
     ) -> str:
         """Generate the full system prompt as a single string."""
         static, dynamic = self.generate_system_prompt_split(
@@ -256,6 +257,7 @@ class ContextBuilder:
             model_name=model_name,
             mcp_instructions=mcp_instructions,
             language_preference=language_preference,
+            collaboration_summary=collaboration_summary,
         )
         return static + "\n\n" + dynamic
 
@@ -270,6 +272,7 @@ class ContextBuilder:
         model_name: str = "",
         mcp_instructions: str = "",
         language_preference: str = "",
+        collaboration_summary: str = "",
     ) -> tuple:
         """
         Split system prompt into (static_prefix, dynamic_suffix) for prompt caching.
@@ -330,6 +333,11 @@ class ContextBuilder:
 
         if tool_prompt_summary:
             dynamic_sections.append(f"# Tool-Specific Rules\n{tool_prompt_summary}")
+
+        # User-selected session policy is separate from the tool catalog. Keep
+        # it after tool-specific advice so active strategy is not buried there.
+        if collaboration_summary:
+            dynamic_sections.append(collaboration_summary)
 
         dynamic_suffix = "\n\n".join(dynamic_sections)
         return static_prefix, dynamic_suffix

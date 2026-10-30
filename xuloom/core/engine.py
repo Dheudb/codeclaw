@@ -1098,6 +1098,10 @@ class QueryEngine:
             raise OSError("协作档位保存失败")
         return copy.deepcopy(profile)
 
+    def _collaboration_instructions(self) -> str:
+        from xuloom.agents.collaboration import instructions
+        return instructions(self.tool_context["collaboration"])
+
     def _build_tool_prompt_summary(self) -> str:
         policy = self.permission_manager.approval_policy.mode
         sections = ["# Tool approval policy\n" + (
@@ -1106,8 +1110,6 @@ class QueryEngine:
             if policy == "full" else
             "Request approval: the tool permission system will request user confirmation when needed. "
             "Do not use the question tool to duplicate tool approval requests.")]
-        from xuloom.agents.collaboration import instructions
-        sections.append(instructions(self.tool_context["collaboration"]))
         if self.execution_sandbox.enabled:
             sections.append("System workspace isolation: file tools, command_tool and repl_tool run in restricted OS processes. "
                 "Network access and unconfined MCP/browser/LSP/legacy shell tools are blocked. Do not attempt host fallbacks. "
@@ -1783,6 +1785,7 @@ class QueryEngine:
             memory_summary=self.get_memory_summary(),
             structured_output_summary=self.structured_output_manager.render_prompt_summary(),
             tool_prompt_summary=self._build_tool_prompt_summary(),
+            collaboration_summary=self._collaboration_instructions(),
         )
         tools_schema = self._get_anthropic_tools_schema()
         preserve_last_messages = 8 if aggressive else 12
@@ -3966,6 +3969,7 @@ class QueryEngine:
                     memory_summary=self.get_memory_summary(),
                     structured_output_summary=self.structured_output_manager.render_prompt_summary(),
                     tool_prompt_summary=self._build_tool_prompt_summary(),
+                    collaboration_summary=self._collaboration_instructions(),
                     mcp_instructions=self._build_mcp_instructions(),
                 )
                 system_prompt += self._get_coordinator_system_prompt_addon()

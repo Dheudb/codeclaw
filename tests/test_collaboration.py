@@ -159,7 +159,8 @@ class CollaborationTests(unittest.IsolatedAsyncioTestCase):
         for mode in ("solo", "ultra", "auto"):
             self.engine.set_collaboration_mode(mode)
             self.assertEqual(before, (self.engine.reasoning_effort, self.engine.permission_manager.approval_policy.mode))
-            self.assertIn("# Collaboration: " + mode, self.engine._build_tool_prompt_summary())
+            self.assertIn("# Collaboration: " + mode, self.engine._collaboration_instructions())
+            self.assertNotIn("# Collaboration:", self.engine._build_tool_prompt_summary())
         self.engine.set_collaboration_mode("ultra")
         self.engine.session_manager.release_writer()
         restored = self.make_engine()
@@ -236,6 +237,43 @@ class ConversationPolicyTests(unittest.IsolatedAsyncioTestCase):
     asyncTearDown = recovery.RecoveryTests.asyncTearDown
     fixture = recovery.RecoveryTests.fixture
 
+    async def test_native_background_delegation_works_alongside_parent_and_waits_before_final(self):
+        self.engine.set_collaboration_mode("ultra")
+        self.engine.permission_manager.approval_policy.set_mode("full")
+        gate = asyncio.Event()
+        started = []
+
+        async def child_run(child, user_input, sys_print_callback):
+            started.append(child.agent_id)
+            self.assertEqual(child.collaboration_mode, "solo")
+            self.assertNotIn("agent_tool", child.available_tools)
+            await gate.wait()
+            return RunResult("WORKER_EVIDENCE", "completed", True)
+
+        async def event(event):
+            if event["type"] == "subagents_waiting" and event.get("count"):
+                self.assertEqual(len(started), 2)
+                self.assertEqual(self.tool.calls, ["PARENT_EVIDENCE"])
+                gate.set()
+
+        self.fixture([
+            ("agent_tool", json.dumps({"prompt": "Independently check the given evidence.",
+                "count": 2, "run_in_background": True, "response_format": "json"})),
+            ("record_tool", '{"value":"PARENT_EVIDENCE"}'),
+            "PROVISIONAL",
+            "SYNTHESIS_WITH_ALL_EVIDENCE",
+        ])
+        with patch.object(QueryEngine, "run", child_run):
+            result = await asyncio.wait_for(self.engine._run_loop(
+                "Run two independent checks while working on the main analysis, then combine the results.",
+                sys_print_callback=lambda _: None, event_callback=event), 15)
+        self.assertTrue(result.ok, result)
+        self.assertEqual(result.text, "SYNTHESIS_WITH_ALL_EVIDENCE")
+        self.assertEqual(len(self.engine.subagent_registry), 2)
+        self.assertTrue(all(row["status"] == "completed" for row in self.engine.subagent_registry))
+        self.assertIn("WORKER_EVIDENCE", json.dumps(self.requests[-1]["messages"]))
+        self.assertEqual(len(self.requests), 4, "No hidden planning call or worker relaunch")
+
     async def test_proactive_policy_and_nonblocking_guidance_reach_real_model_request(self):
         self.engine.set_collaboration_mode("ultra")
         self.fixture(["A bounded research plan."])
@@ -244,7 +282,10 @@ class ConversationPolicyTests(unittest.IsolatedAsyncioTestCase):
         request = self.requests[0]
         system = "\n".join(message["content"] for message in request["messages"] if message["role"] == "system")
         self.assertIn("Proactive delegation is enabled", system)
-        self.assertIn("delegate bounded assignments early", system)
+        self.assertIn("instead of doing every branch yourself", system)
+        self.assertEqual(system.count("# Collaboration: ultra"), 1)
+        self.assertTrue(system.endswith(self.engine._collaboration_instructions()))
+        self.assertGreater(system.index("# Collaboration: ultra"), system.index("# Tool-Specific Rules"))
         self.assertIn("run_in_background=true", system)
         self.assertNotIn("run_in_background=false when the current answer requires", system)
         worker = next(tool["function"] for tool in request["tools"] if tool["function"]["name"] == "agent_tool")

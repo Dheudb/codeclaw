@@ -69,6 +69,10 @@ async function choose(mode) {
     await picker().waitFor(); await page.waitForFunction(() => !document.querySelector(".collaboration-picker").disabled);
     assert(requests.length > 0 && JSON.stringify(requests[0]).includes("# Collaboration: ultra"));
     assert(JSON.stringify(requests[0].messages).includes("Proactive delegation is enabled"));
+    const system = requests[0].messages.filter((message) => message.role === "system").map((message) => message.content).join("\n");
+    assert.equal(system.split("# Collaboration: ultra").length - 1, 1);
+    assert(system.indexOf("# Collaboration: ultra") > system.indexOf("# Tool-Specific Rules"));
+    assert(system.includes("instead of doing every branch yourself"));
     assert(JSON.stringify(requests[0].messages).includes("run_in_background=true"));
     assert(!JSON.stringify(requests[0].messages).includes("run_in_background=false when the current answer requires"));
     assert(requests[0].tools.some((tool) => tool.function.name === "agent_tool" && tool.function.description.includes("bounded independent assignment")));
