@@ -123,5 +123,8 @@ class BaseAgenticTool(ABC):
             return enriched
         
         if isinstance(raw_res, str) and res_str:
+            if self.name == "command_tool":
+                # Control receipts must stay JSON. Their cwd already records workspace routing.
+                return raw_res
             return res_str + "\\n" + raw_res
         return raw_res

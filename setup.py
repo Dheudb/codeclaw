@@ -35,6 +35,7 @@ setup(
         ],
     },
     extras_require={
+        "dev": ["pyflakes>=3.4,<5"],
         "mcp": ["mcp>=1.30,<2; python_version >= '3.10'"],
         "browser": ["playwright>=1.40"],
         "tokenizers": ["tiktoken", "transformers>=4.0"],

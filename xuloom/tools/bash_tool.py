@@ -1,4 +1,5 @@
 import os
+from xuloom.utils.shell import decode_output, process_options, shell_guidance, terminate_process_tree
 import asyncio
 import re
 from pydantic import BaseModel, Field
@@ -16,7 +17,7 @@ class BashToolInput(BaseModel):
 
 class BashTool(BaseAgenticTool):
     name = "bash_tool"
-    description = "Executes a given bash command and returns its output. The working directory persists between commands, but shell state does not."
+    description = "Runs a native shell command (Windows cmd.exe on Windows, /bin/sh on Unix), not necessarily Bash. Prefer command_tool argv/stdin for exact arguments."
     input_schema = BashToolInput
     risk_level = "high"
 
@@ -39,17 +40,23 @@ class BashTool(BaseAgenticTool):
         return rendered[:240]
 
     async def _run_git_capture(self, git_command: str, cwd: str = None, timeout: float = 10.0) -> str:
+        process = None
         try:
             process = await asyncio.create_subprocess_shell(
                 git_command,
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **process_options(),
             )
             stdout_bytes, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
             if process.returncode == 0 and stdout_bytes:
-                return stdout_bytes.decode("utf-8", errors="replace").strip()
+                return decode_output(stdout_bytes).strip()
+        except asyncio.CancelledError:
+            await asyncio.shield(terminate_process_tree(process))
+            raise
         except Exception:
+            await terminate_process_tree(process)
             return ""
         return ""
 
@@ -90,7 +97,7 @@ class BashTool(BaseAgenticTool):
         }
 
     def prompt(self) -> str:
-        return """IMPORTANT: Avoid using bash_tool to run cat, head, tail, sed, awk, find, grep, or echo commands unless explicitly instructed. Instead use the appropriate dedicated tool:
+        return shell_guidance() + """IMPORTANT: Avoid using bash_tool to run cat, head, tail, sed, awk, find, grep, or echo commands unless explicitly instructed. Instead use the appropriate dedicated tool:
  - File search: Use glob_tool (NOT find or ls)
  - Content search: Use grep_tool (NOT grep or rg)
  - Read files: Use file_read_tool (NOT cat/head/tail)
@@ -188,7 +195,10 @@ When the user asks you to create a new git commit:
         run_in_background: bool = False,
     ) -> dict:
         task_manager = self.context.get("shell_task_manager")
-        cwd = None
+        cwd = self.context.get("session_cwd")
+        sandbox = self.context.get("sandbox_manager")
+        if sandbox and sandbox.active_sandbox:
+            cwd = sandbox.resolve_working_directory(cwd or os.getcwd())
 
         if not command:
             return build_tool_result(
@@ -214,6 +224,7 @@ When the user asks you to create a new git commit:
             )
 
         effective_timeout = min((timeout or 120000), 600000) / 1000.0
+        process = None
         try:
             commit_context = {}
             if self._looks_like_git_commit(command):
@@ -228,14 +239,15 @@ When the user asks you to create a new git commit:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                **process_options(),
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
             
             output = ""
             if stdout_bytes:
-                output += stdout_bytes.decode('utf-8', errors='replace')
+                output += decode_output(stdout_bytes)
             if stderr_bytes:
-                error_str = stderr_bytes.decode('utf-8', errors='replace')
+                error_str = decode_output(stderr_bytes)
                 if error_str.strip():
                     output += f"\n--- STDERR ---\n{error_str}"
 
@@ -300,15 +312,9 @@ When the user asks you to create a new git commit:
                     is_error=process.returncode != 0,
                 )
                 
-            # Safeguard Truncation logic — aligned with Claude Code's maxResultSizeChars: 30_000
-            max_length = 30000
+            # The common serializer archives the full result and supplies a read cursor.
             truncated = False
-            if len(output) > max_length:
-                prefix = output[:12000]
-                suffix = output[-12000:]
-                output = f"{prefix}\n\n... [TRUNCATED {len(output) - 24000} chars] ...\n\n{suffix}"
-                truncated = True
-                
+
             return build_tool_result(
                 ok=process.returncode == 0,
                 content=output,
@@ -322,8 +328,11 @@ When the user asks you to create a new git commit:
                 is_error=process.returncode != 0,
             )
             
+        except asyncio.CancelledError:
+            await asyncio.shield(terminate_process_tree(process))
+            raise
         except asyncio.TimeoutError:
-            process.kill()
+            await terminate_process_tree(process)
             if self._looks_like_git_commit(command):
                 commit_context = await self._build_commit_attribution(command, cwd=cwd)
                 tracker = self._artifact_tracker()

@@ -1,4 +1,5 @@
 import json
+from xuloom.utils.shell import shell_guidance
 from typing import List, Optional
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -36,7 +37,7 @@ class CommandTool(BaseAgenticTool):
         return self.is_read_only_call(action=action)
 
     def prompt(self):
-        return ("Use command_tool for structured control JSON and UTF-8 stdin instead of shell pipes, temporary wrappers or quoting large text. "
+        return (shell_guidance() + "Use command_tool for structured control JSON and UTF-8 stdin instead of shell pipes, temporary wrappers or quoting large text. "
                 "start with argv and optional stdin; stdin closes by default. For interactive pipe programs set keep_stdin_open=true, "
                 "then write exact stdin and eof=true when finished. poll never kills a live command. "
                 "wait_ms accepts 0..120000 milliseconds (up to 120 seconds) and returns early on completion; timeout_ms separately bounds total process runtime. "

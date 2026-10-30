@@ -7,6 +7,32 @@ from pathlib import Path
 SNAPSHOT_LIMIT = 200_000
 
 
+def record_written_file(context, path, before, operation, *, before_snapshot=None,
+                        target_preview="", replacement_preview=""):
+    """Observers run after the mutation; their failure must not invite a replay."""
+    warnings = []
+    def observe(name, callback):
+        try:
+            return callback()
+        except Exception as error:
+            warnings.append({"observer": name, "error": str(error)[:500]})
+            return None
+    cache = context.get("file_state_cache")
+    snapshot = observe("file_state_cache", lambda: cache.record_write(path)) if cache is not None else None
+    context.setdefault("read_file_state", {})[path] = True
+    notify_change(context, path, before, read_snapshot(path), operation)
+    tracker = context.get("artifact_tracker")
+    if tracker is not None:
+        observe("artifact_tracker", lambda: tracker.record_file_change(path=path, operation=operation,
+            before_snapshot=before_snapshot, after_snapshot=snapshot, target_preview=target_preview,
+            replacement_preview=replacement_preview, agent_id=context.get("agent_id"), session_id=context.get("session_id")))
+    verifier = context.get("verification_manager")
+    if verifier is not None:
+        observe("verification_manager", lambda: verifier.record_file_modification(path, operation))
+    return snapshot, {"write_applied": True, **({"post_write_warnings": warnings,
+        "retry_advice": "File was written. Do not repeat the mutation to repair observer records."} if warnings else {})}
+
+
 def describe_change(path, before, after, operation="edit"):
     available = before is not None and after is not None
     record = {"path": str(path), "operation": operation, "updatedAt": int(time.time() * 1000),

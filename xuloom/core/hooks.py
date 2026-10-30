@@ -1,3 +1,4 @@
+from xuloom.utils.shell import decode_output, process_options, terminate_process_tree
 import asyncio
 import json
 import os
@@ -324,6 +325,7 @@ class HookManager:
 
         is_windows = sys.platform == "win32"
         shell_cmd = command
+        proc = None
 
         try:
             if is_windows:
@@ -334,6 +336,7 @@ class HookManager:
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
                     cwd=os.getcwd(),
+                    **process_options(),
                 )
             else:
                 proc = await asyncio.create_subprocess_exec(
@@ -343,6 +346,7 @@ class HookManager:
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
                     cwd=os.getcwd(),
+                    **process_options(),
                 )
 
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -350,8 +354,8 @@ class HookManager:
                 timeout=timeout,
             )
 
-            stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-            stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+            stdout = decode_output(stdout_bytes) if stdout_bytes else ""
+            stderr = decode_output(stderr_bytes) if stderr_bytes else ""
             exit_code = proc.returncode or 0
 
             json_output = None
@@ -370,11 +374,11 @@ class HookManager:
                 json_output=json_output,
             )
 
+        except asyncio.CancelledError:
+            await asyncio.shield(terminate_process_tree(proc))
+            raise
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            await terminate_process_tree(proc)
             return CommandHookResult(
                 stderr=f"Hook command timed out after {timeout}s: {command}",
                 exit_code=-1,

@@ -4,7 +4,8 @@ import uuid
 from typing import Optional
 from pydantic import BaseModel, Field
 from xuloom.tools.base import BaseAgenticTool
-from xuloom.features.file_changes import notify_change, read_snapshot
+from xuloom.context.tool_results import build_tool_result
+from xuloom.features.file_changes import record_written_file, read_snapshot
 
 
 class NotebookEditToolInput(BaseModel):
@@ -102,21 +103,21 @@ class NotebookEditTool(BaseAgenticTool):
         mode = edit_mode or "replace"
 
         if not os.path.exists(abs_path):
-            return f"Error: Notebook '{abs_path}' does not exist."
+            return build_tool_result(ok=False, content=f"Error: Notebook '{abs_path}' does not exist.", is_error=True)
         if not os.path.isfile(abs_path):
-            return f"Error: '{abs_path}' is not a file."
+            return build_tool_result(ok=False, content=f"Error: '{abs_path}' is not a file.", is_error=True)
 
         cache = self._cache()
         has_read = bool(self.context.get("read_file_state", {}).get(abs_path, False)
                         or (cache is not None and cache.has_been_read(abs_path)))
         if not has_read:
-            return "Error: Notebook has not been read yet. Use file_read_tool to read it first."
+            return build_tool_result(ok=False, content="Error: Notebook has not been read yet. Use file_read_tool to read it first.", is_error=True)
 
         try:
             with open(abs_path, "r", encoding="utf-8") as f:
                 notebook = json.load(f)
         except Exception as e:
-            return f"Error reading notebook: {e}"
+            return build_tool_result(ok=False, content=f"Error reading notebook: {e}", is_error=True)
 
         cells = notebook.get("cells", [])
         nbformat_major = notebook.get("nbformat", 4)
@@ -139,7 +140,7 @@ class NotebookEditTool(BaseAgenticTool):
                         cell_type = "code"
                     cell_index = len(cells)
                 else:
-                    return f"Error: Cell '{cell_id}' not found in notebook with {len(cells)} cells."
+                    return build_tool_result(ok=False, content=f"Error: Cell '{cell_id}' not found in notebook with {len(cells)} cells.", is_error=True)
         else:
             cell_index = 0
 
@@ -163,14 +164,14 @@ class NotebookEditTool(BaseAgenticTool):
 
         elif mode == "delete":
             if cell_index >= len(cells):
-                return f"Error: Cell index {cell_index} out of range (notebook has {len(cells)} cells)."
+                return build_tool_result(ok=False, content=f"Error: Cell index {cell_index} out of range (notebook has {len(cells)} cells).", is_error=True)
             deleted_type = cells[cell_index].get("cell_type", "unknown")
             cells.pop(cell_index)
             result_msg = f"Deleted {deleted_type} cell at index {cell_index}."
 
         else:
             if cell_index >= len(cells):
-                return f"Error: Cell index {cell_index} out of range (notebook has {len(cells)} cells)."
+                return build_tool_result(ok=False, content=f"Error: Cell index {cell_index} out of range (notebook has {len(cells)} cells).", is_error=True)
             target = cells[cell_index]
             target["source"] = new_source
             if target.get("cell_type") == "code":
@@ -190,13 +191,9 @@ class NotebookEditTool(BaseAgenticTool):
             with open(abs_path, "w", encoding="utf-8") as f:
                 json.dump(notebook, f, indent=1, ensure_ascii=False)
                 f.write("\n")
-            if cache is not None:
-                cache.record_write(abs_path)
-            self.context.setdefault("read_file_state", {})[abs_path] = True
-            notify_change(self.context, abs_path, before_text, read_snapshot(abs_path), "edit")
-            vm = self.context.get("verification_manager")
-            if vm is not None:
-                vm.record_file_modification(abs_path, "notebook_edit")
+            _, write_metadata = record_written_file(self.context, abs_path, before_text, "notebook_edit")
+            if write_metadata.get("post_write_warnings"):
+                return build_tool_result(ok=True, content=result_msg, metadata=write_metadata)
             return result_msg
 
         queue = self._write_queue()
@@ -205,4 +202,4 @@ class NotebookEditTool(BaseAgenticTool):
                 return await queue.run(abs_path, "notebook_edit", _perform_write)
             return _perform_write()
         except Exception as e:
-            return f"Error writing notebook: {e}"
+            return build_tool_result(ok=False, content=f"Error writing notebook: {e}", is_error=True)

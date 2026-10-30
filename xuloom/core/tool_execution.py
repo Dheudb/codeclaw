@@ -218,6 +218,10 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
                     # Legacy string tools use a leading error marker; ordinary result text is not a status protocol.
                     failed = str(res_text).lstrip().startswith(("Permission denied", "Error:", "Error reading file:",
                         "Sub-agent spawn denied:", "Status: error", "Tool Exception Caught"))
+                if tool_name == "command_tool" and isinstance(raw_result, str):
+                    command_receipt = json.loads(raw_result)
+                    failed = isinstance(command_receipt, dict) and command_receipt.get("status") in {
+                        "failed", "cancelled", "interrupted", "timed_out", "output_limit", "storage_error"}
                 status = "error" if failed else "ok"
         except asyncio.CancelledError:
             if handler_invoked:
@@ -242,7 +246,12 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
         except PersistenceError:
             raise
         except Exception as e:
-            res_text = f"Tool Exception Caught: {str(e)}"
+            res_text = serialize_tool_result(build_tool_result(ok=False,
+                content=f"Tool Exception Caught: {str(e)}" + (
+                    "\nExecution may have begun. Inspect existing state and saved results before retrying; do not blindly repeat the operation."
+                    if handler_invoked else "\nThe handler was not invoked."),
+                metadata={"code": "tool_execution_error", "handler_invoked": handler_invoked,
+                    "effects": "uncertain" if handler_invoked else "none"}, is_error=True))
 
     if before_tool_prefix:
         res_text = before_tool_prefix + str(res_text)

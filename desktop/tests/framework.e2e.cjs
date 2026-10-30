@@ -60,7 +60,7 @@ const server = http.createServer((req, res) => {
             assert.equal(result.agent_id, workerId); assert.equal(result.turn, 2); assert.equal(result.pending_message_count, 0);
             return reply(res, null, "agent_tool", { action: "capacity" });
           case 4:
-            assert.equal(result.active, 0); assert.equal(result.available, 10);
+            assert.equal(result.active, 0); assert.equal(result.limit, null); assert.equal(result.available, null);
             return reply(res, null, "command_tool", { argv: [python, "-c", "import sys,json; print(json.dumps({'echo':sys.stdin.read()},ensure_ascii=False))"], stdin: payload, wait_ms: 15000 });
           case 5:
             assert.equal(result.status, "completed"); assert.equal(JSON.parse(result.output.text).echo, payload);

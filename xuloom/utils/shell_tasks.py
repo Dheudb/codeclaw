@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 import uuid
+from xuloom.utils.shell import decode_output, process_options, terminate_process_tree
 from typing import Optional
 
 
@@ -21,12 +22,12 @@ class ShellTaskManager:
         normalized_cwd = os.path.abspath(cwd or os.getcwd())
 
         log_handle = open(log_path, "ab")
-        process = await asyncio.create_subprocess_shell(
-            command,
-            cwd=normalized_cwd,
-            stdout=log_handle,
-            stderr=log_handle,
-        )
+        try:
+            process = await asyncio.create_subprocess_shell(command, cwd=normalized_cwd,
+                stdout=log_handle, stderr=log_handle, **process_options())
+        except BaseException:
+            log_handle.close()
+            raise
 
         self.tasks[task_id] = {
             "task_id": task_id,
@@ -59,8 +60,8 @@ class ShellTaskManager:
             return None
 
         try:
-            with open(record["log_path"], "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
+            with open(record["log_path"], "rb") as f:
+                content = decode_output(f.read())
         except FileNotFoundError:
             content = ""
 
@@ -78,8 +79,7 @@ class ShellTaskManager:
         record = self.tasks[task_id]
         process = record.get("process")
         if process and process.returncode is None:
-            process.kill()
-            await process.wait()
+            await terminate_process_tree(process)
         self._refresh_task(task_id)
         return self._export_record(task_id)
 

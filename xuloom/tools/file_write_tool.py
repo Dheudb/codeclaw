@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 from xuloom.context.tool_results import build_tool_result
 from xuloom.tools.base import BaseAgenticTool
-from xuloom.features.file_changes import notify_change, read_snapshot
+from xuloom.features.file_changes import record_written_file, read_snapshot
 
 
 class FileWriteToolInput(BaseModel):
@@ -87,23 +87,8 @@ class FileWriteTool(BaseAgenticTool):
             os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
             with open(abs_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            after_snapshot = cache.record_write(abs_path) if cache is not None else None
-            self.context.setdefault("read_file_state", {})[abs_path] = True
-            notify_change(self.context, abs_path, before_text, read_snapshot(abs_path), operation)
-            if tracker is not None:
-                tracker.record_file_change(
-                    path=abs_path,
-                    operation=operation,
-                    before_snapshot=before_snapshot,
-                    after_snapshot=after_snapshot,
-                    target_preview="",
-                    replacement_preview=content,
-                    agent_id=agent_id,
-                    session_id=session_id,
-                )
-            vm = self.context.get("verification_manager")
-            if vm is not None:
-                vm.record_file_modification(abs_path, operation)
+            after_snapshot, write_metadata = record_written_file(self.context, abs_path, before_text, operation,
+                before_snapshot=before_snapshot, replacement_preview=content)
             success_verb = "created" if operation == "create" else "overwrote"
             return build_tool_result(
                 ok=True,
@@ -112,6 +97,7 @@ class FileWriteTool(BaseAgenticTool):
                     "path": abs_path,
                     "operation": operation,
                     "bytes_written": len(content.encode("utf-8")),
+                    **write_metadata,
                     "sha256_before": (before_snapshot or {}).get("sha256"),
                     "sha256_after": (after_snapshot or {}).get("sha256"),
                     "size_before": (before_snapshot or {}).get("size"),

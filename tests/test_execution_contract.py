@@ -15,6 +15,17 @@ from xuloom.tools.repl_tool import ReplTool
 
 
 class ExecutionContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_command_json_receipt_marks_tool_error(self):
+        from xuloom.tools.command_tool import CommandTool
+        tool = CommandTool()
+        tool.execute = AsyncMock(return_value='{"id":"fixture-command","status":"storage_error","exit_code":0}')
+        self.engine.available_tools["command_tool"] = tool
+        self.engine._sync_message_context()
+        self.fixture([("command_tool", '{"action":"list"}'), "Failure reported"])
+        await self.engine.run("inspect command", sys_print_callback=lambda _: None)
+        rows = [row for row in self.engine.recent_tool_activity if row["tool_name"] == "command_tool"]
+        self.assertTrue(rows[0]["tool_result"]["is_error"])
+
     asyncSetUp = recovery.RecoveryTests.asyncSetUp
     asyncTearDown = recovery.RecoveryTests.asyncTearDown
     fixture = recovery.RecoveryTests.fixture

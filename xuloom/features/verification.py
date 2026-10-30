@@ -4,6 +4,7 @@ Verification Agent
 Optional assessment support. The generic engine does not automatically invoke it.
 """
 import copy
+import os
 from typing import Optional
 
 from xuloom.agents.builtin_agents import VERIFICATION_SYSTEM_PROMPT, VERIFICATION_CRITICAL_REMINDER

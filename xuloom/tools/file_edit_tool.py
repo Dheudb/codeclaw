@@ -4,7 +4,7 @@ import re
 from pydantic import BaseModel, Field
 from xuloom.tools.base import BaseAgenticTool
 from xuloom.context.tool_results import build_tool_result
-from xuloom.features.file_changes import notify_change, read_snapshot
+from xuloom.features.file_changes import record_written_file, read_snapshot
 
 class FileEditToolInput(BaseModel):
     file_path: str = Field(..., description="The absolute path to the file to modify")
@@ -199,23 +199,8 @@ class FileEditTool(BaseAgenticTool):
                 os.makedirs(os.path.dirname(abs_path) or '.', exist_ok=True)
                 with open(abs_path, "w", encoding="utf-8") as f:
                     f.write(new_string)
-                created_snapshot = cache.record_write(abs_path) if cache is not None else None
-                self.context.setdefault("read_file_state", {})[abs_path] = True
-                notify_change(self.context, abs_path, "", read_snapshot(abs_path), "create")
-                if tracker is not None:
-                    tracker.record_file_change(
-                        path=abs_path,
-                        operation="create",
-                        before_snapshot=None,
-                        after_snapshot=created_snapshot,
-                        target_preview=old_string,
-                        replacement_preview=new_string,
-                        agent_id=agent_id,
-                        session_id=session_id,
-                    )
-                vm = self.context.get("verification_manager")
-                if vm is not None:
-                    vm.record_file_modification(abs_path, "create")
+                created_snapshot, write_metadata = record_written_file(self.context, abs_path, "", "create",
+                    replacement_preview=new_string)
                 return build_tool_result(
                     ok=True,
                     content=f"Successfully created new file '{abs_path}'.",
@@ -223,6 +208,7 @@ class FileEditTool(BaseAgenticTool):
                         "path": abs_path,
                         "operation": "create",
                         "bytes_written": len(new_string.encode("utf-8")),
+                        **write_metadata,
                         "sha256": (created_snapshot or {}).get("sha256"),
                         "size": (created_snapshot or {}).get("size"),
                         "mtime": (created_snapshot or {}).get("mtime"),
@@ -347,26 +333,9 @@ class FileEditTool(BaseAgenticTool):
             new_content = content_to_use.replace(target_to_use, repl_to_use)
             with open(abs_path, "w", encoding="utf-8") as file:
                 file.write(new_content)
-            after_snapshot = cache.record_write(abs_path) if cache is not None else None
-                
-            # Keep read state fresh since we're the ones modifying it
-            self.context.setdefault("read_file_state", {})[abs_path] = True
-            notify_change(self.context, abs_path, content, read_snapshot(abs_path), "edit")
-            if tracker is not None:
-                    tracker.record_file_change(
-                    path=abs_path,
-                    operation="edit",
-                    before_snapshot=before_snapshot,
-                    after_snapshot=after_snapshot,
-                    target_preview=old_string,
-                    replacement_preview=new_string,
-                    agent_id=agent_id,
-                    session_id=session_id,
-                )
-            vm = self.context.get("verification_manager")
-            if vm is not None:
-                vm.record_file_modification(abs_path, "edit")
-            
+            after_snapshot, write_metadata = record_written_file(self.context, abs_path, content, "edit",
+                before_snapshot=before_snapshot, target_preview=old_string, replacement_preview=new_string)
+
             msg = f"Successfully edited file '{abs_path}'."
             if replace_all and occurrences > 1:
                 msg += f" (Replaced {occurrences} occurrences system-wide)."
@@ -386,6 +355,7 @@ class FileEditTool(BaseAgenticTool):
                     "match_ratio": match_ratio,
                     "line_ending_normalized": os_fallback_used,
                     "bytes_written": len(new_content.encode("utf-8")),
+                    **write_metadata,
                     "sha256_before": (before_snapshot or {}).get("sha256"),
                     "sha256_after": (after_snapshot or {}).get("sha256"),
                     "size_before": (before_snapshot or {}).get("size"),

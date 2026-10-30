@@ -8,6 +8,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from xuloom.utils.shell import output_encoding
 
 
 class CommandSessions:
@@ -28,7 +29,7 @@ class CommandSessions:
     async def start(self, *, argv=None, command=None, cwd, owner, stdin=None, keep_stdin_open=False, timeout_ms=120000):
         if bool(argv) == bool(command):
             raise ValueError("Provide either argv or command")
-        if argv and (not all(isinstance(v, str) and "\x00" not in v for v in argv)):
+        if argv and (not isinstance(argv, (list, tuple)) or not all(isinstance(v, str) and "\x00" not in v for v in argv)):
             raise ValueError("argv must contain strings without NUL")
         self.root.mkdir(parents=True, exist_ok=True)
         identity = "cmd-" + uuid.uuid4().hex
@@ -55,18 +56,31 @@ class CommandSessions:
         self.records[identity] = row
         async def pump(stream, name):
             size = 0
-            with (self.root / (identity + "." + name)).open("wb") as output:
-                while True:
-                    chunk = await stream.read(65536)
-                    if not chunk:
-                        break
-                    if size + len(chunk) > self.OUTPUT_LIMIT:
-                        row["status"] = "output_limit"
-                        await self._kill(row)
-                        break
-                    output.write(chunk)
-                    output.flush()
-                    size += len(chunk)
+            killer = None
+            try:
+                with (self.root / (identity + "." + name)).open("wb") as output:
+                    while True:
+                        chunk = await stream.read(65536)
+                        if not chunk:
+                            break
+                        if killer is not None:
+                            continue  # Drain the pipe while the owned process tree is stopping.
+                        if size + len(chunk) > self.OUTPUT_LIMIT:
+                            row["status"] = "output_limit"
+                            killer = asyncio.create_task(self._kill(row))
+                            continue
+                        output.write(chunk)
+                        output.flush()
+                        size += len(chunk)
+            except OSError as error:
+                row["status"] = "storage_error"
+                row["output_error"] = str(error)
+                killer = killer or asyncio.create_task(self._kill(row))
+                while await stream.read(65536):
+                    pass
+            finally:
+                if killer:
+                    await killer
         pumps = [asyncio.create_task(pump(process.stdout, "stdout")), asyncio.create_task(pump(process.stderr, "stderr"))]
         async def monitor():
             try:
@@ -79,7 +93,10 @@ class CommandSessions:
                 await self._kill(row)
                 raise
             finally:
-                await asyncio.gather(*pumps)
+                failures = await asyncio.gather(*pumps, return_exceptions=True)
+                if any(isinstance(error, BaseException) for error in failures):
+                    row["status"] = "storage_error"
+                    row["output_error"] = "; ".join(str(error) for error in failures if isinstance(error, BaseException))
                 row["exit_code"] = process.returncode
                 row["stdin_open"] = False
                 if row["status"] == "running":
@@ -87,14 +104,22 @@ class CommandSessions:
                 row["finished_at"] = int(time.time() * 1000)
                 if launch:
                     launch.close()
-                self._save(row)
+                try:
+                    self._save(row)
+                except OSError as error:
+                    row["status"] = "storage_error"
+                    row["persistence_error"] = str(error)
         row["monitor"] = asyncio.create_task(monitor())
         try:
             await self.write(identity, owner, stdin or "", eof=not keep_stdin_open)
         except BaseException:
             await self.cancel(identity, owner)
             raise
-        self._save(row)
+        try:
+            self._save(row)
+        except BaseException:
+            await self.cancel(identity, owner)
+            raise
         return identity
 
     async def _kill(self, row):
@@ -151,28 +176,33 @@ class CommandSessions:
         return self.snapshot(row)
 
     def read(self, identity, owner, stream="stdout", offset=0, max_bytes=4000):
+        if stream not in {"stdout", "stderr"} or offset < 0 or max_bytes < 4:
+            raise ValueError("Invalid output stream, offset or page size")
         row = self._get(identity, owner)
         path = self.root / (identity + "." + stream)
         size = path.stat().st_size if path.exists() else 0
         if offset > size:
             raise ValueError("Output offset exceeds current output size")
         data = b""
+        encoding = "utf-8"
         if path.exists():
             with path.open("rb") as handle:
+                encoding = output_encoding(handle.read(65536))
                 handle.seek(offset)
                 data = handle.read(max_bytes)
-        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        decoder = codecs.getincrementaldecoder(encoding)("replace")
         terminal = row["status"] != "running" and offset + len(data) == size
         text = decoder.decode(data, final=terminal)
         consumed = len(data) - len(decoder.getstate()[0])
-        return {"stream": stream, "text": text, "offset": offset, "next_offset": offset + consumed,
+        return {"stream": stream, "encoding": encoding, "text": text, "offset": offset, "next_offset": offset + consumed,
                 "total_bytes": size, "eof": row["status"] != "running" and offset + consumed == size,
                 "has_more": offset + consumed < size}
 
     async def cancel(self, identity, owner):
         row = self._get(identity, owner)
         if row.get("process") and row["process"].returncode is None:
-            row["status"] = "cancelled"
+            if row["status"] == "running":
+                row["status"] = "cancelled"
             await self._kill(row)
         if row.get("monitor"):
             await asyncio.shield(row["monitor"])
@@ -184,9 +214,17 @@ class CommandSessions:
 
     def _save(self, row):
         from xuloom.core.storage import atomic_json
-        atomic_json(self.root / (row["id"] + ".json"), self.snapshot(row))
+        try:
+            atomic_json(self.root / (row["id"] + ".json"), self.snapshot(row))
+        except OSError as error:
+            row["status"] = "storage_error"
+            row["persistence_error"] = str(error)
+            raise
         if self.on_status:
-            self.on_status({k: row[k] for k in ("id", "owner", "status", "exit_code")})
+            try:
+                self.on_status({k: row[k] for k in ("id", "owner", "status", "exit_code")})
+            except Exception as error:
+                row["notification_error"] = str(error)
 
     def restore(self):
         if not self.root.exists():
