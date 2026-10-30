@@ -111,11 +111,12 @@ python desktop/scripts/stage-update.py
 将已测试的源码提交后，确认原安装目录的应用版本与准备发布的标签一致，再归档：
 
 ```powershell
-python desktop/scripts/release.py --tag v0.1.0-beta.4
+python desktop/scripts/release.py --tag v0.1.0
 ```
 
-脚本核对已安装引擎、前端和 Electron 代码与源码一致，仅打包原安装目录，不创建另一份 EXE。
+脚本核对引擎、前端和 Electron 代码与源码一致，复用原安装的 EXE 与 Python 运行时，不创建另一份 EXE。
+应用仍运行时，也可加 `--staged-resources desktop/build/脚本输出的暂存目录`：先把已验证的新资源合入发行 ZIP，不修改正在运行的安装；本地更新器仍需等待应用退出，成品验证与暂存验证分别记录。
 它排除 Python 缓存、本机 wheel 安装来源信息和含构建机路径的 pip CLI 启动器，校验 ZIP 完整性并生成 SHA256 校验文件；
 压缩包内 `RELEASE.json` 记录源码提交、版本和构建号。
 将同一提交推送并创建版本标签，在 GitHub Release 上传 ZIP 和 `SHA256SUMS.txt`。
-首次发布使用 Pre-release，发布说明见 `docs/releases/`。此流程无需运行 GitHub Actions。
+正式版使用普通 Release，不勾选 Pre-release；发布说明明确记录验证范围。此流程无需运行 GitHub Actions。

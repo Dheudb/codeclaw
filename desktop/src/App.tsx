@@ -465,7 +465,6 @@ export default function App() {
           <strong>
             Xuloom<span>序织</span>
           </strong>
-          <span className="preview-badge">预览</span>
         </div>
         <button
           className="new-task"

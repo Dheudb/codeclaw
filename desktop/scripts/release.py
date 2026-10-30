@@ -1,4 +1,4 @@
-"""Archive the verified, existing portable installation; never rebuild or replace its EXE."""
+"""Archive verified resources with the existing runtime; never replace a running EXE."""
 import argparse
 import hashlib
 import json
@@ -15,20 +15,62 @@ def git(*args):
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
 
 
+def archive_files(package, replacements=()):
+    """Overlay complete resource trees in the ZIP, without mutating the installation."""
+    trees = [(Path(target), Path(source)) for target, source in replacements]
+    files = {}
+    for path in package.rglob("*"):
+        relative = path.relative_to(package)
+        if any(relative == target or target in relative.parents for target, _ in trees):
+            continue
+        files[relative] = path
+    for target, source in trees:
+        if target.is_absolute() or ".." in target.parts or not source.is_dir():
+            raise ValueError("Invalid staged resource tree")
+        if source.is_symlink() or getattr(source.lstat(), "st_file_attributes", 0) & 0x400:
+            raise ValueError("Refusing a linked staged resource tree")
+        for path in source.rglob("*"):
+            files[target / path.relative_to(source)] = path
+    return sorted(files.items())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
+    parser.add_argument("--staged-resources", type=Path, help="Use a validated resource update without changing the running installation")
     args = parser.parse_args()
     if not re.fullmatch(r"v\d+\.\d+\.\d+(?:-[a-z0-9.]+)?", args.tag):
-        raise SystemExit("Use a version tag such as v0.1.0-beta.1")
+        raise SystemExit("Use a version tag such as v0.1.0")
     if git("status", "--porcelain", "--untracked-files=normal"):
         raise SystemExit("Commit the release sources before creating a distributable")
     package = DESKTOP / "release/Xuloom-win32-x64"
     app = package / "resources/app"
     site = package / "resources/python/Lib/site-packages/xuloom"
+    replacements = []
+    if args.staged_resources:
+        stage = args.staged_resources.resolve()
+        if not stage.is_relative_to((DESKTOP / "build").resolve()):
+            raise SystemExit("Staged resources must be inside desktop/build")
+        manifest = json.loads((stage / "manifest.json").read_text(encoding="utf-8"))
+        if hashlib.sha256((package / "Xuloom.exe").read_bytes()).hexdigest() != manifest["originalExeSha256"]:
+            raise SystemExit("Staged resources belong to a different runtime")
+        metadata_directory = manifest["metadataDirectory"]
+        if not re.fullmatch(r"xuloom-[0-9A-Za-z_.-]+\.dist-info", metadata_directory):
+            raise SystemExit("Invalid staged package metadata")
+        app, site = stage / "app", stage / "xuloom"
+        replacements = [(Path("resources/app"), app), (Path("resources/python/Lib/site-packages/xuloom"), site),
+            (Path("resources/python/Lib/site-packages") / metadata_directory, stage / "metadata")]
+        for dependency in manifest["pythonPackages"]:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", dependency) or dependency in {"xuloom", metadata_directory}:
+                raise SystemExit("Invalid staged dependency")
+            replacements.append((Path("resources/python/Lib/site-packages") / dependency, stage / "dependencies" / dependency))
+        if len({target for target, _ in replacements}) != len(replacements):
+            raise SystemExit("Duplicate staged resource tree")
+        if {p.name for p in app.iterdir()} != {"dist", "electron", "package.json"}:
+            raise SystemExit("Unexpected staged application resource")
     metadata = json.loads((app / "package.json").read_text(encoding="utf-8"))
     if metadata["version"] != args.tag[1:]:
-        raise SystemExit("Installed application version must match the release tag")
+        raise SystemExit("Application resource version must match the release tag")
     # Reject old resources, missing new modules, and additional private skill payloads.
     for directory, installed, patterns in [
         (ROOT / "xuloom", site, ("*.py", "*.md")),
@@ -58,12 +100,11 @@ def main():
               "bundledSkills": ['code-development', 'code-review', 'data-analysis', 'debug-issue', 'document-summary', 'document-writing', 'experiment-design', 'skill-creator', 'web-research']}
     skipped = 0
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for path in sorted(package.rglob("*")):
+        for relative, path in archive_files(package, replacements):
             if path.is_symlink() or getattr(path.lstat(), "st_file_attributes", 0) & 0x400:
                 raise SystemExit("Refusing a linked package path")
             if not path.is_file():
                 continue
-            relative = path.relative_to(package)
             # pip's generated launcher embeds the build interpreter's absolute path.
             local_launcher = relative.as_posix() == "resources/python/Lib/site-packages/bin/xuloom.exe"
             if "__pycache__" in relative.parts or path.suffix in {".pyc", ".pyo"} or path.name == "direct_url.json" or local_launcher:
