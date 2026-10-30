@@ -189,7 +189,7 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             "sandbox_manager",
             "browser_manager",
             "shell_task_manager",
-            "file_state_cache",
+            "incremental_write_queue",
             "memory_file_manager",
             "artifact_tracker",
             "content_replacement_manager",
@@ -214,19 +214,6 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
         sub_engine.permission_manager.approval_policy = parent_permission_manager.approval_policy
         sub_engine.tool_context["permission_manager"] = sub_engine.permission_manager
         sub_engine.tool_context["permission_handler"] = self.context.get("permission_handler")
-
-    def _merge_state_back_to_parent(self, sub_engine):
-        parent_todo_manager = self.context.get("todo_manager")
-        if parent_todo_manager is not None and getattr(sub_engine, "todo_manager", None) is not None:
-            parent_todo_manager.load(copy.deepcopy(sub_engine.todo_manager.export()))
-
-        parent_plan_manager = self.context.get("plan_manager")
-        if parent_plan_manager is not None and getattr(sub_engine, "plan_manager", None) is not None:
-            plan_state = copy.deepcopy(sub_engine.plan_manager.export())
-            parent_plan_manager.load(
-                mode=plan_state.get("mode", "normal"),
-                content=plan_state.get("content", ""),
-            )
 
     async def _write_subagent_registry_record(self, record: dict):
         registry_writer = self.context.get("register_subagent_record")

@@ -40,9 +40,8 @@ class SkillRegistry:
         payload = self.settings()
         payload.update(changes)
         self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.settings_path.with_suffix(".tmp")
-        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temp, self.settings_path)
+        from xuloom.core.storage import atomic_json
+        atomic_json(self.settings_path, payload)
         return payload
 
     def roots(self, kind="skills"):

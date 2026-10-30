@@ -32,8 +32,9 @@ def atomic_json(path, payload):
     atomic_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def atomic_text(path, text):
-    atomic_bytes(path, text.encode("utf-8"))
+def atomic_text(path, text, *, preserve_mode=False, create_only=False):
+    content = text.encode("utf-8")
+    _atomic_write(path, lambda stream: stream.write(content), preserve_mode=preserve_mode, create_only=create_only)
 
 
 def atomic_bytes(path, content):
@@ -62,14 +63,21 @@ def atomic_copy(path, source, expected_hash):
     _atomic_write(path, write)
 
 
-def _atomic_write(path, write):
+def _atomic_write(path, write, *, preserve_mode=False, create_only=False):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode & 0o7777 if preserve_mode and path.exists() else None
     fd, temporary = tempfile.mkstemp(prefix=".migration-", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
             write(stream)
             stream.flush()
             os.fsync(stream.fileno())
+        if mode is not None:
+            os.chmod(temporary, mode)
+        if create_only:
+            # Linking a fully flushed sibling temp publishes without replacing a competing file.
+            os.link(temporary, path)
+            return
         for attempt in range(6):
             try:
                 os.replace(temporary, path)
@@ -80,7 +88,10 @@ def _atomic_write(path, write):
                     raise
                 time.sleep(0.02 * (2 ** attempt))
     finally:
-        if os.path.exists(temporary): os.unlink(temporary)
+        if os.path.exists(temporary):
+            if preserve_mode and os.name == "nt":
+                os.chmod(temporary, 0o600)
+            os.unlink(temporary)
 
 
 def rebase(value, source, target):

@@ -221,7 +221,7 @@ async def execute_tool(self, tool_block, sys_print_callback=print, *, turn: int 
                 if tool_name == "command_tool" and isinstance(raw_result, str):
                     command_receipt = json.loads(raw_result)
                     failed = isinstance(command_receipt, dict) and command_receipt.get("status") in {
-                        "failed", "cancelled", "interrupted", "timed_out", "output_limit", "storage_error"}
+                        "failed", "cancelled", "interrupted", "timed_out", "output_limit", "storage_error", "output_incomplete"}
                 status = "error" if failed else "ok"
         except asyncio.CancelledError:
             if handler_invoked:

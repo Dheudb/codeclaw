@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 from xuloom.context.tool_results import build_tool_result
 from xuloom.tools.base import BaseAgenticTool
-from xuloom.features.file_changes import record_written_file, read_snapshot
+from xuloom.features.file_changes import record_written_file, read_snapshot, check_observed_file, write_file_text
 
 
 class FileWriteToolInput(BaseModel):
@@ -32,8 +32,6 @@ class FileWriteTool(BaseAgenticTool):
             "If this is an existing file, you MUST use file_read_tool first to read the file's contents. "
             "Prefer file_edit_tool for modifying existing files — it only sends the diff. "
             "Only use this tool to create new files or for complete rewrites. "
-            "NEVER create documentation files (*.md) or README files unless explicitly requested by the User. "
-            "Only use emojis if the user explicitly requests it."
         )
 
     def validate_input(self, file_path: str, content: str, **kwargs):
@@ -83,10 +81,14 @@ class FileWriteTool(BaseAgenticTool):
             before_snapshot = cache.snapshot(abs_path) if cache is not None else None
 
         def _perform_write():
+            exists_now = os.path.exists(abs_path)
+            if not file_exists and exists_now:
+                raise ValueError("File was created by another operation while waiting. Read it before overwriting; no write was performed.")
+            if file_exists:
+                check_observed_file(self.context, abs_path)
             before_text = read_snapshot(abs_path) if os.path.isfile(abs_path) else ""
             os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
-            with open(abs_path, "w", encoding="utf-8") as f:
-                f.write(content)
+            write_file_text(abs_path, content, create_only=not file_exists)
             after_snapshot, write_metadata = record_written_file(self.context, abs_path, before_text, operation,
                 before_snapshot=before_snapshot, replacement_preview=content)
             success_verb = "created" if operation == "create" else "overwrote"

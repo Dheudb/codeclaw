@@ -7,6 +7,22 @@ from pathlib import Path
 SNAPSHOT_LIMIT = 200_000
 
 
+def check_observed_file(context, path):
+    """Compare the agent's last observed version with disk inside the mutation queue."""
+    cache = context.get("file_state_cache")
+    entry = cache.get_entry(path) if cache is not None else None
+    if entry:
+        current = cache.snapshot(path)
+        if not current or not entry.get("sha256") or current.get("sha256") != entry["sha256"]:
+            raise ValueError("File changed since this agent last read it. Read the current file before editing; no write was performed.")
+
+
+def write_file_text(path, text, *, create_only=False):
+    from xuloom.core.storage import atomic_text
+    # Match normal write semantics for symlinks without replacing the link itself.
+    atomic_text(os.path.realpath(path), text, preserve_mode=True, create_only=create_only)
+
+
 def record_written_file(context, path, before, operation, *, before_snapshot=None,
                         target_preview="", replacement_preview=""):
     """Observers run after the mutation; their failure must not invite a replay."""

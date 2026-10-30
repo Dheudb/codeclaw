@@ -4,7 +4,7 @@ import re
 from pydantic import BaseModel, Field
 from xuloom.tools.base import BaseAgenticTool
 from xuloom.context.tool_results import build_tool_result
-from xuloom.features.file_changes import record_written_file, read_snapshot
+from xuloom.features.file_changes import record_written_file, read_snapshot, check_observed_file, write_file_text
 
 class FileEditToolInput(BaseModel):
     file_path: str = Field(..., description="The absolute path to the file to modify")
@@ -196,9 +196,10 @@ class FileEditTool(BaseAgenticTool):
                 )
 
             def _perform_create():
+                if os.path.exists(abs_path):
+                    raise ValueError("File was created while this edit waited. Read it before modifying; no write was performed.")
                 os.makedirs(os.path.dirname(abs_path) or '.', exist_ok=True)
-                with open(abs_path, "w", encoding="utf-8") as f:
-                    f.write(new_string)
+                write_file_text(abs_path, new_string, create_only=True)
                 created_snapshot, write_metadata = record_written_file(self.context, abs_path, "", "create",
                     replacement_preview=new_string)
                 return build_tool_result(
@@ -245,6 +246,7 @@ class FileEditTool(BaseAgenticTool):
             )
             
         def _perform_edit():
+            check_observed_file(self.context, abs_path)
             before_snapshot = cache.snapshot(abs_path) if cache is not None else None
             with open(abs_path, "r", encoding="utf-8") as file:
                 content = file.read()
@@ -331,8 +333,7 @@ class FileEditTool(BaseAgenticTool):
                 
             # Straight precise swap (either 1, or bulk all)
             new_content = content_to_use.replace(target_to_use, repl_to_use)
-            with open(abs_path, "w", encoding="utf-8") as file:
-                file.write(new_content)
+            write_file_text(abs_path, new_content)
             after_snapshot, write_metadata = record_written_file(self.context, abs_path, content, "edit",
                 before_snapshot=before_snapshot, target_preview=old_string, replacement_preview=new_string)
 

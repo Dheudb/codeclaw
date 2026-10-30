@@ -12,6 +12,26 @@ from xuloom.tools.base import BaseAgenticTool
 from xuloom.context.tool_results import build_tool_result
 
 MAX_SEARCH_RESULTS = 50
+MAX_FETCH_BYTES = 5_000_000
+
+
+def network_error(error, metadata):
+    status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+    code = ("rate_limited" if status == 429 else "http_error" if status is not None else
+            "timeout" if isinstance(error, (TimeoutError, httpx.TimeoutException)) else
+            "connection_error" if isinstance(error, httpx.NetworkError) else "provider_error")
+    retryable = status in {408, 425, 429} or status is not None and status >= 500 or code in {"timeout", "connection_error"}
+    return {**metadata, "reason": type(error).__name__, "code": code,
+            "http_status": status, "retryable": bool(retryable)}
+
+
+def extract_page(text, html):
+    if not html:
+        return text
+    soup = BeautifulSoup(text, 'lxml')
+    for element in soup(["script", "style", "nav", "footer", "meta", "noscript"]):
+        element.decompose()
+    return re.sub(r'\s+', ' ', soup.get_text(separator=' ', strip=True))
 
 class WebSearchInput(BaseModel):
     query: str = Field(..., description="The search query to look up on the web.")
@@ -54,7 +74,7 @@ IMPORTANT - Use the correct year in search queries:
                 out += f"Title: {str(r.get('title', ''))[:500]}\nURL: {r.get('href')}\nSnippet: {str(r.get('body', ''))[:2500]}\n\n"
             return build_tool_result(ok=True, content=out, metadata={"backend": "ddgs", "query": query, "result_count": len(results)})
         except Exception as e:
-            return build_tool_result(ok=False, is_error=True, content=f"Built-in web search service failed ({type(e).__name__}). Check network access, retry, or use a configured search MCP. This is a search-provider failure, not a missing tool.", metadata={"backend": "ddgs", "query": query, "reason": type(e).__name__})
+            return build_tool_result(ok=False, is_error=True, content=f"Built-in web search service failed ({type(e).__name__}). Check network access, retry, or use a configured search MCP. This is a search-provider failure, not a missing tool.", metadata=network_error(e, {"backend": "ddgs", "query": query}))
 
     def input_error_hint(self) -> str:
         return 'Use {"query":"your search terms","max_results":15}. max_results must be between 1 and 50; omit it for the default of 5. The provider may return fewer results.'
@@ -77,31 +97,34 @@ Usage notes:
 - The URL must be a fully-formed valid URL
 - The prompt should describe what information you want to extract from the page
 - This tool is read-only and does not modify any files
-- Content is truncated at 100,000 characters. JavaScript is not executed; use browser_tool for dynamic pages.
+- Full extracted text uses the common output archive when large. Responses over 5 MB or binary documents are rejected explicitly. JavaScript is not executed; use browser_tool for dynamic pages.
 - Redirects are followed and the final URL is reported.
 - For GitHub URLs, prefer using the gh CLI via bash_tool instead (e.g., gh pr view, gh issue view, gh api)"""
 
-    async def execute(self, url: str, prompt: str = "", **kwargs) -> str:
+    async def execute(self, url: str, prompt: str = "", **kwargs) -> dict:
         try:
+            target = httpx.URL(url)
+            if target.scheme not in {"http", "https"} or not target.host or target.username or target.password:
+                return build_tool_result(ok=False, is_error=True, content="Use an HTTP(S) URL without embedded credentials.", metadata={"code": "invalid_url", "retryable": False})
             async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-
-            soup = BeautifulSoup(resp.text, 'lxml')
-
-            for script in soup(["script", "style", "nav", "footer", "meta", "noscript"]):
-                script.decompose()
-
-            text = soup.get_text(separator=' ', strip=True)
-            text = re.sub(r'\s+', ' ', text)
-
-            if len(text) > 100000:
-                text = text[:100000] + "\n\n...[Content truncated due to size]..."
+                async with client.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    media_type = resp.headers.get("content-type", "text/html").split(";", 1)[0].lower()
+                    if not (media_type.startswith("text/") or media_type in {"application/xhtml+xml", "application/json", "application/xml"}):
+                        return build_tool_result(ok=False, is_error=True, content="This URL returns a binary document, not readable webpage text.", metadata={"code": "unsupported_media_type", "media_type": media_type, "retryable": False})
+                    body = bytearray()
+                    async for chunk in resp.aiter_bytes():
+                        if len(body) + len(chunk) > MAX_FETCH_BYTES:
+                            return build_tool_result(ok=False, is_error=True, content="Webpage exceeds the 5 MB response limit; no partial page was returned as complete.", metadata={"code": "response_too_large", "retryable": False})
+                        body.extend(chunk)
+                    source = bytes(body).decode(resp.encoding or "utf-8", errors="replace")
+            text = await asyncio.to_thread(extract_page, source, media_type in {"text/html", "application/xhtml+xml"})
 
             result = f"Content from {resp.url}:\n\n{text}"
             if prompt:
                 result += f"\n\n---\nExtraction prompt: {prompt}"
-            return result
+            return build_tool_result(ok=True, content=result, metadata={"url": str(resp.url), "source_bytes": len(body),
+                "content_chars": len(text), "media_type": media_type, "truncated": False})
 
         except Exception as e:
-            return build_tool_result(ok=False, is_error=True, content=f"Webpage request failed ({type(e).__name__}). Check the URL and network, or try another source.", metadata={"url": url, "reason": type(e).__name__})
+            return build_tool_result(ok=False, is_error=True, content=f"Webpage request failed ({type(e).__name__}). Check the URL and network, or try another source.", metadata=network_error(e, {"url": url}))

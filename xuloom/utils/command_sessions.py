@@ -13,6 +13,7 @@ from xuloom.utils.shell import output_encoding
 
 class CommandSessions:
     OUTPUT_LIMIT = 50 * 1024 * 1024
+    OUTPUT_DRAIN_TIMEOUT = 2
 
     def __init__(self, root, on_status=None):
         self.root = Path(root).resolve()
@@ -82,9 +83,13 @@ class CommandSessions:
                 if killer:
                     await killer
         pumps = [asyncio.create_task(pump(process.stdout, "stdout")), asyncio.create_task(pump(process.stderr, "stderr"))]
+        async def wait_exit():
+            # Process.wait() may wait for inherited pipes after the actual child has exited.
+            while process.returncode is None:
+                await asyncio.sleep(.01)
         async def monitor():
             try:
-                await asyncio.wait_for(process.wait(), timeout_ms / 1000)
+                await asyncio.wait_for(wait_exit(), timeout_ms / 1000)
             except asyncio.TimeoutError:
                 row["status"] = "timed_out"
                 await self._kill(row)
@@ -93,7 +98,17 @@ class CommandSessions:
                 await self._kill(row)
                 raise
             finally:
-                failures = await asyncio.gather(*pumps, return_exceptions=True)
+                try:
+                    failures = await asyncio.wait_for(asyncio.gather(*pumps, return_exceptions=True), self.OUTPUT_DRAIN_TIMEOUT)
+                except asyncio.TimeoutError:
+                    failures = []
+                    row["output_complete"] = False
+                    row["output_error"] = "The process exited but inherited output pipes did not close; output may be incomplete."
+                    if row["status"] == "running":
+                        row["status"] = "output_incomplete"
+                    transport = getattr(process, "_transport", None)
+                    if transport is not None:
+                        transport.close()
                 if any(isinstance(error, BaseException) for error in failures):
                     row["status"] = "storage_error"
                     row["output_error"] = "; ".join(str(error) for error in failures if isinstance(error, BaseException))

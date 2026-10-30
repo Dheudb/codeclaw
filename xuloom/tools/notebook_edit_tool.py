@@ -5,7 +5,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from xuloom.tools.base import BaseAgenticTool
 from xuloom.context.tool_results import build_tool_result
-from xuloom.features.file_changes import record_written_file, read_snapshot
+from xuloom.features.file_changes import record_written_file, read_snapshot, check_observed_file, write_file_text
 
 
 class NotebookEditToolInput(BaseModel):
@@ -100,6 +100,14 @@ class NotebookEditTool(BaseAgenticTool):
     async def execute(self, notebook_path: str, new_source: str, cell_id: str = None,
                       cell_type: str = None, edit_mode: str = None, **kwargs) -> str:
         abs_path = os.path.abspath(notebook_path)
+        queue = self._write_queue()
+        mutate = lambda: self._edit_notebook(abs_path, new_source, cell_id, cell_type, edit_mode)
+        try:
+            return await queue.run(abs_path, "notebook_edit", mutate) if queue is not None else mutate()
+        except Exception as error:
+            return build_tool_result(ok=False, content=f"Error editing notebook: {error}", is_error=True)
+
+    def _edit_notebook(self, abs_path, new_source, cell_id, cell_type, edit_mode):
         mode = edit_mode or "replace"
 
         if not os.path.exists(abs_path):
@@ -114,6 +122,7 @@ class NotebookEditTool(BaseAgenticTool):
             return build_tool_result(ok=False, content="Error: Notebook has not been read yet. Use file_read_tool to read it first.", is_error=True)
 
         try:
+            check_observed_file(self.context, abs_path)
             with open(abs_path, "r", encoding="utf-8") as f:
                 notebook = json.load(f)
         except Exception as e:
@@ -188,18 +197,13 @@ class NotebookEditTool(BaseAgenticTool):
 
         def _perform_write():
             before_text = read_snapshot(abs_path)
-            with open(abs_path, "w", encoding="utf-8") as f:
-                json.dump(notebook, f, indent=1, ensure_ascii=False)
-                f.write("\n")
+            write_file_text(abs_path, json.dumps(notebook, indent=1, ensure_ascii=False) + "\n")
             _, write_metadata = record_written_file(self.context, abs_path, before_text, "notebook_edit")
             if write_metadata.get("post_write_warnings"):
                 return build_tool_result(ok=True, content=result_msg, metadata=write_metadata)
             return result_msg
 
-        queue = self._write_queue()
         try:
-            if queue is not None:
-                return await queue.run(abs_path, "notebook_edit", _perform_write)
             return _perform_write()
         except Exception as e:
             return build_tool_result(ok=False, content=f"Error writing notebook: {e}", is_error=True)

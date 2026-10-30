@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from xuloom.context.tool_results import build_tool_result
 from xuloom.tools.base import BaseAgenticTool
+from xuloom.utils.shell import decode_output, process_options, terminate_process_tree
 
 
 class ReplToolInput(BaseModel):
@@ -101,6 +102,8 @@ class ReplTool(BaseAgenticTool):
 
             env = os.environ.copy()
             env["MPLBACKEND"] = "Agg"
+            env["PYTHONUTF8"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"
 
             process = await asyncio.create_subprocess_exec(
                 interpreter,
@@ -109,13 +112,14 @@ class ReplTool(BaseAgenticTool):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                **process_options(),
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(),
                 timeout=float(timeout_seconds),
             )
-            stdout_text = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-            stderr_text = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+            stdout_text = decode_output(stdout_bytes) if stdout_bytes else ""
+            stderr_text = decode_output(stderr_bytes) if stderr_bytes else ""
             rendered = stdout_text.strip()
             if stderr_text.strip():
                 rendered = (rendered + "\n--- STDERR ---\n" + stderr_text.strip()).strip()
@@ -133,11 +137,11 @@ class ReplTool(BaseAgenticTool):
                 },
                 is_error=process.returncode != 0,
             )
+        except asyncio.CancelledError:
+            await asyncio.shield(terminate_process_tree(process))
+            raise
         except asyncio.TimeoutError:
-            try:
-                process.kill()
-            except Exception:
-                pass
+            await terminate_process_tree(process)
             return build_tool_result(
                 ok=False,
                 content=f"REPL execution timed out after {timeout_seconds} seconds.",

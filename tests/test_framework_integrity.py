@@ -1,6 +1,5 @@
 """Production tool contexts and failure boundaries, without remote models."""
 import asyncio
-import builtins
 import json
 import os
 from pathlib import Path
@@ -73,10 +72,7 @@ class IntegrityTests(unittest.IsolatedAsyncioTestCase):
             path.write_text(json.dumps({"cells": [{"id": "a", "cell_type": "markdown", "source": ["before"]}]}))
             before = path.read_bytes()
             tool = NotebookEditTool(); tool.context = {"read_file_state": {str(path): True}}
-            def checked_open(name, mode="r", **kwargs):
-                if mode == "w": raise PermissionError("injected write denial")
-                return builtins.open(name, mode, **kwargs)
-            with patch("xuloom.tools.notebook_edit_tool.open", checked_open):
+            with patch("xuloom.core.storage.os.replace", side_effect=OSError("injected write denial")):
                 result = await tool.execute(notebook_path=str(path), cell_id="a", new_source="after")
             self.assertTrue(result["is_error"])
             self.assertEqual(path.read_bytes(), before)
