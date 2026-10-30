@@ -201,4 +201,3 @@ class InputRevisionTests(unittest.IsolatedAsyncioTestCase):
             for process in processes:
                 _, errors = await process.communicate(); self.assertEqual(process.returncode, 0, errors)
             self.assertEqual(json.loads((Path(directory) / "config.json").read_text()), {"desktop": True, "cli": True})
-
