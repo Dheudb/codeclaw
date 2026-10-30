@@ -49,7 +49,13 @@ async function capture(name) {
 }
 async function controlsFit() {
   assert.equal(await page.locator(".composer-toolbar").evaluate(el => el.scrollWidth > el.clientWidth), false);
-  assert((await page.getByLabel("选择模型", { exact: true }).boundingBox()).width >= 140, "The model name must not be squeezed away");
+  const size = await page.getByLabel("选择模型", { exact: true }).evaluate(element => {
+    const style = getComputedStyle(element), context = document.createElement("canvas").getContext("2d");
+    context.font = style.font;
+    return { actual: element.getBoundingClientRect().width, text: context.measureText(element.selectedOptions[0].text).width, cap: parseFloat(style.maxWidth) };
+  });
+  assert(size.actual >= Math.min(size.cap, size.text + 16) - 1, "The selected model name must not be squeezed away: " + JSON.stringify(size));
+  assert(size.actual <= Math.min(size.cap, size.text + 40) + 1, "Short model names must not leave a fixed-width blank band");
   const effort = page.getByLabel("推理强度", { exact: true });
   if (await effort.count()) assert((await effort.boundingBox()).width <= 110, "Effort must not inherit a form's full width");
 }
@@ -81,7 +87,7 @@ async function choose(mode) {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${server.address().port}/v1`;
     atomicJSON(path.join(config, "config.json"), { model_provider: "openai", active_model_connection: "fixture", model_connections: [{
-      id: "fixture", name: "Fixture API", provider: "openai", model: "collaboration-fixture", models: ["collaboration-fixture", "unknown-fixture"],
+      id: "fixture", name: "Fixture API", provider: "openai", model: "collaboration-fixture", models: ["collaboration-fixture", "unknown-fixture", "tiny", "very-long-model-identifier-that-should-use-the-width-cap"],
       api_key: "fixture", base_url: base, model_reasoning: { "collaboration-fixture": { adapter: "deepseek", efforts: ["low", "high", "max"],
         canDisable: true, thinking: "default", effort: "high", budgetTokens: 2048 } },
     }] });
@@ -158,6 +164,16 @@ async function choose(mode) {
     assert.equal(await page.getByLabel("Thinking 模式", { exact: true }).count(), 0);
     await controlsFit();
     await capture("reasoning-effort-only.png");
+    await page.getByLabel("选择模型", { exact: true }).selectOption(JSON.stringify(["fixture", "tiny"]));
+    await page.waitForFunction(() => document.querySelector(".model-picker")?.title.endsWith("tiny") && !document.querySelector(".model-picker").disabled);
+    await controlsFit();
+    assert((await page.getByLabel("选择模型", { exact: true }).boundingBox()).width < 100);
+    await capture("model-picker-short-name.png");
+    await page.getByLabel("选择模型", { exact: true }).selectOption(JSON.stringify(["fixture", "very-long-model-identifier-that-should-use-the-width-cap"]));
+    await page.waitForFunction(() => document.querySelector(".model-picker")?.title.includes("very-long-model") && !document.querySelector(".model-picker").disabled);
+    await capture("model-picker-long-name.png");
+    await controlsFit();
+    assert((await page.getByLabel("选择模型", { exact: true }).boundingBox()).width <= 240);
     await choose("solo");
     assert.deepEqual(errors, []);
     console.log("Collaboration/reasoning E2E passed: mode persistence, native spawn schema, model-specific settings, SDK wire parameters, unknown-model reset, narrow layout and stop; hidden local fixture only");
