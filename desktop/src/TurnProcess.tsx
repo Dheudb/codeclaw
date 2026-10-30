@@ -60,7 +60,7 @@ export default function TurnProcess({ trace, sessionId }: { trace: TurnTrace; se
     </summary>
     <div className="turn-process-content">
       {trace.steps.map((step, index) => step.kind === "text"
-        ? <div className="turn-commentary markdown" key={index}><Markdown text={step.text} /></div>
+        ? <div className="turn-commentary markdown" key={index}><Markdown text={step.text} sessionId={sessionId} /></div>
         : <ProcessTool tool={step.tool} sessionId={sessionId} key={step.tool.id || index} />)}
     </div>
   </details>;

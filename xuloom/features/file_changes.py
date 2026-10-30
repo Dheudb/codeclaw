@@ -107,7 +107,7 @@ def legacy_changes(activity, cwd):
     return list(files.values())
 
 
-def preview_file(cwd, requested, known):
+def preview_path(cwd, requested, known):
     if not isinstance(requested, str) or not requested.strip() or "\0" in requested or "://" in requested:
         raise ValueError("请选择本地文件路径")
     path = (Path(cwd) / requested).resolve()
@@ -116,6 +116,25 @@ def preview_file(cwd, requested, known):
     except ValueError:
         if os.path.normcase(str(path)) not in allowed: raise ValueError("只能查看当前工作目录或本会话实际修改的文件")
     if not path.is_file(): raise ValueError("文件已被移动、删除，或路径不是文件")
+    return path
+
+
+def preview_image_file(cwd, requested, known, base_path=None):
+    from xuloom.context.tool_media import MAX_BYTES, preview_image_bytes
+    if base_path:
+        base = preview_path(cwd, base_path, known)
+        if not isinstance(requested, str): raise ValueError("请选择本地图片")
+        requested = str(base.parent / requested)
+    path = preview_path(cwd, requested, known)
+    if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+        raise ValueError("不支持此图片格式")
+    with path.open("rb") as stream:
+        data = stream.read(MAX_BYTES + 1)
+    return {**preview_image_bytes(data), "name": path.name, "path": str(path)}
+
+
+def preview_file(cwd, requested, known):
+    path = preview_path(cwd, requested, known)
     with path.open("rb") as stream: data = stream.read(500_001)
     truncated = len(data) > 500_000
     data = data[:500_000]

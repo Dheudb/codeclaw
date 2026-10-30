@@ -7,7 +7,7 @@ const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "xuloom-links-e2e-"));
 const project = path.join(fixture, "project"), data = path.join(fixture, "profile"), config = path.join(fixture, "config");
 for (const directory of [project, data, config]) fs.mkdirSync(directory);
 const history = path.join(project, ".xuloom/sessions/links.json");
-atomicJSON(history, { messages: [{ role: "user", content: "查看来源链接" }, { role: "assistant", content: "Sources:\n- [Chemistry paper](https://arxiv.org/abs/2506.17238)\n- [HTTP source](http://example.org/paper?from=search#abstract)\n- https://example.org/bare\n- [Unsafe](javascript:alert(1))\n- ![Image](https://example.org/image.png)" }], metadata: {} });
+atomicJSON(history, { messages: [{ role: "user", content: "查看来源链接" }, { role: "assistant", content: "Sources:\n- [Chemistry paper](https://arxiv.org/abs/2506.17238)\n- [HTTP source](http://example.org/paper?from=search#abstract)\n- https://example.org/bare\n- [Unsafe](javascript:alert(1))\n- ![Image](zzc)" }], metadata: {} });
 const original = fs.readFileSync(history);
 atomicJSON(path.join(data, "workbench.json"), { projects: [project], workspace: [{ project, resumeId: "links", active: true }] });
 let app, page;

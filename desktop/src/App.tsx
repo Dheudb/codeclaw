@@ -682,7 +682,7 @@ export default function App() {
                     {message.trace && <TurnProcess trace={message.trace} sessionId={activeId} />}
                     <div className="markdown message-text">
                       {message.text ? (
-                        message.role === "user" ? <div className="user-prompt-text">{message.text}</div> : <Markdown text={message.text} onOpenFile={openFile} />
+                        message.role === "user" ? <div className="user-prompt-text">{message.text}</div> : <Markdown text={message.text} onOpenFile={openFile} sessionId={activeId} />
                       ) : active.busy && index === active.streamIndex ? (
                         <div className="thinking">
                           <span />

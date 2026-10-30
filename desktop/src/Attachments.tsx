@@ -1,5 +1,6 @@
 import { FileText, X } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import type { Attachment } from "./types";
 
 export default function Attachments({ items, remove, open, disabled }: {
@@ -26,8 +27,8 @@ export function AttachmentPreview({ image, close }: { image: { name: string; sou
     window.addEventListener("keydown", escape);
     return () => { window.removeEventListener("keydown", escape); previous?.focus(); };
   }, [close]);
-  return <div className="overlay" onClick={close}><section className="attachment-preview dialog" role="dialog" aria-modal="true" aria-label="图片附件预览" onClick={(event) => event.stopPropagation()}>
+  return createPortal(<div className="overlay" onClick={close}><section className="attachment-preview dialog" role="dialog" aria-modal="true" aria-label="图片附件预览" onClick={(event) => event.stopPropagation()}>
     <header><strong>{image.name}</strong><button ref={button} aria-label="关闭图片预览" onClick={close}><X size={18} /></button></header>
-    <img src={image.source} alt={image.name} />
-  </section></div>;
+    <img src={image.source} alt={image.name} referrerPolicy="no-referrer" />
+  </section></div>, document.body);
 }

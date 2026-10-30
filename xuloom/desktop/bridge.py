@@ -15,7 +15,7 @@ from xuloom.core.model_catalog import public_config, active_connection, save_con
 from xuloom.security.permissions import ApprovalPolicy
 from xuloom.desktop.activity import restore_activity
 from xuloom.desktop.turns import TurnRecorder, conversation_history
-from xuloom.features.file_changes import legacy_changes, preview_file
+from xuloom.features.file_changes import legacy_changes, preview_file, preview_image_file
 from xuloom.features.workspace_files import list_directory, git_changes, git_file_diff
 from xuloom.core.storage import session_directory, artifact_directory
 from xuloom.skills.registry import SkillRegistry
@@ -551,6 +551,8 @@ class DesktopBridge:
             return {"project": str(self.cwd), "persistedId": sid, "executionMode": self.execution_mode, "collaborationMode": self.collaboration_mode, "permissionMode": self.approval_policy.mode, "config": self.config(), "capabilities": self.capabilities(), "sessions": self.sessions(), "history": self.history(messages, traces), "activity": activity, "workers": workers, "fileChanges": self.file_changes}
         if method == "files.read":
             return preview_file(self.cwd, params.get("path"), self.file_changes)
+        if method == "files.image":
+            return await asyncio.to_thread(preview_image_file, self.cwd, params.get("path"), self.file_changes, params.get("basePath"))
         if method == "media.read":
             from xuloom.context.tool_media import image_preview
             sid = self.engine.session_id if self.engine else self.resume_id

@@ -4,6 +4,7 @@ import remarkMath from "remark-math";
 import type { Root, RootContent } from "mdast";
 import type { VFile } from "vfile";
 import MathFormula from "./MathFormula";
+import MarkdownImage, { MarkdownImageContext } from "./MarkdownImage";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Check, Copy } from "lucide-react";
 
@@ -64,7 +65,7 @@ function localLink(value?: string) {
   try { value = decodeURIComponent(value); } catch { return null; }
   return fileReference(value) ? value : null;
 }
-export default function Markdown({ text, onOpenFile }: { text: string; onOpenFile?: (path: string) => void }) {
+export default function Markdown({ text, onOpenFile, sessionId, basePath }: { text: string; onOpenFile?: (path: string) => void; sessionId?: string; basePath?: string }) {
   const [linkError, setLinkError] = useState("");
   function openLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
     event.preventDefault();
@@ -73,9 +74,10 @@ export default function Markdown({ text, onOpenFile }: { text: string; onOpenFil
   }
   return (
     <>
+    <MarkdownImageContext.Provider value={{ sessionId, basePath }}>
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath, remarkDisplayMath]}
-      urlTransform={(url) => webpageURL(url) || (onOpenFile && fileReference(url) ? url : "")}
+      urlTransform={(url, key) => key === "src" ? url : webpageURL(url) || (onOpenFile && fileReference(url) ? url : "")}
       components={{
         pre: ({ children, node }) => {
           const code = node?.children[0];
@@ -105,11 +107,12 @@ export default function Markdown({ text, onOpenFile }: { text: string; onOpenFil
             : onOpenFile && path ? <button className="inline-file-link" onClick={() => onOpenFile(path)}>{children}</button>
             : <span title={href}>{children}</span>;
         },
-        img: ({ alt }) => <span className="muted">[图片：{alt}]</span>,
+        img: MarkdownImage,
       }}
     >
       {text}
     </ReactMarkdown>
+    </MarkdownImageContext.Provider>
     {linkError && <p className="muted markdown-link-error" role="alert">{linkError}</p>}
     </>
   );

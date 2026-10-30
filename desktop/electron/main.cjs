@@ -37,6 +37,7 @@ const engineMethods = new Set([
   "stop",
   "changes",
   "files.read",
+  "files.image",
   "media.read",
   "files.undo",
   "files.list",

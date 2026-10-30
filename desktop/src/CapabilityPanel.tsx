@@ -276,7 +276,7 @@ export default function CapabilityPanel({
                           <details>
                             <summary>查看结果</summary>
                             <div className="worker-result">
-                              <Markdown text={worker.result} />
+                              <Markdown text={worker.result} sessionId={session.id} />
                             </div>
                           </details>
                         )}

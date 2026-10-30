@@ -87,7 +87,7 @@ export default function FilePreview({ sessionId, project, path, change, version,
             {error && <p role="alert" className="error">{error}</p>}
             {file && !loading && <>
               <p className="preview-limitation">最新文件 · {file.size.toLocaleString()} 字节{file.truncated && !(tab === "preview" && html) ? " · 仅展示前 500 KB" : ""}</p>
-              {tab === "preview" && (html ? <HtmlPreview sessionId={sessionId} path={file.path} revision={`${version || 0}:${refresh}`} /> : <div className="markdown"><Markdown text={file.content} onOpenFile={onOpen} /></div>)}
+              {tab === "preview" && (html ? <HtmlPreview sessionId={sessionId} path={file.path} revision={`${version || 0}:${refresh}`} /> : <div className="markdown"><Markdown text={file.content} onOpenFile={onOpen} sessionId={sessionId} basePath={file.path} /></div>)}
               {tab === "source" && <div className="file-source">{file.content.split(/\r?\n/).map((line, index) => <div className="source-line" key={index}><span className="line-number">{index + 1}</span><code>{line || " "}</code></div>)}</div>}
             </>}
           </>}

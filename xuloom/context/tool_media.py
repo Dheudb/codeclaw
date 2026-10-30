@@ -60,6 +60,12 @@ def image_preview(directory, identity, *, thumbnail=False):
         data = stream.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES or hashlib.sha256(data).hexdigest() != identity:
         raise ValueError("图像存档已变化，不能作为原工具结果显示")
+    return preview_image_bytes(data, thumbnail=thumbnail)
+
+
+def preview_image_bytes(data, *, thumbnail=False):
+    if len(data) > MAX_BYTES:
+        raise ValueError("图像超过预览大小限制")
     with Image.open(io.BytesIO(data)) as image:
         if image.format not in FORMATS or image.width * image.height > MAX_PIXELS:
             raise ValueError("图像格式或尺寸不支持预览")
