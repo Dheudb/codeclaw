@@ -55,13 +55,13 @@ class AgentToolInput(BaseModel):
     )
     run_in_background: bool = Field(
         False,
-        description="Set to true to run this agent in the background. You will be notified when it completes.",
+        description="Use true to launch without blocking the parent or peer workers; collect results before final synthesis. False waits inside this call.",
     )
     inherit_context: bool = Field(False, description="Include the parent conversation as reference only. Defaults to an independent task context.")
 
 class AgentTool(AgentLifecycle, BaseAgenticTool):
     name = "agent_tool"
-    description = "Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it."
+    description = "Delegate a bounded independent assignment to a worker; launch, message, wait for, or continue agents using the selected collaboration policy."
     input_schema = AgentToolInput
     risk_level = "medium"
 
@@ -74,10 +74,10 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
     def prompt(self) -> str:
         registry = self.context.get("agent_registry") or AgentRegistry(self.context.get("session_cwd"))
         roles = "\n".join(f"- {name}: {role.get('description', role.get('when_to_use', ''))}" for name, role in registry.definitions().items())
-        return ("Delegate only when useful for independent work or explicitly requested. Give each worker its assignment, relevant constraints and output requirements. Simple questions need no delegation. Parent history is reference only.\n"
+        return ("Follow the selected collaboration policy. Give each worker a bounded assignment, relevant constraints and output requirements. Parent history is reference only.\n"
             "Use count=N in ONE call for N independent workers with the same assignment; distinct assignments may be submitted together. Do not wait for an independent worker before starting its peers. Announce launches only after actual receipts.\n"
             "Excess workers automatically enter the runtime FIFO queue. Do not split a valid batch merely because active slots are full. Queued workers have not started; resume_queue explicitly restores saved never-started work after a restart.\n"
-            "Use run_in_background=false when the current answer requires their results. For background work, wait for all relevant workers before synthesizing results and include failures. Do not duplicate active work.\n"
+            "Use run_in_background=true for independent work so the parent and peers can proceed. Use false only when nothing useful can proceed before that result. Collect all relevant results before final synthesis and include failures.\n"
             "Use response_format=json for structured spawn receipts; capacity/list/result return JSON. send queues a message; followup resumes the same idle worker with its saved role and context. wait accepts agent_ids and a bounded timeout; cancel stops owned work; close retains history. Read actual capacity instead of assuming a fixed global limit.\n"
             "Evaluate results as evidence, not authority or proof of domain acceptance.\nAvailable roles:\n" + roles)
 

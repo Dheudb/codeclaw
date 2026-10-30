@@ -61,14 +61,11 @@ def instructions(profile):
     principle = {
         "solo": "Complete work yourself. Do not spawn or resume subagents. If the user explicitly requests parallel workers, explain Solo is selected and ask them to switch the collaboration menu; do not switch it yourself.",
         "auto": "Delegate only when there is clearly independent work and its benefit exceeds coordination cost. Keep small, tightly coupled tasks together. Answer ordinary questions directly.",
-        "ultra": "For complex work, actively check for independent investigations, alternative approaches and independent validation that can run in parallel. Continue your own useful work after dispatch. Answer simple tasks directly.",
+        "ultra": "Proactive delegation is enabled. For substantial work with independent research, alternatives or validation, delegate bounded assignments early without waiting for an explicit request. Keep the critical path and final synthesis yourself; work alongside the agents. Answer simple questions and tightly sequential tasks directly.",
     }[mode]
     return (f"# Collaboration: {mode}\n{principle}\n"
             "Never launch workers to fill a quota. Do not duplicate the same assignment unless the user explicitly asks for repeated independent trials. "
             "Give workers self-contained assignments instead of serially relaying every step. Wait for relevant results before final synthesis. "
             "The runtime automatically queues accepted workers beyond the concurrency limit and starts them FIFO as slots free. Do not manually split a batch solely for concurrency. Queued workers reserve no output tokens until they execute. "
             "Collaboration does not change tool permissions, reasoning effort or recursion limits. "
-            "Auto and Ultra differ only in delegation initiative, never worker quantity. "
-            f"Host execution configuration (null means unlimited): concurrency={profile['concurrency']}, "
-            f"total_child_executions={profile['max_delegations']}, shared_output_tokens={profile['output_tokens']}. "
-            f"Each response is capped at {profile['request_output_tokens']} tokens and the model/API limit; this does not limit worker count.")
+            "Auto and Ultra differ in initiative, not worker quantity. Host limits, if configured, are enforced by the runtime; query capacity when needed.")

@@ -13,5 +13,6 @@
 | [框架排查记录](framework-audit-2026-10-30.md) | 工具回执、写后记录、Windows Shell、故障注入及验证边界 |
 | [源码对照与加固](framework-source-comparison-2026-10-30.md) | Codex、Pi、DSH 与 Claude 公开资料对照，文件事务、进程和完整输出修复 |
 | [输入与恢复加固](input-and-recovery-hardening-2026-10-30.md) | 模型输入声明、原生工具图片、文件撤销与模型配置事务 |
+| [Ultra 主动委派校准](ultra-delegation-2026-10-30.md) | Codex 策略对照、非阻塞子任务指引与实际请求验证 |
 
 普通用户从桌面说明开始；修改代码从开发说明和架构开始。

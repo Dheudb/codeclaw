@@ -68,6 +68,10 @@ async function choose(mode) {
     await page.getByRole("button", { name: "停止任务", exact: true }).click();
     await picker().waitFor(); await page.waitForFunction(() => !document.querySelector(".collaboration-picker").disabled);
     assert(requests.length > 0 && JSON.stringify(requests[0]).includes("# Collaboration: ultra"));
+    assert(JSON.stringify(requests[0].messages).includes("Proactive delegation is enabled"));
+    assert(JSON.stringify(requests[0].messages).includes("run_in_background=true"));
+    assert(!JSON.stringify(requests[0].messages).includes("run_in_background=false when the current answer requires"));
+    assert(requests[0].tools.some((tool) => tool.function.name === "agent_tool" && tool.function.description.includes("bounded independent assignment")));
     await choose("solo");
     assert.deepEqual(errors, []);
     console.log("Collaboration E2E passed: model-free save, session isolation, restart restore, narrow layout, busy rejection and stop; hidden local fixture only");
