@@ -10,6 +10,8 @@ const { prepareMove, moveSpec } = require("./session-move.cjs");
 const { HtmlPreviews, SCHEME: PREVIEW_SCHEME } = require("./html-preview.cjs");
 protocol.registerSchemesAsPrivileged([{ scheme: PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 const htmlPreviews = new HtmlPreviews();
+const { BrowserCaptures } = require("./browser-capture.cjs");
+const browserCaptures = new BrowserCaptures();
 app.setName("Xuloom");
 if (process.env.XULOOM_USER_DATA)
   app.setPath("userData", process.env.XULOOM_USER_DATA);
@@ -96,6 +98,16 @@ function broadcastCatalog() {
 }
 function send(id, payload) {
   const source = sessions.get(id);
+  // Host requests never enter the frontend or its generic respond channel.
+  if (payload.type === "browser_capture") {
+    if (source) browserCaptures.capture(id, source.project, payload.requestId, payload.input)
+      .catch(error => ({ error: error.message }))
+      .then(result => source.transport.request("browser.capture_result", { requestId: payload.requestId, result }))
+      .catch(() => {}); // A cancelled/closed engine no longer owns a pending request.
+    return;
+  }
+  if (payload.type === "browser_capture_cancel") { browserCaptures.cancel(id, payload.requestId); return; }
+  if (payload.type === "engine_exit") browserCaptures.cancel(id);
   if (source && payload.type === "managed_turn_started") source.busy = true;
   if (source && payload.type === "turn_finished") source.busy = false;
   if (source && payload.type === "subagent_status") source.workers.set(payload.agent.agent_id, payload.agent.status);
@@ -276,6 +288,7 @@ function running(source) {
 async function disposeSession(id) {
   const source = sessions.get(id);
   if (!source) return;
+  browserCaptures.cancel(id);
   if (source.attachmentImport) await source.attachmentImport.catch(() => {});
   await source.transport.close();
   htmlPreviews.revokeSession(id);

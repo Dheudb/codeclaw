@@ -1,5 +1,8 @@
 import os
 import time
+import uuid
+import base64
+from pathlib import Path
 
 try:
     from playwright.async_api import async_playwright
@@ -21,6 +24,42 @@ class BrowserSessionManager:
         self._page = None
         self._context = None
         self._last_url = None
+        self.capture_callback = None
+
+    async def render(self, *, url=None, file_path=None, width=1440, height=960, wait_ms=500, full_page=True, artifact_dir=None):
+        """One-shot render; desktop reuses its Chromium, CLI uses optional Playwright."""
+        if self.capture_callback:
+            result = await self.capture_callback(dict(url=url, file_path=file_path, width=width,
+                height=height, wait_ms=wait_ms, full_page=full_page))
+            if not isinstance(result, dict):
+                raise RuntimeError("Screenshot host returned no valid result")
+            if result.get("error"):
+                raise RuntimeError(result["error"])
+            data = base64.b64decode(result.pop("png_base64"), validate=True)
+        else:
+            page = await self.ensure_page()
+            await page.set_viewport_size({"width": width, "height": height})
+            response = await page.goto(Path(file_path).as_uri() if file_path else url,
+                wait_until="load", timeout=25000)
+            if response and response.status >= 400:
+                raise RuntimeError(f"Page returned HTTP {response.status}")
+            await page.wait_for_timeout(wait_ms)
+            # Bound image area before full-page capture (shared desktop/CLI limit).
+            size = await page.evaluate("({width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight})")
+            truncated = full_page and (size["height"] > 8192 or size["width"] > 4096 or size["width"] * size["height"] > 16000000)
+            data = await page.screenshot(full_page=full_page and not truncated, timeout=10000)
+            result = {"url": page.url, "title": await page.title(), "truncated": bool(truncated)}
+        from xuloom.context.tool_media import MAX_BYTES, preview_image_bytes
+        if len(data) > MAX_BYTES:
+            raise ValueError("Screenshot exceeds the image size limit")
+        image = preview_image_bytes(data)
+        directory = Path(artifact_dir or self.artifact_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / ("screenshot-" + uuid.uuid4().hex + ".png")
+        from xuloom.core.storage import atomic_bytes
+        atomic_bytes(target, data)
+        self._last_url = result.get("url")
+        return {**result, "path": str(target.resolve()), "width": image["width"], "height": image["height"]}
 
     async def ensure_page(self):
         if not PLAYWRIGHT_AVAILABLE:
@@ -32,10 +71,17 @@ class BrowserSessionManager:
         if self._page is not None:
             return self._page
 
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=True)
-        self._context = await self._browser.new_context(viewport={"width": 1440, "height": 960})
-        self._page = await self._context.new_page()
+        try:
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(headless=True)
+            self._context = await self._browser.new_context(viewport={"width": 1440, "height": 960})
+            self._page = await self._context.new_page()
+        except BaseException:
+            try:
+                await self.close()
+            except Exception:
+                pass  # Preserve the original startup/cancellation error.
+            raise
         return self._page
 
     async def navigate(self, url: str, wait_until: str = "domcontentloaded"):
@@ -116,19 +162,18 @@ class BrowserSessionManager:
         return {"url": page.url, "title": await page.title(), "path": os.path.abspath(path)}
 
     async def close(self):
-        if self._page is not None:
-            await self._page.close()
-            self._page = None
-        if self._context is not None:
-            await self._context.close()
-            self._context = None
-        if self._browser is not None:
-            await self._browser.close()
-            self._browser = None
-        if self._playwright is not None:
-            await self._playwright.stop()
-            self._playwright = None
+        owned = [(self._page, "close"), (self._context, "close"), (self._browser, "close"), (self._playwright, "stop")]
+        self._page = self._context = self._browser = self._playwright = None
         self._last_url = None
+        errors = []
+        for handle, method in owned:
+            if handle is not None:
+                try:
+                    await getattr(handle, method)()
+                except BaseException as error:
+                    errors.append(error)
+        if errors:
+            raise errors[0]
 
     def export_state(self):
         return {

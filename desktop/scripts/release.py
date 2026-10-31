@@ -19,8 +19,11 @@ def archive_files(package, replacements=()):
     """Overlay complete resource trees in the ZIP, without mutating the installation."""
     trees = [(Path(target), Path(source)) for target, source in replacements]
     files = {}
+    metadata = {target.name for target, _ in trees if target.name.startswith("xuloom-") and target.name.endswith(".dist-info")}
     for path in package.rglob("*"):
         relative = path.relative_to(package)
+        if metadata and any(part.startswith("xuloom-") and part.endswith(".dist-info") and part not in metadata for part in relative.parts):
+            continue
         if any(relative == target or target in relative.parents for target, _ in trees):
             continue
         files[relative] = path

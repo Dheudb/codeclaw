@@ -10,6 +10,18 @@ spec.loader.exec_module(release)
 
 
 class ReleaseResourceTests(unittest.TestCase):
+    def test_version_upgrade_overlay_excludes_stale_distribution_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); package = root / "installed"; stage = root / "metadata"
+            old = package / "resources/python/Lib/site-packages/xuloom-0.1.0.dist-info"
+            old.mkdir(parents=True); stage.mkdir()
+            (old / "METADATA").write_text("Version: 0.1.0")
+            (stage / "METADATA").write_text("Version: 0.1.1")
+            target = Path("resources/python/Lib/site-packages/xuloom-0.1.1.dist-info")
+            files = dict(release.archive_files(package, [(target, stage)]))
+            self.assertEqual([name for name, source in files.items() if source.is_file()], [target / "METADATA"])
+            self.assertTrue((old / "METADATA").is_file())
+
     def test_overlay_excludes_old_resources_preserves_runtime_and_never_mutates_installation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

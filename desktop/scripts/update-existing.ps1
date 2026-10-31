@@ -63,6 +63,21 @@ try {
         Start-Sleep -Seconds 1
     } while ($true)
     Write-Status 'applying'
+    # Retire old versions transactionally so importlib.metadata cannot report
+    # an obsolete distribution after a successful resource-only upgrade.
+    $siteRoot = Join-Path $packageRoot 'resources\python\Lib\site-packages'
+    foreach ($old in Get-ChildItem -LiteralPath $siteRoot -Directory -Filter 'xuloom-*.dist-info') {
+        if ($old.Name -eq $manifest.metadataDirectory) { continue }
+        $entry = @{ Target = $old.FullName; Backup = (Join-Path $stageRoot ('backup\retired-metadata\' + $old.Name)) }
+        Assert-Child $entry.Target $packageRoot
+        Assert-Child $entry.Backup $stageRoot
+        if (Test-Path -LiteralPath $entry.Backup) { throw 'Retired metadata backup already exists.' }
+        [void](New-Item -ItemType Directory -Path (Split-Path -Parent $entry.Backup) -Force)
+        $change = @{ Entry = $entry; BackupMoved = $false; Installed = $false }
+        $changes.Add($change)
+        Move-Item -LiteralPath $entry.Target -Destination $entry.Backup
+        $change.BackupMoved = $true
+    }
     foreach ($entry in $entries) {
         Assert-Child $entry.Target $packageRoot
         [void](New-Item -ItemType Directory -Path (Split-Path -Parent $entry.Backup) -Force)

@@ -315,6 +315,8 @@ class AgentTool(AgentLifecycle, BaseAgenticTool):
             sub_engine.tool_context["goal_budget"] = self.context["goal_budget"]
         sub_engine.tool_context["skill_registry"] = self.context.get("skill_registry") or SkillRegistry(self.context.get("session_cwd"))
         sub_engine.tool_context["ask_user_callback"] = self.context.get("ask_user_callback")
+        if self.context.get("browser_manager"):
+            sub_engine.browser_manager.capture_callback = self.context["browser_manager"].capture_callback
         sub_engine.tool_context["capability_event"] = self.context.get("capability_event")
         sub_engine.tool_context["plan_approval_callback"] = self.context.get("plan_approval_callback")
         team = self.context.get("team_manager")

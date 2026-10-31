@@ -7,7 +7,9 @@ export function toolPresentation(tool: ToolActivity): { kind: ToolKind; title: s
   const input = tool.input || {}, name = tool.name;
   const done = tool.status === "completed", failed = ["error", "crashed", "interrupted"].includes(tool.status);
   let kind: ToolKind = "tool", action = "调用工具", brief = String(input.description || input.action || name);
-  if (name === "view_image" || name === "file_read_tool" && imagePath.test(String(input.file_path || input.path || "")) || tool.media?.length) {
+  if (name === "browser_tool" && ["render", "screenshot"].includes(String(input.action))) {
+    kind = "image"; action = "截图检查"; brief = basename(input.file_path) || String(input.url || "网页");
+  } else if (name === "view_image" || name === "file_read_tool" && imagePath.test(String(input.file_path || input.path || "")) || tool.media?.length) {
     kind = "image"; action = "查看图像";
     brief = tool.media?.length ? `${tool.media.length} 张` : basename(input.file_path || input.path);
   } else if (/^(file_(edit|write)_tool|notebook(_edit)?_tool|apply_patch)$/.test(name)) {

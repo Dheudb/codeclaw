@@ -6,6 +6,7 @@
 | [CLI](cli.md) | 安装、启动、命令和会话恢复 |
 | [目标与调度](goals-and-schedules.md) | 目标预算与验收、正式非交互 CLI、延迟和重复唤醒 |
 | [模型配置](models.md) | 支持的协议、本地模型与兼容边界 |
+| [后台渲染与验证](browser-capture.md) | 隐藏窗口截图、原生图像输入、权限与 CLI 依赖 |
 | [Skills 与子代理](capabilities.md) | 目录规范、发现顺序、导入与执行 |
 | [MCP 与搜索](mcp.md) | 市场、配置、连接测试和内置搜索 |
 | [项目架构](architecture.md) | 目录职责和运行流程 |

@@ -5,6 +5,7 @@ test("tool transcript uses semantic labels without hiding failures", async () =>
   const tool = (name, input = {}, status = "completed", extra = {}) => view({ name, input, status, ...extra });
   assert.deepEqual(tool("file_read_tool", { file_path: "C:\\work\\photo.PNG" }), { kind: "image", title: "已查看图像", brief: "photo.PNG" });
   assert.equal(tool("custom_tool", {}, "completed", { media: [{ kind: "image", id: "fixture" }] }).kind, "image");
+  assert.deepEqual(tool("browser_tool", { action: "render", file_path: "/work/page.html" }), { kind: "image", title: "已截图检查", brief: "page.html" });
   assert.equal(tool("file_edit_tool", { file_path: "/work/main.py" }).kind, "edit");
   assert.equal(tool("command_tool", { command: "echo hello" }).brief, "echo hello");
   assert.equal(tool("command_tool", {}, "error").title, "运行命令失败");

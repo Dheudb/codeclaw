@@ -62,6 +62,7 @@ class DesktopBridge:
         self.stop_requested = False
         self.pending = {}
         self.pending_kinds = {}
+        self.capture_pending = {}
         self.approval_policy = ApprovalPolicy()
         self.collaboration_mode = "auto"
         self.execution_mode = "host"
@@ -204,6 +205,17 @@ class DesktopBridge:
         return await self.ask("permission", {"request": dataclasses.asdict(request)},
             explicit=bool(request.classifier_input.get("forced_prompt_reasons")))
 
+    async def capture(self, input):
+        request_id = str(uuid.uuid4())
+        future = asyncio.get_running_loop().create_future()
+        self.capture_pending[request_id] = future
+        self.output({"type": "browser_capture", "requestId": request_id, "input": input})
+        try:
+            return await asyncio.wait_for(future, 45)
+        finally:
+            self.capture_pending.pop(request_id, None)
+            self.output({"type": "browser_capture_cancel", "requestId": request_id})
+
     async def ensure_engine(self, write=False):
         if self.engine is not None:
             if write:
@@ -238,6 +250,7 @@ class DesktopBridge:
         for member in engine.team_manager.get_non_lead_members():
             member.is_active = False
         engine.set_permission_handler(self.permission)
+        engine.browser_manager.capture_callback = self.capture
         engine.tool_context.update(skill_registry=self.skills, agent_registry=self.agents, capability_event=self.emit, ask_user_callback=lambda questions: self.ask("questions", {"questions": questions}), plan_approval_callback=lambda content: self.ask("plan_approval", {"content": content}))
         lsp = LspTool()
         engine.lsp_manager = LSPManager()
@@ -346,6 +359,12 @@ class DesktopBridge:
         return receipt or {"ok": False, "reason": "cancelled" if self.stop_requested else "error"}
 
     async def dispatch(self, method, params):
+        if method == "browser.capture_result":
+            future = self.capture_pending.get(params.get("requestId"))
+            if future is None or future.done():
+                return False
+            future.set_result(params.get("result"))
+            return True
         if method.startswith("goal."):
             from xuloom.features import goals
             if method == "goal.get":
@@ -675,6 +694,8 @@ class DesktopBridge:
             if self.engine and getattr(self.engine, "goal", None) and self.engine.goal["status"] == "active":
                 self.engine.goal["status"], self.engine.goal["reason"] = "paused", "Stopped by user"
             for future in self.pending.values():
+                future.cancel()
+            for future in list(self.capture_pending.values()):
                 future.cancel()
             if self.engine:
                 results = await asyncio.gather(self.engine.request_abort(), return_exceptions=True)

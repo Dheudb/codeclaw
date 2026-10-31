@@ -1,13 +1,16 @@
 import os
+from pathlib import Path
+from urllib.parse import urlsplit
+from typing import Literal
 from pydantic import BaseModel, Field
 from xuloom.tools.base import BaseAgenticTool
 from xuloom.context.tool_results import build_tool_result
 
 
 class BrowserToolInput(BaseModel):
-    action: str = Field(
+    action: Literal["render", "navigate", "snapshot", "click", "type", "wait", "screenshot", "close"] = Field(
         ...,
-        description="One of: navigate, snapshot, click, type, wait, screenshot, close.",
+        description="One of: render, navigate, snapshot, click, type, wait, screenshot, close. render captures a URL or local HTML in a hidden browser and returns an image for visual verification.",
     )
     url: str = Field(None, description="Target URL for navigate.")
     selector: str = Field(None, description="CSS selector for click or type.")
@@ -16,11 +19,15 @@ class BrowserToolInput(BaseModel):
     path: str = Field(None, description="Optional screenshot output path.")
     full_page: bool = Field(True, description="Whether screenshots should capture the full page.")
     clear: bool = Field(True, description="Whether type should replace existing input value.")
+    file_path: str = Field(None, description="For render: local HTML file inside the current workspace; provide this OR url.")
+    width: int = Field(1440, ge=320, le=2560, description="Render viewport width in CSS pixels.")
+    height: int = Field(960, ge=240, le=2160, description="Render viewport height in CSS pixels.")
+    wait_ms: int = Field(500, ge=0, le=10000, description="For render: wait after page load for animation or asynchronous content.")
 
 
 class BrowserTool(BaseAgenticTool):
     name = "browser_tool"
-    description = "Controls a headless browser for webpage navigation, DOM inspection, clicking, typing, waiting, and screenshots. Use this when HTTP fetch is insufficient and real browser automation is required."
+    description = "Render local HTML or a website in a hidden browser and return a screenshot to inspect UI changes. Also supports browser navigation, DOM inspection, clicking, typing and screenshots. Desktop render needs no browser installation; CLI requires the browser extra and Chromium."
     input_schema = BrowserToolInput
     risk_level = "high"
 
@@ -40,8 +47,9 @@ class BrowserTool(BaseAgenticTool):
         path: str = None,
         full_page: bool = True,
         clear: bool = True,
+        file_path=None, width=1440, height=960, wait_ms=500,
     ):
-        valid_actions = {"navigate", "snapshot", "click", "type", "wait", "screenshot", "close"}
+        valid_actions = {"render", "navigate", "snapshot", "click", "type", "wait", "screenshot", "close"}
         if action not in valid_actions:
             return f"Unsupported browser_tool action '{action}'."
         if action == "navigate" and not url:
@@ -50,6 +58,18 @@ class BrowserTool(BaseAgenticTool):
             return f"selector is required when action='{action}'."
         if action == "type" and text is None:
             return "text is required when action='type'."
+        if action == "render":
+            if bool(url) == bool(file_path):
+                return "render requires exactly one of url or file_path."
+            if url:
+                parsed = urlsplit(url)
+                if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+                    return "render url must be HTTP(S) without embedded credentials; use file_path for local HTML."
+            if file_path:
+                root = Path(self.context.get("session_cwd", os.getcwd())).resolve()
+                target = (root / file_path).resolve()
+                if (root != target and root not in target.parents) or target.suffix.lower() not in {".html", ".htm"}:
+                    return "render file_path must be an HTML file inside the current workspace."
         return None
 
     def build_permission_summary(
@@ -62,6 +82,7 @@ class BrowserTool(BaseAgenticTool):
         path: str = None,
         full_page: bool = True,
         clear: bool = True,
+        file_path=None, width=1440, height=960, wait_ms=500,
     ) -> str:
         text_preview = (text or "")[:120] + ("..." if text and len(text) > 120 else "")
         return (
@@ -71,7 +92,7 @@ class BrowserTool(BaseAgenticTool):
             f"selector: {selector or '<none>'}\n"
             f"text_preview: {text_preview or '<empty>'}\n"
             f"seconds: {seconds}\n"
-            f"path: {path or '<auto>'}"
+            f"path: {path or '<auto>'}\nfile_path: {file_path or '<none>'}\nviewport: {width}x{height}"
         )
 
     async def execute(
@@ -84,6 +105,7 @@ class BrowserTool(BaseAgenticTool):
         path: str = None,
         full_page: bool = True,
         clear: bool = True,
+        file_path=None, width=1440, height=960, wait_ms=500,
     ) -> dict:
         browser = self.context.get("browser_manager")
         if not browser:
@@ -95,6 +117,15 @@ class BrowserTool(BaseAgenticTool):
             )
 
         try:
+            if action == "render":
+                from xuloom.core.storage import artifact_directory
+                sid = self.context.get("session_id")
+                directory = str(artifact_directory(self.context.get("session_cwd")) / sid / "browser") if sid else None
+                if file_path:
+                    file_path = str((Path(self.context.get("session_cwd", os.getcwd())) / file_path).resolve(strict=True))
+                result = await browser.render(url=url, file_path=file_path, width=width, height=height,
+                    wait_ms=wait_ms, full_page=full_page, artifact_dir=directory)
+                return await self._image_result(result, action)
             if action == "navigate":
                 if not url:
                     return build_tool_result(
@@ -182,11 +213,7 @@ class BrowserTool(BaseAgenticTool):
             if action == "screenshot":
                 normalized_path = os.path.abspath(path) if path else None
                 result = await browser.screenshot(normalized_path, full_page=full_page)
-                return build_tool_result(
-                    ok=True,
-                    content=f"Saved screenshot to {result['path']}.",
-                    metadata={"action": action, "full_page": full_page, **result},
-                )
+                return await self._image_result(result, action)
 
             if action == "close":
                 await browser.close()
@@ -209,3 +236,16 @@ class BrowserTool(BaseAgenticTool):
                 metadata={"action": action, "url": url or "", "selector": selector or ""},
                 is_error=True,
             )
+
+    async def _image_result(self, result, action):
+        from xuloom.tools.file_read_tool import FileReadTool
+        reader = FileReadTool()
+        reader.context = self.context
+        content = await reader.execute(file_path=result["path"])
+        if not isinstance(content, list):
+            # Keep the saved screenshot, but never claim a text-only model saw it.
+            return build_tool_result(ok=True, content=f"Screenshot saved to {result['path']}. Visual inspection unavailable: {content}",
+                metadata={"action": action, "image_attached": False, **result})
+        content.insert(0, {"type": "text", "text": "Rendered screenshot; inspect this image to verify the UI. " +
+            ("Page exceeded the capture limit; viewport only. " if result.get("truncated") else "")})
+        return build_tool_result(ok=True, content=content, metadata={"action": action, "image_attached": True, **result})
